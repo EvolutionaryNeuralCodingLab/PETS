@@ -1,10 +1,12 @@
-# Eye-Tracking System Tools
+# PETS (Personalized Eye Tracking System)
 
-Tools for eye-tracking data synchronization, annotation, and analysis.
+This repository supplements research work under review.
 
 ## Overview
 
-This repository provides tools for synchronizing eye-tracking videos with arena videos and electrophysiology recordings, preprocessing eye-tracking data, and reproducing figures from published research. The synchronization pipeline is designed to work with various recording formats, with Open Ephys provided as a reference implementation.
+This repository contains the 3D models and Fusion360 environment we use to define camera-eye geometry and create printable personalized eye-tracking headstages for various animals.  
+It also holds the associated Raspberry Pi code for eye cameras, and provides tools for synchronizing eye-tracking videos with arena videos and electrophysiology recordings, preprocessing eye-tracking data, and reproducing figures from our research. 
+The synchronization pipeline is designed to work with various recording formats, with Open Ephys provided as a reference implementation.
 
 ## Setup
 
@@ -73,8 +75,6 @@ The figure reproduction scripts are straightforward to use. Each script in `src/
 cd src/eye_tracking_system_tools/figures/reproduction/main_figures/Fig_1_e
 python figure_1e.py
 ```
-
-**Note:** Supplementary figures reproduction is still a work-in-progress.
 
 ### Data Preprocessing and Synchronization
 

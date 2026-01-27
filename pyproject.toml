@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "eye-tracking-system-tools"
+version = "0.1.0"
+description = "Tools for eye-tracking data synchronization, annotation, and analysis"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "bokeh>=3.8.2",
+    "ellipse>=0.6.0",
+    "h5py>=3.15.1",
+    "lxml>=6.0.2",
+    "matplotlib>=3.10.8",
+    "numpy>=2.0.0,<2.3.0",
+    "pandas>=2.3.3",
+    "scipy>=1.10.0,<1.16.0",
+    "tqdm>=4.67.1",
+    "opencv-python",
+    "open-ephys-python-tools",
+    "jupyter",
+    "ipykernel",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "black",
+    "flake8",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"*" = ["*.yaml", "*.yml", "*.json"]

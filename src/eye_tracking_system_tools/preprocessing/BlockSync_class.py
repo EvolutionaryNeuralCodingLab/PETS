@@ -152,14 +152,17 @@ class BlockSync:
             self.oe_path = self.block_path / 'oe_files' / self.oe_dirname / self.rec_node_dirname
             self.settings_xml = self.oe_path / 'settings.xml'
             self.sample_rate = self.get_sample_rate()
-            oe_metadata_file_path = [i for i in self.oe_path.iterdir() if 'OE_metaData' in str(i)][0]
-            if oe_metadata_file_path.is_file():
-                self.oe_metadata_file_path = oe_metadata_file_path
-                # try:
-                self.oe_rec = OERecording(self.oe_metadata_file_path)
-                print('created the .oe_rec attribute as an open ephys recording obj with get_data functionality')
-                # except Exception:
-                #     print('OERecording file could not be constructed')
+            # Try standalone mode first (use directory), fall back to legacy mode if metadata file exists
+            oe_metadata_file_path = [i for i in self.oe_path.iterdir() if 'OE_metaData' in str(i)]
+            if len(oe_metadata_file_path) > 0 and oe_metadata_file_path[0].is_file():
+                self.oe_metadata_file_path = oe_metadata_file_path[0]
+                # Use standalone mode (directory) instead of legacy mode (metadata file)
+                self.oe_rec = OERecording(self.oe_path)
+                print('created the .oe_rec attribute as an open ephys recording obj with get_data functionality (standalone mode)')
+            else:
+                # No metadata file found, use standalone mode directly
+                self.oe_rec = OERecording(self.oe_path)
+                print('created the .oe_rec attribute as an open ephys recording obj with get_data functionality (standalone mode, no metadata file)')
         except IndexError:
             print('No open ephys record node here!!!')
         self.oe_events = None
@@ -769,6 +772,37 @@ class BlockSync:
         open_ephys_events.loc[open_ephys_events[f"{arena_channel_name}_frame"] < 0, f"{arena_channel_name}_frame"] = np.nan
         open_ephys_events.loc[open_ephys_events[arena_channel_name] > arena_end_timestamp, f"{arena_channel_name}_frame"] = np.nan
 
+        # Extract falling edges for LED_driver if it exists in channel_names
+        led_driver_line = None
+        for line, name in channel_names.items():
+            if name == 'LED_driver':
+                led_driver_line = line
+                break
+        
+        if led_driver_line is not None:
+            # Extract falling edges (state == 0) for LED_driver
+            df_offstate = df[df["state"] == 0]  # falling edges
+            led_falling_samples = df_offstate["sample_number"][df_offstate["line"] == led_driver_line].values
+            if len(led_falling_samples) > 0:
+                # Create a Series with indices offset to avoid overlap with existing data
+                # Use a large offset (e.g., 1000000) so indices don't conflict
+                # dropna() will still extract the values correctly
+                offset = 1000000
+                led_falling = pd.Series(
+                    led_falling_samples,
+                    index=range(offset, offset + len(led_falling_samples)),
+                    name="LED_driver_fall"
+                )
+                # Concatenate - pandas will align indices, NaN where indices don't match
+                # dropna() will extract the actual falling edge values
+                open_ephys_events = pd.concat([open_ephys_events, led_falling], axis=1)
+                # Verify the column was added and has values
+                if 'LED_driver_fall' in open_ephys_events.columns:
+                    n_falling = open_ephys_events['LED_driver_fall'].dropna().shape[0]
+                    print(f"Added {len(led_falling_samples)} falling edges for LED_driver (verified: {n_falling} non-NaN values in column)")
+                else:
+                    print(f"Warning: LED_driver_fall column not found after concatenation")
+
         # Export
         if export_path is not None:
             open_ephys_events.to_csv(export_path)
@@ -1026,6 +1060,42 @@ class BlockSync:
             if len(zL) == 0:
                 raise ValueError("Existing parsed_events.csv cannot find timestamp for last arena frame.")
             self.arena_vid_last_t = zL[arena_channel_name].values[0]
+            
+            # Check if LED_driver_fall column exists, if not, add it from events.csv
+            if 'LED_driver_fall' not in self.oe_events.columns and self.channeldict is not None:
+                # Find LED_driver line number
+                led_driver_line = None
+                for line, name in self.channeldict.items():
+                    if name == 'LED_driver':
+                        led_driver_line = line
+                        break
+                
+                if led_driver_line is not None:
+                    # Try to read from events.csv
+                    # Use the same path structure as in the parsing code
+                    events_csv_path = self.block_path / "oe_files" / self.oe_dirname / "events.csv"
+                    if events_csv_path.exists():
+                        try:
+                            df_events = pd.read_csv(events_csv_path)
+                            # Extract falling edges (state == 0) for LED_driver
+                            df_offstate = df_events[df_events["state"] == 0]
+                            led_falling_samples = df_offstate["sample_number"][df_offstate["line"] == led_driver_line].values
+                            if len(led_falling_samples) > 0:
+                                # Create Series with offset index to avoid conflicts
+                                offset = 1000000
+                                led_falling = pd.Series(
+                                    led_falling_samples,
+                                    index=range(offset, offset + len(led_falling_samples)),
+                                    name="LED_driver_fall"
+                                )
+                                # Concatenate with existing oe_events
+                                self.oe_events = pd.concat([self.oe_events, led_falling], axis=1)
+                                print(f"Added {len(led_falling_samples)} falling edges for LED_driver from events.csv")
+                                # Save updated parsed_events.csv
+                                self.oe_events.to_csv(parsed_path)
+                                print(f"Updated {parsed_path} with falling edges")
+                        except Exception as e:
+                            print(f"Warning: Could not add falling edges from events.csv: {e}")
 
         else:
             # Create events.csv

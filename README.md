@@ -105,8 +105,9 @@ path_to_animal_folder/
             │           └── timestamps.csv
             ├── oe_files/               # Open Ephys recordings (or custom format)
             │   └── experiment_datetime/
-            │       ├── events.csv      # Event data (for Open Ephys)
-            │       └── settings.xml    # Recording settings
+            │       ├── events.csv      # Event data (auto-generated from .events file)
+            │       ├── settings.xml    # Recording settings
+            │       └── *.continuous    # Continuous channel files (for Open Ephys)
             └── analysis/               # Output directory (initially empty)
 ```
 
@@ -138,6 +139,14 @@ block.parse_open_ephys_events()
 # Run synchronization
 block.synchronize_block()
 ```
+
+**Open Ephys Integration:**
+
+The `OERecording` class can work in two modes:
+1. **Standalone mode (default)**: Automatically extracts metadata directly from Open Ephys recording files (`.continuous`, `.events`, `settings.xml`). No external dependencies required.
+2. **Legacy mode**: Can load metadata from MATLAB-generated `.mat` files for backward compatibility with existing workflows.
+
+The standalone mode eliminates the need for MATLAB preprocessing, making the pipeline fully self-contained within this repository.
 
 **Custom Synchronization Paradigms:**
 

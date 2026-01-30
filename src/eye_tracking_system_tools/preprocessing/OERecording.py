@@ -783,19 +783,22 @@ class OERecording:
     def get_data(self, channels,
                  start_time_ms,
                  window_ms,
-                 convert_to_mv=True,
+                 convert_microvolts=True,
                  return_timestamps=True,
                  repress_output=False):
         """
-        This is a translated matlab function that efficiently retrieves data from Open-Ephys format neural recordings
-        :param self: an OERecording class obj. with a metadata file created by the matlab class with the same name
-        :param channels: a vector of channel numbers to sample from [1XN channels]
-        :param start_time_ms: a vector of window start times [1XN] in ms
-        :param window_ms: a single value, the length of the sampling window from each startTime [ms_value]
-        :param convert_to_mv: when True, turns the output into the mV representation of the sampled data
-        :param return_timestamps: when True, the output will include sample timestamps from 0 in ms
-        :param repress_output: when True, will not perform print commands
-        :return: data_matrix - an array with the shape [n_channels, n_windows, nSamples] with int16 / mV values
+        Retrieve continuous data from Open Ephys .continuous files (neural/headstage channels).
+
+        Open Ephys convention: For headstage channels, the .continuous header field `bitVolts`
+        is in **microvolts per AD count**. So: voltage_µV = raw_int16 * bitVolts.
+
+        :param channels: channel numbers to sample from [1 x N]
+        :param start_time_ms: window start times [1 x N] in ms
+        :param window_ms: length of each sampling window in ms
+        :param convert_microvolts: when True, convert raw int16 to physical units using header.bitVolts.
+        :param return_timestamps: when True, return sample timestamps in ms
+        :param repress_output: when True, suppress print messages
+        :return: data_matrix [n_channels, n_windows, nSamples]. If convert_microvolts=True, values are in **microvolts (µV)**.
         """
         window_samples = int(
             np.round(window_ms / self.sample_ms))  # round the time in ms to the nearest whole sample count
@@ -917,8 +920,13 @@ class OERecording:
 
         data_matrix = np.transpose(data_matrix, [2, 1, 0])
 
-        if convert_to_mv:
-            data_matrix = data_matrix * self.MicrovoltsPerAD[0]
+        if convert_microvolts:
+            # Open Ephys .continuous: header.bitVolts is microvolts per AD count for headstage channels.
+            # raw_int16 * bitVolts = voltage in µV. Use per-channel scaling (channels can differ in gain).
+            scale_uv_per_ch = np.array([
+                self.MicrovoltsPerAD[np.where(self.channelNumbers == ch)[0][0]] for ch in channels
+            ], dtype=float)
+            data_matrix = data_matrix * scale_uv_per_ch[:, np.newaxis, np.newaxis]
 
         if return_timestamps:
             timestamps = np.tile(np.arange(window_samples) * self.sample_ms, (n_windows, 1))
@@ -928,16 +936,19 @@ class OERecording:
         else:
             return data_matrix
 
-    def get_analog_data(self, channels, start_time_ms, window_ms, convert_to_mv=True, return_timestamps=True):
+    def get_analog_data(self, channels, start_time_ms, window_ms, convert_microvolts=True, return_timestamps=True):
         """
-        This is a translated matlab function that efficiently retrieves data from Open-Ephys format neural recordings
-        :param self: an OERecording class obj. with a metadata file created by the matlab class with the same name
-        :param channels: a vector of channel numbers to sample from [1XN channels]
-        :param start_time_ms: a vector of window start times [1XN] in ms
-        :param window_ms: a single value, the length of the sampling window from each startTime [ms_value]
-        :param convert_to_mv: when True, turns the output into the mV representation of the sampled data
-        :param return_timestamps: when True, the output will include sample timestamps from 0 in ms
-        :return: data_matrix - an array with the shape [n_channels, n_windows, nSamples] with int16 / mV values
+        Retrieve continuous data from Open Ephys ADC/AUX .continuous files.
+
+        Open Ephys convention: For ADC channels, header.bitVolts is in **volts per AD count**.
+        This code stores bitVolts*1e6 as MicrovoltsPerADAnalog, so output is in µV when convert_microvolts=True.
+
+        :param channels: channel numbers to sample from
+        :param start_time_ms: window start times in ms
+        :param window_ms: length of each window in ms
+        :param convert_microvolts: when True, convert to physical units (output in **microvolts**, µV).
+        :param return_timestamps: when True, return sample timestamps in ms
+        :return: data_matrix [n_channels, n_windows, nSamples]; values in µV when convert_microvolts=True
         """
         window_samples = int(
             np.round(window_ms / self.sample_ms))  # round the time in ms to the nearest whole sample count
@@ -1051,7 +1062,7 @@ class OERecording:
 
         data_matrix = np.transpose(data_matrix, [2, 1, 0])
 
-        if convert_to_mv:
+        if convert_microvolts:
             data_matrix = data_matrix * self.MicrovoltsPerADAnalog[-1]
 
         if return_timestamps:
@@ -1062,17 +1073,20 @@ class OERecording:
         else:
             return data_matrix
 
-    def get_accel_data(self, channels, start_time_ms, window_ms, convert_to_mv=True, return_timestamps=True,
+    def get_accel_data(self, channels, start_time_ms, window_ms, convert_microvolts=True, return_timestamps=True,
                        direct_paths_to_files=None):
         """
-        This is a translated matlab function that efficiently retrieves data from Open-Ephys format neural recordings
-        :param self: an OERecording class obj. with a metadata file created by the matlab class with the same name
-        :param channels: a vector of channel numbers to sample from [1XN channels]
-        :param start_time_ms: a vector of window start times [1XN] in ms
-        :param window_ms: a single value, the length of the sampling window from each startTime [ms_value]
-        :param convert_to_mv: when True, turns the output into the mV representation of the sampled data
-        :param return_timestamps: when True, the output will include sample timestamps from 0 in ms
-        :return: data_matrix - an array with the shape [n_channels, n_windows, nSamples] with int16 / mV values
+        Retrieve continuous data from Open Ephys AUX (accelerometer) .continuous files.
+
+        ADC/AUX bitVolts are in volts per AD; stored as MicrovoltsPerADAnalog = bitVolts*1e6.
+        Here we multiply by MicrovoltsPerADAnalog/1000 so output is in **millivolts (mV)** when convert_microvolts=True.
+
+        :param channels: channel numbers to sample from
+        :param start_time_ms: window start times in ms
+        :param window_ms: length of each window in ms
+        :param convert_microvolts: when True, output in **mV**
+        :param return_timestamps: when True, return sample timestamps in ms
+        :return: data_matrix [n_channels, n_windows, nSamples]; values in mV when convert_microvolts=True
         """
         window_samples = int(
             np.round(window_ms / self.sample_ms))  # round the time in ms to the nearest whole sample count
@@ -1189,7 +1203,7 @@ class OERecording:
 
         data_matrix = np.transpose(data_matrix, [2, 1, 0])
 
-        if convert_to_mv:
+        if convert_microvolts:
             data_matrix = data_matrix * self.MicrovoltsPerADAnalog[-1] / 1000
 
         if return_timestamps:

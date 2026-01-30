@@ -93,7 +93,7 @@ def multi_block_saccade_dict_creation_current(blocklist, sampling_window_ms, ep_
                   f'pre_saccade_ts = {pre_saccade_ts} \n'
                   f'sampling_window_ms = {sampling_window_ms}')
             ep_data, ep_timestamps = block.oe_rec.get_data(ep_channel_numbers, pre_saccade_ts, sampling_window_ms,
-                                                           convert_to_mv=True)  # [n_channels, n_windows, nSamples]
+                                                           convert_microvolts=True)  # [n_channels, n_windows, nSamples]
 
             # start populating the dictionary
             block_dict[e] = {

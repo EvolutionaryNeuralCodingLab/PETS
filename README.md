@@ -56,13 +56,34 @@ python examples/smoke_preprocessing_imports.py
 
 ```
 src/eye_tracking_system_tools/
-├── preprocessing/     # Data synchronization and preprocessing
-├── figures/          # Figure reproduction scripts
-├── raspberry_pi/      # Raspberry Pi video capture utilities
-└── utils/            # General utilities
+├── preprocessing/       # Data synchronization and preprocessing
+│   ├── block_synchronization.ipynb
+│   ├── data_verification.ipynb
+│   ├── kerr_degree_conversion.ipynb
+│   ├── add_accelerometer_state_annotations.ipynb
+│   ├── lfp_led_validation.ipynb   # LED-based LFP alignment verification
+│   ├── BlockSync_class.py
+│   ├── OERecording.py             # Open Ephys continuous data access (standalone)
+│   └── ...
+├── analysis_pipelines/   # Downstream analysis (electrophysiology under development)
+│   ├── saccade_collection_pipeline.ipynb
+│   └── saccade_lfp_average_pipeline.ipynb
+├── figures/             # Figure reproduction scripts
+├── raspberry_pi/        # Raspberry Pi video capture utilities
+└── utils/               # General utilities
     ├── 3D_printing_files/  # 3D printing files and virtual fitting guide
     └── meshroom_pipeline_template.mg
 ```
+
+## Electrophysiology (under development)
+
+Open Ephys integration and LFP-related workflows are **still under development**. The following are available on feature branches but APIs and pipelines may change:
+
+- **Standalone Open Ephys access**: `OERecording` in `preprocessing/OERecording.py` reads `.continuous` and events without MATLAB; `get_data(..., convert_microvolts=True)` returns data in µV.
+- **LED-based LFP verification**: `preprocessing/lfp_led_validation.ipynb` checks temporal alignment of LFP to LED events.
+- **Analysis pipelines**: `analysis_pipelines/saccade_collection_pipeline.ipynb` and `saccade_lfp_average_pipeline.ipynb` for saccade collection and saccade-triggered LFP averages.
+
+See `src/eye_tracking_system_tools/preprocessing/README.md` for preprocessing details and `src/eye_tracking_system_tools/analysis_pipelines/` for pipeline notebooks.
 
 ## Usage
 

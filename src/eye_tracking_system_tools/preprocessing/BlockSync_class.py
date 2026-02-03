@@ -15,7 +15,7 @@ import open_ephys.analysis as oea
 import pandas as pd
 import scipy.stats as stats
 from bokeh.io import output as b_output
-from bokeh.models import HoverTool
+from bokeh.models import HoverTool, ColumnDataSource
 from bokeh.plotting import figure, show
 from bokeh.palettes import Category10
 from eye_tracking_system_tools.preprocessing.ellipse_fit import LsqEllipse
@@ -148,8 +148,15 @@ class BlockSync:
         except IndexError:
             print('No open ephys files here!!!!')
         try:
-            self.rec_node_dirname = [i for i in dirname if (p / i).is_dir()][0]
-            self.oe_path = self.block_path / 'oe_files' / self.oe_dirname / self.rec_node_dirname
+            rec_node_dirs = [i for i in dirname if (p / i).is_dir()]
+            if rec_node_dirs:
+                # OE 0.6.x: nested Record Node folder (e.g. experiment_1_recording_0/Record Node 101/)
+                self.rec_node_dirname = rec_node_dirs[0]
+                self.oe_path = self.block_path / 'oe_files' / self.oe_dirname / self.rec_node_dirname
+            else:
+                # OE 0.5.x (legacy): flat structure - experiment folder IS the recording folder
+                self.rec_node_dirname = None
+                self.oe_path = self.block_path / 'oe_files' / self.oe_dirname
             self.settings_xml = self.oe_path / 'settings.xml'
             self.sample_rate = self.get_sample_rate()
             # Try standalone mode first (use directory), fall back to legacy mode if metadata file exists
@@ -163,7 +170,7 @@ class BlockSync:
                 # No metadata file found, use standalone mode directly
                 self.oe_rec = OERecording(self.oe_path)
                 print('created the .oe_rec attribute as an open ephys recording obj with get_data functionality (standalone mode, no metadata file)')
-        except IndexError:
+        except (IndexError, FileNotFoundError):
             print('No open ephys record node here!!!')
         self.oe_events = None
         self.block_starts = None
@@ -335,19 +342,32 @@ class BlockSync:
             return sub_df
 
         csv_export_path = self.block_path / 'oe_files' / self.oe_dirname / 'events.csv'
+        csv_export_path.parent.mkdir(parents=True, exist_ok=True)
         if not csv_export_path.is_file():
-            session = oea.Session(str(self.oe_path.parent))
-            events_df = session.recordnodes[0].recordings[0].events
-            if align_to_zero:
-                print(f'aligning to zero with {self.zeroth_sample_number}')
-                subtracted_df = subtract_number_from_column(events_df,
-                                                            int(self.zeroth_sample_number),
-                                                            ['sample_number'])
-                subtracted_df.to_csv(csv_export_path)
-                print(f'open ephys events aligned to zero & exported to csv file at {csv_export_path}')
-            else:
+            try:
+                # Try open_ephys.analysis (OE 0.6.x format)
+                session = oea.Session(str(self.oe_path.parent))
+                events_df = session.recordnodes[0].recordings[0].events
+                if align_to_zero:
+                    print(f'aligning to zero with {self.zeroth_sample_number}')
+                    subtracted_df = subtract_number_from_column(events_df,
+                                                                int(self.zeroth_sample_number),
+                                                                ['sample_number'])
+                    subtracted_df.to_csv(csv_export_path)
+                    print(f'open ephys events aligned to zero & exported to csv file at {csv_export_path}')
+                else:
+                    events_df.to_csv(csv_export_path)
+                    print(f'open ephys events exported to csv file at {csv_export_path}')
+            except Exception:
+                # Fallback: use standalone binary .events reader (OE 0.5.x and 0.6.x)
+                print('open_ephys.analysis failed, using standalone binary .events reader')
+                zeroth = int(self.zeroth_sample_number) if self.zeroth_sample_number is not None else None
+                events_df = self.oe_rec.read_events_to_dataframe(
+                    align_to_zero=align_to_zero,
+                    zeroth_sample=zeroth
+                )
                 events_df.to_csv(csv_export_path)
-                print(f'open ephys events exported to csv file at {csv_export_path}')
+                print(f'open ephys events (standalone) exported to csv file at {csv_export_path}')
         else:
             print('events.csv file already exists')
 
@@ -647,12 +667,21 @@ class BlockSync:
 
         # --- read source ---
         df = pd.read_csv(open_ephys_csv_path)
+        # Ensure expected columns exist (line, state, sample_number)
+        for col in ("line", "state", "sample_number"):
+            if col not in df.columns:
+                raise ValueError(
+                    f"events.csv must have columns 'line', 'state', 'sample_number'. Found: {list(df.columns)}"
+                )
         channels = np.unique(df["line"].to_numpy(copy=True))
         df_onstate = df[df["state"] == 1]  # rising edges only
 
         # --- if user provided role->line map, convert to the expected line->role dict ---
         if manual_line_map is not None:
             channel_names = {int(v): str(k) for k, v in manual_line_map.items()}
+        elif channel_names is None or not channel_names:
+            # No channel mapping: use line numbers as role names (e.g. line_1, line_2)
+            channel_names = {int(c): f"line_{int(c)}" for c in channels}
 
         ls = []
 
@@ -661,18 +690,27 @@ class BlockSync:
         arena_start_timestamp = None
         arena_end_timestamp = None
 
-        for chan in channels:
-            if chan not in channel_names.keys():
-                continue
+        # Iterate over channel_names to ensure every mapped role (including L_eye_TTL, R_eye_TTL)
+        # is processed. Use line numbers from the mapping so we don't miss roles due to
+        # iteration order or type mismatches between events.csv "line" and our keys.
+        for chan_int, sname in channel_names.items():
+            # Match line (events.csv "line" may be int or float)
+            line_vals = pd.to_numeric(df_onstate["line"], errors="coerce")
+            mask = line_vals == chan_int
+            s = df_onstate.loc[mask, "sample_number"].copy()
+            s.name = sname
 
-            sname = channel_names[chan]
-            s = pd.Series(df_onstate["sample_number"][df_onstate["line"] == chan], name=sname)
+            if len(s) == 0 and sname in ("L_eye_TTL", "R_eye_TTL"):
+                raise ValueError(
+                    f"No rising-edge events found for {sname} (line {chan_int}) in events.csv. "
+                    "Check that the line numbers match the data."
+                )
 
             # Arena handling
             if sname == arena_channel_name:
                 if len(s) < 2:
                     raise ValueError(
-                        f"Arena channel '{arena_channel_name}' (line {chan}) has <2 rising edges; cannot define window."
+                        f"Arena channel '{arena_channel_name}' (line {chan_int}) has <2 rising edges; cannot define window."
                     )
 
                 if arena_window is not None:
@@ -736,7 +774,7 @@ class BlockSync:
                         # IMPORTANT: fail loudly so the wrapper can catch and launch manual mode
                         raise ValueError(
                             f"Could not infer arena start/stop from breaks: found {option_count} gaps > {gap_threshold_ms} ms "
-                            f"for arena_channel_name='{arena_channel_name}' (line {chan})."
+                            f"for arena_channel_name='{arena_channel_name}' (line {chan_int})."
                         )
 
             # Counter per channel (rising edge count)
@@ -755,6 +793,16 @@ class BlockSync:
             )
 
         open_ephys_events = pd.concat(ls, axis=1)
+
+        # Ensure L_eye_TTL and R_eye_TTL exist when in mapping (required for downstream sync)
+        for req_col in ("L_eye_TTL", "R_eye_TTL"):
+            if req_col in channel_names.values() and req_col not in open_ephys_events.columns:
+                raise ValueError(
+                    f"parsed_events is missing required column '{req_col}'. "
+                    f"channel_names={channel_names}. Columns: {list(open_ephys_events.columns)}"
+                )
+            if req_col in channel_names.values() and f"{req_col}_frame" not in open_ephys_events.columns:
+                raise ValueError(f"parsed_events is missing required column '{req_col}_frame'.")
 
         # Ensure arena was found/parsed
         if arena_start_stop is None or len(arena_start_stop) == 0 or arena_start_timestamp is None or arena_end_timestamp is None:
@@ -812,6 +860,10 @@ class BlockSync:
 
     def _summarize_ttl_lines_from_events_csv(self, events_csv_path: Path) -> pd.DataFrame:
         df = pd.read_csv(events_csv_path)
+        if "line" not in df.columns or "state" not in df.columns or "sample_number" not in df.columns:
+            raise ValueError(
+                f"events.csv must have columns 'line', 'state', 'sample_number'. Found: {list(df.columns)}"
+            )
         df_on = df[df["state"] == 1].copy()
 
         out = []
@@ -836,6 +888,8 @@ class BlockSync:
                 t_last_s=float(s[-1] / self.sample_rate),
             ))
 
+        if not out:
+            return pd.DataFrame(columns=["line", "n_rising", "est_hz", "median_dt_ms", "t_first_s", "t_last_s"])
         return pd.DataFrame(out).sort_values(["n_rising"], ascending=False).reset_index(drop=True)
 
 
@@ -845,16 +899,20 @@ class BlockSync:
         df_on = df[df["state"] == 1].copy()
 
         lines = sorted(df_on["line"].unique().tolist())
-        line_to_row = {ln: i for i, ln in enumerate(lines)}
+        # Use actual Open Ephys line numbers for y-axis (not row indices) so the plot
+        # matches the 'line' column in events.csv and manual_line_map entries.
+        y_min = min(lines) - 0.5
+        y_max = max(lines) + 0.5
 
         p = figure(
             width=1500,
             height=max(300, 22 * len(lines)),
             x_axis_label="Time (s)",
-            y_axis_label="TTL line (row index)",
+            y_axis_label="TTL line (Open Ephys line number)",
             title=title,
             tools="pan,wheel_zoom,box_zoom,reset,save",
-            active_scroll="wheel_zoom"
+            active_scroll="wheel_zoom",
+            y_range=(y_min, y_max),
         )
 
         palette = Category10[10]
@@ -864,14 +922,37 @@ class BlockSync:
             s = df_on.loc[df_on["line"] == ln, "sample_number"].to_numpy(dtype=np.int64)
             s.sort()
             if len(s) > max_points_per_line:
-                idx = rng.choice(len(s), size=max_points_per_line, replace=False)
-                s = np.sort(s[idx])
+                pick = rng.choice(len(s), size=max_points_per_line, replace=False)
+                order = np.argsort(s[pick])
+                idx = pick[order]  # original rising-edge indices
+                s = s[pick][order]
+            else:
+                idx = np.arange(len(s))
 
             t = s / float(self.sample_rate)
-            y = np.full_like(t, fill_value=line_to_row[ln], dtype=float)
-            p.circle(t, y, size=3, alpha=0.55, color=palette[i % len(palette)], legend_label=f"line {ln}")
+            y = np.full_like(t, fill_value=float(ln), dtype=float)
+            source = ColumnDataSource(data=dict(
+                x=t,
+                y=y,
+                time_s=t,
+                line_num=np.full_like(t, ln, dtype=np.int32),
+                index=idx.astype(np.int32),
+                sample_number=s.astype(np.int64),
+            ))
+            p.scatter(
+                x="x", y="y", size=3, alpha=0.55,
+                color=palette[i % len(palette)], legend_label=f"line {ln}",
+                source=source
+            )
 
-        p.add_tools(HoverTool(tooltips=[("time (s)", "$x{0.000}"), ("row", "$y{0}")]))
+        p.add_tools(HoverTool(
+            tooltips=[
+                ("time (s)", "@time_s{0.000}"),
+                ("line", "@line_num"),
+                ("index", "@index"),
+                ("sample_number", "@sample_number"),
+            ]
+        ))
         p.legend.click_policy = "hide"
         show(p)
         return p
@@ -943,10 +1024,60 @@ class BlockSync:
         # --- role mapping ---
         print("\nManual mapping: assign Open Ephys digital 'line' numbers to roles.")
         manual_line_map = {}
-        for role in required_roles:
-            val = input(f"Enter line number for {role} (or blank to skip): ").strip()
-            if val != "":
-                manual_line_map[role] = int(val)
+
+        # Arena (required)
+        val = input(f"Enter line number for {arena_channel_name}: ").strip()
+        if val != "":
+            manual_line_map[arena_channel_name] = int(val)
+
+        # Eye channels: user selects both together, we auto-detect L vs R by matching event count to video frame count
+        eye_lines_raw = input(
+            "Enter the two line numbers for eye cameras (comma-separated, order doesn't matter): "
+        ).strip()
+        if eye_lines_raw:
+            eye_line_nums = [int(x.strip()) for x in eye_lines_raw.split(",") if x.strip()]
+            if len(eye_line_nums) != 2:
+                raise ValueError("Exactly two line numbers required for eye cameras.")
+            line_a, line_b = eye_line_nums
+            if line_a == line_b:
+                raise ValueError("The two eye line numbers must be different.")
+
+            df_events = pd.read_csv(events_csv_path)
+            df_on = df_events[df_events["state"] == 1]
+            count_a = len(df_on[df_on["line"] == line_a])
+            count_b = len(df_on[df_on["line"] == line_b])
+
+            left_frame_count = right_frame_count = None
+            if self.le_videos and len(self.le_videos) > 0 and self.re_videos and len(self.re_videos) > 0:
+                cap_l = cv2.VideoCapture(str(self.le_videos[0]))
+                cap_r = cv2.VideoCapture(str(self.re_videos[0]))
+                left_frame_count = int(cap_l.get(cv2.CAP_PROP_FRAME_COUNT))
+                right_frame_count = int(cap_r.get(cv2.CAP_PROP_FRAME_COUNT))
+                cap_l.release()
+                cap_r.release()
+                print(f"  Left eye video: {left_frame_count} frames | Right eye video: {right_frame_count} frames")
+                print(f"  Line {line_a}: {count_a} events | Line {line_b}: {count_b} events")
+
+            if (left_frame_count is not None and right_frame_count is not None
+                    and left_frame_count > 0 and right_frame_count > 0):
+                # Assign by closest match: L_eye_TTL = line closer to left count, R_eye_TTL = line closer to right
+                diff_a_as_left = abs(count_a - left_frame_count) + abs(count_b - right_frame_count)
+                diff_a_as_right = abs(count_a - right_frame_count) + abs(count_b - left_frame_count)
+                if diff_a_as_left <= diff_a_as_right:
+                    manual_line_map["L_eye_TTL"] = line_a
+                    manual_line_map["R_eye_TTL"] = line_b
+                    print(f"  Auto-assigned: L_eye_TTL=line {line_a}, R_eye_TTL=line {line_b}")
+                else:
+                    manual_line_map["L_eye_TTL"] = line_b
+                    manual_line_map["R_eye_TTL"] = line_a
+                    print(f"  Auto-assigned: L_eye_TTL=line {line_b}, R_eye_TTL=line {line_a}")
+            else:
+                # Fallback: ask user which is which
+                print("  (Could not read video frame counts; please specify which line is which.)")
+                l_val = input(f"  Which line is L_eye_TTL? ({line_a} or {line_b}): ").strip()
+                r_val = input(f"  Which line is R_eye_TTL? ({line_a} or {line_b}): ").strip()
+                manual_line_map["L_eye_TTL"] = int(l_val)
+                manual_line_map["R_eye_TTL"] = int(r_val)
 
         # allow additional optional roles
         while True:
@@ -959,6 +1090,11 @@ class BlockSync:
 
         if arena_channel_name not in manual_line_map:
             raise ValueError(f"You must map {arena_channel_name} for manual window selection.")
+        if "L_eye_TTL" not in manual_line_map or "R_eye_TTL" not in manual_line_map:
+            raise ValueError(
+                "You must map both eye camera lines (L_eye_TTL and R_eye_TTL) for synchronization. "
+                "Enter the two line numbers when prompted."
+            )
 
         # --- arena window selection ---
         df = pd.read_csv(events_csv_path)
@@ -971,11 +1107,55 @@ class BlockSync:
 
         print(f"\nArena line {manual_line_map[arena_channel_name]} has {len(arena_samples)} rising edges.")
         print("Choose arena sync window.\n"
-            "You can specify by rising-edge INDEX (0..N-1) or by SAMPLE_NUMBER.\n")
+            "  'i' = index (rising-edge index 0..N-1)\n"
+            "  's' = sample_number\n"
+            "  'a' = automatic (detect pauses/breaks, like when channeldict is provided)\n")
 
-        mode = input("Window selection mode: 'i' (index) or 's' (sample_number) [i]: ").strip().lower() or "i"
+        mode = input("Window selection mode (i/s/a) [i]: ").strip().lower() or "i"
 
-        if mode == "i":
+        if mode == "a":
+            # Automatic: detect pauses (gaps > threshold) and pick start/end
+            gap_default = 1000.0
+            gap_raw = input(
+                f"Gap threshold (ms) for pause detection [{gap_default}]: "
+            ).strip() or str(gap_default)
+            gap_threshold_ms = float(gap_raw)
+
+            diff_arr_ms = np.diff(arena_samples) / (self.sample_rate / 1000.0)
+            arena_start_stop = np.where(diff_arr_ms > gap_threshold_ms)[0]
+            option_count = len(arena_start_stop)
+
+            if option_count == 0:
+                raise ValueError(
+                    f"No gaps > {gap_threshold_ms} ms found. "
+                    "Try a lower threshold or use manual mode (i/s)."
+                )
+            if option_count == 1:
+                # Single break: use before and after
+                br = arena_start_stop[0]
+                arena_start_timestamp = int(arena_samples[0])
+                arena_end_timestamp = int(arena_samples[-1])
+                arena_start_index = 0
+                print(f"Found 1 break at index {br}; using full range.")
+            elif option_count == 2:
+                arena_start_timestamp = int(arena_samples[arena_start_stop[0] + 1])
+                arena_end_timestamp = int(arena_samples[arena_start_stop[1]])
+                arena_start_index = int(arena_start_stop[0]) + 1
+                print(f"Found 2 breaks; arena window: sample {arena_start_timestamp} to {arena_end_timestamp}")
+            else:
+                # Pick largest gap between consecutive breaks
+                ind_max_diff = int(np.argmax(np.diff(arena_start_stop)))
+                start_ind = int(arena_start_stop[ind_max_diff])
+                end_ind = int(arena_start_stop[ind_max_diff + 1])
+                arena_start_timestamp = int(arena_samples[start_ind + 1])
+                arena_end_timestamp = int(arena_samples[end_ind])
+                arena_start_index = start_ind + 1
+                print(
+                    f"Found {option_count} breaks; used largest gap (indices {start_ind}-{end_ind}). "
+                    f"Arena window: sample {arena_start_timestamp} to {arena_end_timestamp}"
+                )
+
+        elif mode == "i":
             start_raw = input("Start rising-edge index (e.g., 0): ").strip()
             end_raw = input("End rising-edge index (e.g., -1, last, N-1): ").strip()
 
@@ -988,7 +1168,7 @@ class BlockSync:
             arena_start_timestamp = int(arena_samples[start_i])
             arena_end_timestamp = int(arena_samples[end_i])
             arena_start_index = start_i
-                
+
         else:
             arena_start_timestamp = int(input("Start SAMPLE_NUMBER: ").strip())
             arena_end_timestamp = int(input("End SAMPLE_NUMBER: ").strip())
@@ -1101,8 +1281,8 @@ class BlockSync:
             # Create events.csv
             self.oe_events_to_csv(align_to_zero=align_to_zero)
 
-            events_csv_path = self.block_path / "oe_files" / self.exp_date_time / "events.csv"
-            ex_path = self.block_path / "oe_files" / self.exp_date_time / "parsed_events.csv"
+            events_csv_path = self.block_path / "oe_files" / self.oe_dirname / "events.csv"
+            ex_path = self.block_path / "oe_files" / self.oe_dirname / "parsed_events.csv"
 
             try:
                 # ---- AUTO PATH (original paradigm) ----

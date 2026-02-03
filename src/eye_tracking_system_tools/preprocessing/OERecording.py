@@ -271,6 +271,109 @@ class OERecording:
         
         return blk_evnt
 
+    def read_events_to_dataframe(self, align_to_zero: bool = True,
+                                  zeroth_sample: Optional[int] = None) -> 'pd.DataFrame':
+        """
+        Read TTL events from the binary .events file and return a DataFrame compatible with
+        BlockSync's oe_events_parser (columns: line, state, sample_number).
+        
+        Works for both OE 0.5.x (legacy) and 0.6.x formats. Uses version from .continuous
+        header to determine binary record structure (see OERecording.m).
+        
+        Parameters
+        ----------
+        align_to_zero : bool
+            If True, subtract zeroth_sample from sample_number (align to acquisition start).
+        zeroth_sample : int, optional
+            First acquired sample number. If None, uses globalStartTime_ms * sample_rate / 1000.
+            
+        Returns
+        -------
+        pd.DataFrame
+            Columns: line (TTL channel 0-8), state (1=rising, 0=falling), sample_number.
+        """
+        import pandas as pd
+        
+        event_file_name = getattr(self, 'eventFileName', 'all_channels.events')
+        event_file = self.oe_file_path / event_file_name
+        if not event_file.exists():
+            raise FileNotFoundError(f"Event file not found: {event_file}")
+        
+        n_records = getattr(self, 'nRecordsEvnt', 0)
+        if n_records == 0:
+            # Infer from file size if not set (e.g. legacy mat load)
+            evnt_file_size = getattr(self, 'evntFileSize', None)
+            if evnt_file_size and hasattr(self, 'bytesPerRecEvnt'):
+                n_records = int((evnt_file_size - self.headerSizeByte) / self.bytesPerRecEvnt)
+            if n_records == 0:
+                return pd.DataFrame(columns=["line", "state", "sample_number"])
+        
+        # Build record structure for reading (blkEvnt from _build_blk_evnt)
+        software_version = getattr(self, 'softwareVersion', None)
+        if software_version is None or (hasattr(software_version, '__len__') and len(software_version) > 0):
+            try:
+                v = self.softwareVersion
+                software_version = float(v[0]) if hasattr(v, '__len__') and len(v) > 0 else float(v)
+            except (TypeError, IndexError):
+                software_version = 0.6  # assume newer if unclear
+        else:
+            software_version = float(software_version)
+        
+        blk_evnt = self._build_blk_evnt(software_version)
+        bytes_per_rec = blk_evnt['bytesPerRec']
+        blk_bytes = blk_evnt['Bytes']
+        blk_str = blk_evnt['Str']
+        blk_types = blk_evnt['Types']
+        
+        # Field offsets (bytes from start of record, after 1024 header)
+        type_sizes = {'int64': 8, 'uint64': 8, 'uint16': 2, 'uint8': 1}
+        
+        def read_field(fid, field_name, n_records):
+            idx = blk_str.index(field_name)
+            dtype_str = blk_types[idx]
+            dtype = np.dtype('<i8' if dtype_str == 'int64' else 
+                           '<u8' if dtype_str == 'uint64' else
+                           '<u2' if dtype_str == 'uint16' else '<u1')
+            field_bytes = blk_bytes[idx]
+            offset = self.headerSizeByte + sum(blk_bytes[:idx])
+            skip = bytes_per_rec - field_bytes
+            fid.seek(offset)
+            arr = np.zeros(n_records, dtype=dtype)
+            for i in range(n_records):
+                arr[i] = np.frombuffer(fid.read(field_bytes), dtype=dtype)[0]
+                if i < n_records - 1:
+                    fid.seek(skip, 1)
+            return arr
+        
+        with open(event_file, 'rb') as f:
+            timestamps = read_field(f, 'timestamps', n_records)
+            event_type = read_field(f, 'eventType', n_records)
+            event_id = read_field(f, 'eventId', n_records)
+            data_ch = read_field(f, 'data', n_records)
+        
+        # TTL events only: eventType == 3
+        p_ttl = (event_type == 3)
+        timestamps = timestamps[p_ttl].astype(np.int64)
+        event_id = event_id[p_ttl]
+        data_ch = data_ch[p_ttl]
+        
+        # state: 1 = rising (eventId==1), 0 = falling (eventId==0)
+        state = (event_id == 1).astype(np.int32)
+        
+        if align_to_zero:
+            if zeroth_sample is None:
+                zeroth_sample = int(self.globalStartTime_ms * (self.samplingFrequency[0] / 1000))
+            sample_number = timestamps - zeroth_sample
+        else:
+            sample_number = timestamps
+        
+        df = pd.DataFrame({
+            "line": data_ch.astype(np.int32),
+            "state": state,
+            "sample_number": sample_number.astype(np.int64)
+        })
+        return df
+
     def _extract_timestamps(self, file_path: Path, blk_cont: Dict, 
                            n_records: int, sampling_frequency: float) -> np.ndarray:
         """

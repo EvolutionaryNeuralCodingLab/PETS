@@ -57,7 +57,7 @@ class BlockSync:
 
     """
 
-    def __init__(self, animal_call, experiment_date, block_num, path_to_animal_folder, channeldict=None, regev=False):
+    def __init__(self, animal_call, experiment_date, block_num, path_to_animal_folder, channeldict=None):
         """
             defines the relevant block for analysis
 
@@ -98,10 +98,10 @@ class BlockSync:
         except IndexError:
             print(f'block number {self.block_num} does not have open_ephys files')
 
-        if regev:
-            self.arena_path = self.block_path / 'arena_videos' / 'videos'
-        else:
-            self.arena_path = self.block_path / 'arena_videos'
+        # Auto-detect arena_videos layout: support both arena_videos/ and arena_videos/videos/
+        arena_nested = self.block_path / 'arena_videos' / 'videos'
+        arena_flat = self.block_path / 'arena_videos'
+        self.arena_path = arena_nested if arena_nested.is_dir() else arena_flat
 
         self.arena_files = None
         self.arena_videos = None

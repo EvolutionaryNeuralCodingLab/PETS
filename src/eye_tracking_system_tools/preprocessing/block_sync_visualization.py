@@ -18,7 +18,7 @@ import pandas as pd
 
 from bokeh.io import output_notebook, show, reset_output
 from bokeh.plotting import figure
-from bokeh.models import ColumnDataSource, CustomJS, Span, HoverTool
+from bokeh.models import ColumnDataSource, CustomJS, Span, HoverTool, Div
 try:
     from bokeh.models import Slider
     from bokeh.resources import INLINE
@@ -655,6 +655,172 @@ def interactive_sync_tool_bokeh(
         p = _make_sync_plot_bokeh(block, state["dfL"], state["dfR"], show_led=show_led)
         show(p)
     return layout
+
+
+def plot_sync_verification_verbose_bokeh(
+    block,
+    dfL: pd.DataFrame,
+    dfR: pd.DataFrame,
+    diagnostics: Optional[dict] = None,
+    drift_threshold_frames: float = 1.0,
+    tolerance_seconds: float = 0.017,
+    title: Optional[str] = None,
+    width: int = 1200,
+    height: int = 500,
+):
+    """
+    Bokeh verification plot with drift-correction diagnostics overlaid.
+
+    Shows:
+    - Left/right brightness vs OE time (same as sync tool).
+    - Green solid verticals: LED ON (target alignment time).
+    - Red dashed verticals: LED OFF.
+    - Cyan dashed: for each event, OE time of the row used as "current" for LEFT (where the analysis reads frame_idx).
+    - Orange dashed: same for RIGHT.
+    - Light blue dotted: for each event, OE time where the expected peak frame (minimum) lands for LEFT.
+    - Light coral dotted: same for RIGHT.
+    - A table below listing per event: k, LED ON (s), L: current_frame, expected_frame, error_frames, correction; R: same.
+
+    Use this to debug why drift correction does or does not run, and where the analysis thinks the minimal peak is
+    vs the LED ON signal.
+
+    Parameters
+    ----------
+    block : BlockSync-like
+    dfL, dfR : pd.DataFrame
+        Eye data (e.g. after compute_led_alignment_shift, before or after apply_drift_correction).
+    diagnostics : dict or None
+        If None, computed via compute_drift_correction_diagnostics(block, dfL, dfR, ...).
+    drift_threshold_frames : float
+        Passed to compute_drift_correction_diagnostics when diagnostics is None.
+    tolerance_seconds : float
+        Time tolerance (s) for "within tolerance"; passed to diagnostics when diagnostics is None.
+    title : str or None
+        Figure title (default: verbose sync title).
+    width, height : int
+        Plot dimensions.
+
+    Returns
+    -------
+    bokeh.layouts.column
+        Column of the figure and the diagnostics table (Div).
+    """
+    from eye_tracking_system_tools.preprocessing.block_sync_core import (
+        compute_drift_correction_diagnostics,
+        _get_fs,
+    )
+
+    if diagnostics is None:
+        diagnostics = compute_drift_correction_diagnostics(
+            block, dfL, dfR,
+            drift_threshold_frames=drift_threshold_frames,
+            tolerance_seconds=tolerance_seconds,
+        )
+
+    fs = diagnostics["fs"]
+    on_times_s = diagnostics["on_times_s"]
+    off_times_s = diagnostics["off_times_s"]
+    left_events = diagnostics["left_events"]
+    right_events = diagnostics["right_events"]
+
+    def _nan2none(a):
+        return [None if (not np.isfinite(v)) else float(v) for v in a]
+
+    xL = dfL["oe_time_s"].to_numpy(dtype=float)
+    yL = dfL["brightness"].to_numpy(dtype=float)
+    xR = dfR["oe_time_s"].to_numpy(dtype=float)
+    yR = dfR["brightness"].to_numpy(dtype=float)
+    srcL = ColumnDataSource(dict(x=xL.tolist(), y=_nan2none(yL)))
+    srcR = ColumnDataSource(dict(x=xR.tolist(), y=_nan2none(yR)))
+
+    t_start = diagnostics.get("eye_epoch_t_start", np.nan)
+    t_end = diagnostics.get("eye_epoch_t_end", np.nan)
+    epoch_str = f"Eye epoch: [{t_start:.1f}, {t_end:.1f}] s" if (np.isfinite(t_start) and np.isfinite(t_end)) else "Eye epoch: N/A"
+    p = figure(
+        title=title or f"Sync verification (verbose) — {epoch_str}. Green=LED ON (in epoch), cyan/L=current row, light blue/L=expected peak.",
+        x_axis_label="OE time (s)",
+        y_axis_label="Brightness (a.u.)",
+        width=width,
+        height=height,
+        tools="pan,wheel_zoom,box_zoom,reset,save",
+    )
+    p.line("x", "y", source=srcL, line_width=1.5, color="#1f77b4", legend_label="Left eye")
+    p.line("x", "y", source=srcR, line_width=1.5, color="#d62728", legend_label="Right eye")
+    p.legend.click_policy = "hide"
+
+    # LED ON (green solid) — target alignment
+    for x in on_times_s:
+        p.add_layout(
+            Span(location=float(x), dimension="height", line_color="#2ca02c", line_alpha=0.9, line_width=2, line_dash="solid")
+        )
+    # LED OFF (red dashed)
+    for x in off_times_s:
+        p.add_layout(
+            Span(location=float(x), dimension="height", line_color="#d62728", line_alpha=0.6, line_width=1, line_dash="dashed")
+        )
+    # Left: OE time of row used as "current" at each event (cyan dashed)
+    for ev in left_events:
+        t = ev["oe_time_s_current"]
+        if np.isfinite(t):
+            p.add_layout(
+                Span(location=float(t), dimension="height", line_color="#00bfff", line_alpha=0.85, line_width=1.5, line_dash="dashed")
+            )
+    # Right: OE time of row used as "current" at each event (orange dashed)
+    for ev in right_events:
+        t = ev["oe_time_s_current"]
+        if np.isfinite(t):
+            p.add_layout(
+                Span(location=float(t), dimension="height", line_color="#ff8c00", line_alpha=0.85, line_width=1.5, line_dash="dashed")
+            )
+    # Left: OE time where expected peak frame lands (light blue dotted)
+    for ev in left_events:
+        t = ev["oe_time_s_expected"]
+        if np.isfinite(t):
+            p.add_layout(
+                Span(location=float(t), dimension="height", line_color="#87ceeb", line_alpha=0.7, line_width=1, line_dash="dotted")
+            )
+    # Right: OE time where expected peak frame lands (light coral dotted)
+    for ev in right_events:
+        t = ev["oe_time_s_expected"]
+        if np.isfinite(t):
+            p.add_layout(
+                Span(location=float(t), dimension="height", line_color="#f08080", line_alpha=0.7, line_width=1, line_dash="dotted")
+            )
+
+    # Build diagnostics table text (time-based: dt_ms = alignment error in ms; OK = within tolerance)
+    tol_ms = diagnostics.get("tolerance_seconds", 0.017) * 1000
+    rows = [
+        epoch_str + " (only LED events in this epoch are used). Alignment: dt_ms = (OE time of peak row) - (LED ON time); OK = within ±{:.0f} ms.".format(tol_ms),
+        "Event k | LED ON (s)     | Left: dt_ms, OK, correction | Right: dt_ms, OK, correction",
+        "-" * 95,
+    ]
+    n_ev = max(len(left_events), len(right_events))
+    def _f(v):
+        return f"{v:.1f}" if np.isfinite(v) else "—"
+    for k in range(n_ev):
+        le = left_events[k] if k < len(left_events) else {}
+        re = right_events[k] if k < len(right_events) else {}
+        led_s = le.get("oe_time_s_led_on", re.get("oe_time_s_led_on", np.nan))
+        led_str = f"{led_s:.3f}" if np.isfinite(led_s) else "—"
+        ldt = le.get("dt_ms", np.nan)
+        lok = "OK" if le.get("within_tolerance", False) else "—"
+        lcorr = le.get("correction", "—")
+        rdt = re.get("dt_ms", np.nan)
+        rok = "OK" if re.get("within_tolerance", False) else "—"
+        rcorr = re.get("correction", "—")
+        rows.append(f"  {k}     | {led_str:>14} | L: dt={_f(ldt)}ms [{lok}] [{lcorr}]  | R: dt={_f(rdt)}ms [{rok}] [{rcorr}]")
+    max_dt = 0.0
+    for ev in left_events + right_events:
+        d = ev.get("dt_ms", 0)
+        if np.isfinite(d):
+            max_dt = max(max_dt, abs(float(d)))
+    if max_dt > tol_ms * 2:
+        rows.append("")
+        rows.append(f"Note: Large |dt_ms| (e.g. {max_dt:.0f} ms) = alignment outside tolerance; run apply_drift_correction or check [WARN] in console.")
+    table_html = "<pre style='font-size:11px; margin:0;'>" + "\n".join(rows) + "</pre>"
+    div = Div(text=table_html, width=width, height=min(200, 40 + n_ev * 22))
+
+    return column(p, div)
 
 
 # ============================================================================

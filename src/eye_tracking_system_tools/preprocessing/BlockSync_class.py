@@ -466,6 +466,43 @@ class BlockSync:
                           "DLC" not in vid]
 
     @staticmethod
+    def get_roi_auto_brightest_2x2(vid_path, threshold_value=30):
+        """
+        Choose a 2x2 pixel ROI at the brightest spot of the first frame (after threshold).
+        Used for automatic brightness extraction when manual ROI selection is not desired.
+
+        Parameters
+        ----------
+        vid_path : str or Path
+            Path to the eye video.
+        threshold_value : float
+            Threshold applied before finding brightest 2x2 (same as in produce_frame_val_list_with_roi).
+
+        Returns
+        -------
+        tuple or None
+            ROI (x, y, 2, 2) for use with produce_frame_val_list_with_roi, or None if the frame
+            cannot be read or is too small.
+        """
+        cap = cv2.VideoCapture(str(vid_path))
+        if not cap.isOpened():
+            return None
+        ret, frame = cap.read()
+        cap.release()
+        if not ret or frame is None:
+            return None
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        _, thresh = cv2.threshold(gray, threshold_value, 255, cv2.THRESH_TOZERO)
+        h, w = thresh.shape
+        if h < 2 or w < 2:
+            return None
+        kernel = np.ones((2, 2), dtype=np.float32)
+        sums = cv2.filter2D(thresh.astype(np.float32), -1, kernel)
+        valid = sums[0 : h - 1, 0 : w - 1]
+        yi, xi = np.unravel_index(np.argmax(valid), valid.shape)
+        return (int(xi), int(yi), 2, 2)
+
+    @staticmethod
     def produce_frame_val_list_with_roi(vid_path, roi, threshold_value):
         """
         Calculate mean pixel values within a user-defined ROI for each frame.
@@ -517,7 +554,7 @@ class BlockSync:
         print(f'Finished video {vid_path}, processed {len(frame_val_list)} frames')
         return frame_val_list
 
-    def get_eye_brightness_vectors(self, threshold_value=30, export=True):
+    def get_eye_brightness_vectors(self, threshold_value=30, export=True, use_auto_roi=True, create_if_missing=False):
         """
         This is a utility function that generates the eye brightness vectors for later synchronization.
         This step should be performed by a long looper over all data before synchronization.
@@ -528,6 +565,12 @@ class BlockSync:
             The threshold value to use as mask before calculating brightness
         export: bool
             If True, will export the vectors into two .csv files
+        use_auto_roi: bool
+            If True, try to use a 2x2 ROI at the brightest spot of the first frame for each eye.
+            If auto ROI fails for any eye (or is not desired), falls back to manual ROI selection.
+        create_if_missing: bool
+            If True and the brightness pkl does not exist, create it without prompting (for scripts).
+            If False, prompt the user when the file is missing.
 
         Returns
         -------
@@ -550,28 +593,51 @@ class BlockSync:
                 self.le_frame_val_list = eye_brightness_dict.get('left_eye', None)
                 self.re_frame_val_list = eye_brightness_dict.get('right_eye', None)
         else:
-            answer = input('No eye brightness file exists. Want to create it? (no / any other answer): ')
-            if answer.lower() == 'no':
-                return
+            if not create_if_missing:
+                answer = input('No eye brightness file exists. Want to create it? (no / any other answer): ')
+                if answer.lower() == 'no':
+                    return
+            else:
+                print('No eye brightness file exists. Creating with auto ROI.')
 
-            # Select ROIs for both videos
             rois = {}
-            for eye, vid in zip(['Left Eye', 'Right Eye'], [self.le_videos[0], self.re_videos[0]]):
-                cap = cv2.VideoCapture(vid)
-                if not cap.isOpened():
-                    print(f"Error: Cannot open video {vid}")
-                    continue
+            if use_auto_roi:
+                roi_le = self.get_roi_auto_brightest_2x2(self.le_videos[0], threshold_value)
+                roi_re = self.get_roi_auto_brightest_2x2(self.re_videos[0], threshold_value)
+                if roi_le is not None and roi_re is not None:
+                    rois['Left Eye'] = roi_le
+                    rois['Right Eye'] = roi_re
+                    print('Using automatic 2x2 ROI at brightest spot for both eyes.')
+                else:
+                    if roi_le is None:
+                        print('Auto ROI failed for left eye, falling back to manual selection.')
+                    if roi_re is None:
+                        print('Auto ROI failed for right eye, falling back to manual selection.')
+                    rois = {}
 
-                ret, frame = cap.read()
-                if not ret:
-                    print(f"Error: Cannot read the first frame of {vid}")
+            if not rois:
+                if create_if_missing:
+                    raise RuntimeError(
+                        "Auto ROI failed for at least one eye and create_if_missing=True; "
+                        "cannot prompt for manual ROI. Create brightness manually or set use_auto_roi=False."
+                    )
+                # Manual ROI selection
+                for eye, vid in zip(['Left Eye', 'Right Eye'], [self.le_videos[0], self.re_videos[0]]):
+                    cap = cv2.VideoCapture(vid)
+                    if not cap.isOpened():
+                        print(f"Error: Cannot open video {vid}")
+                        continue
+
+                    ret, frame = cap.read()
+                    if not ret:
+                        print(f"Error: Cannot read the first frame of {vid}")
+                        cap.release()
+                        continue
+
+                    roi = cv2.selectROI(f"Select ROI for {eye}", frame, showCrosshair=True, fromCenter=False)
+                    rois[eye] = roi
+                    cv2.destroyWindow(f"Select ROI for {eye}")
                     cap.release()
-                    continue
-
-                roi = cv2.selectROI(f"Select ROI for {eye}", frame, showCrosshair=True, fromCenter=False)
-                rois[eye] = roi
-                cv2.destroyWindow(f"Select ROI for {eye}")
-                cap.release()
 
             # Calculate brightness vectors
             self.le_frame_val_list = self.produce_frame_val_list_with_roi(self.le_videos[0], rois['Left Eye'],
@@ -2010,8 +2076,9 @@ class BlockSync:
         pupil_xs_before_flip = data[pupil_elements[np.arange(0, len(pupil_elements), 3)]]
 
         # flip the data around the midpoint of the x-axis (shooting the eye through a camera flips right and left)
-        pupil_xs = 320 * 2 - pupil_xs_before_flip
-
+        # side-step an old flip convention
+        #pupil_xs = 320 * 2 - pupil_xs_before_flip
+        pupil_xs = pupil_xs_before_flip
         # get Y coords (no need to flip as opencv conventions already start with origin at top left of frame
         # and so, positive Y is maintained as up in a flipped image as we have)
         pupil_ys = data[pupil_elements[np.arange(1, len(pupil_elements), 3)]]
@@ -2027,7 +2094,9 @@ class BlockSync:
         # Do the same for the edges
         edge_elements = np.array([x for x in data.columns if 'edge' in x])
         edge_xs_before_flip = data[edge_elements[np.arange(0, len(edge_elements), 3)]]
-        edge_xs = 320 * 2 - edge_xs_before_flip
+        # side-step an old flip convention
+        #edge_xs = 320 * 2 - edge_xs_before_flip
+        edge_xs = edge_xs_before_flip
         edge_ys = data[edge_elements[np.arange(1, len(edge_elements), 3)]]
         edge_ps = data[edge_elements[np.arange(2, len(edge_elements), 3)]]
         edge_ps = edge_ps.rename(columns=dict(zip(edge_ps.columns, edge_xs.columns)))
@@ -2317,7 +2386,8 @@ class BlockSync:
             plot (binary): when True, plots the output and detection results
             plot_title (str): plot title for differentiation
         Returns:
-            list: Indices of the identified potential lights-out events.
+            tuple: (expanded_indices, peak_indices). expanded_indices are frame indices for removal
+            (peak +/- 2); peak_indices are the center (minimum brightness) frame of each blink, for sync alignment.
         """
 
         print(f'data length is {len(data)}')
@@ -2335,12 +2405,12 @@ class BlockSync:
         if np.any(~np.isfinite(z_score_data)):
             print("Warning: z_score_data contains NaN or Inf values. Replacing with 0.")
             z_score_data = np.nan_to_num(z_score_data, nan=0.0, posinf=0.0, neginf=0.0)
-        # detect peaks based on the scipy algorithm
+        # detect peaks based on the scipy algorithm (minima in brightness = peaks in -z_score)
         peak_indices, _ = scipy_find_peaks(-1 * z_score_data, width=1, distance=3000)
 
         # expand the peaks to include the dimming and re-lighting frames
         if len(peak_indices) == 0:
-            # No peaks found, return empty array
+            # No peaks found, return empty arrays
             expanded_indices = np.array([], dtype=int)
         else:
             # Ensure indices stay within bounds [0, len(z_score_data)-1]
@@ -2364,10 +2434,11 @@ class BlockSync:
                              y_axis='brightness Z score',
                              peaks=expanded_indices)
 
-        return expanded_indices
+        return expanded_indices, np.asarray(peak_indices, dtype=int)
 
     def find_led_blink_frames(self, plot=False):
-
+        """Detect LED blink frames for both eyes. Sets led_blink_frames_l/r (expanded, for removal)
+        and led_blink_peak_frames_l/r (center of each blink, for sync alignment)."""
         try:
             r_vals = self.re_frame_val_list[0][1]
             l_vals = self.le_frame_val_list[0][1]
@@ -2376,15 +2447,17 @@ class BlockSync:
             r_vals = self.re_frame_val_list
             l_vals = self.le_frame_val_list
         print('collecting left-eye data')
-        l_peaks = self.collect_lights_out_events(data=l_vals,
-                                                 plot=plot,
-                                                 plot_title='Left eye peak detection output')
+        l_expanded, l_peaks = self.collect_lights_out_events(data=l_vals,
+                                                           plot=plot,
+                                                           plot_title='Left eye peak detection output')
         print("collecting right eye data")
-        r_peaks = self.collect_lights_out_events(data=r_vals,
-                                                 plot=plot,
-                                                 plot_title='right eye peak detection output')
-        self.led_blink_frames_l = l_peaks
-        self.led_blink_frames_r = r_peaks
+        r_expanded, r_peaks = self.collect_lights_out_events(data=r_vals,
+                                                            plot=plot,
+                                                            plot_title='right eye peak detection output')
+        self.led_blink_frames_l = l_expanded
+        self.led_blink_frames_r = r_expanded
+        self.led_blink_peak_frames_l = l_peaks
+        self.led_blink_peak_frames_r = r_peaks
 
     @staticmethod
     def euclidean_distance(coord1, coord2):

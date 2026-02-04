@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Dict, List, Any
 from dataclasses import dataclass
 
 import re
@@ -388,6 +388,457 @@ def shift_eye_df_by_index(df: pd.DataFrame, shift: int) -> pd.DataFrame:
     out['frame_idx'] = shifted_idx
     out['brightness'] = shifted_y
     return out
+
+
+# =============================================================================
+# Automated LED alignment (first-blink to ON edge) and drift correction
+# =============================================================================
+
+def _get_led_on_edge_oe_samples(block, fs: float) -> np.ndarray:
+    """
+    Identify LED ON edges by interval only (robust to flipped rise/fall wiring).
+
+    The LED is ON most of the time and blinks OFF for 34 ms every ~60 s. So:
+    - An event followed by a LONG interval (>30 s) is LED_ON (light stays on for a minute).
+    - An event followed by a SHORT interval (~34 ms) is LED_OFF (blink: light off then on).
+
+    We do not use rise vs fall; wiring can be flipped so that rising = LED OFF.
+    Returns OE sample numbers of each LED ON edge (when the light comes back on).
+    """
+    if 'LED_driver' not in block.oe_events.columns or 'LED_driver_fall' not in block.oe_events.columns:
+        raise ValueError("block.oe_events must have 'LED_driver' and 'LED_driver_fall' columns")
+    rise = block.oe_events['LED_driver'].dropna().astype(np.int64).values
+    fall = block.oe_events['LED_driver_fall'].dropna().astype(np.int64).values
+    samples = np.sort(np.concatenate([rise, fall]))
+    if len(samples) < 2:
+        return np.array([], dtype=np.int64)
+    intervals = np.diff(samples)
+    # Event followed by >30 s → LED_ON (light on for the long period)
+    long_interval_min = int(30.0 * fs)
+    on_edge_samples = []
+    for i in range(len(intervals)):
+        if intervals[i] >= long_interval_min:
+            on_edge_samples.append(int(samples[i]))
+    return np.array(on_edge_samples, dtype=np.int64)
+
+
+def _get_led_off_oe_samples(block, fs: float, on_samples: np.ndarray) -> np.ndarray:
+    """
+    Return OE sample of LED-OFF (start of blink) for each LED ON.
+    The blink is: OFF (light off) then 34 ms later ON (light on). So OFF is 34 ms *before* each ON.
+    """
+    off_delta = int(0.034 * fs)
+    return np.asarray(on_samples, dtype=np.int64) - off_delta
+
+
+def _get_eye_data_epoch_oe_seconds(
+    df_left: pd.DataFrame,
+    df_right: pd.DataFrame,
+    fs: float,
+) -> Tuple[float, float]:
+    """
+    Return the OE time range (seconds) where *both* eyes have data.
+    Eye videos often start after OE recording; we only align LED events in this epoch.
+
+    Returns
+    -------
+    (t_start, t_end) : float, float
+        OE time in seconds. Only LED ON/OFF events with time in [t_start, t_end] are used.
+    """
+    for df in (df_left, df_right):
+        if df is None or len(df) == 0:
+            return np.nan, np.nan
+    idxL = df_left.sort_index().index.to_numpy(dtype=np.int64)
+    idxR = df_right.sort_index().index.to_numpy(dtype=np.int64)
+    t_start_L = idxL.min() / fs
+    t_end_L = idxL.max() / fs
+    t_start_R = idxR.min() / fs
+    t_end_R = idxR.max() / fs
+    t_start = max(t_start_L, t_start_R)
+    t_end = min(t_end_L, t_end_R)
+    if t_start >= t_end:
+        return np.nan, np.nan
+    return float(t_start), float(t_end)
+
+
+def _filter_led_events_to_eye_epoch(
+    on_samples: np.ndarray,
+    off_samples: np.ndarray,
+    fs: float,
+    t_start: float,
+    t_end: float,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Keep only LED ON/OFF events whose OE time falls within [t_start, t_end].
+    Returns (on_filtered, off_filtered) with same length; peak_frames[0:len(on_filtered)] then
+    correspond to these events (first blink in video = first LED in epoch).
+    """
+    if not (np.isfinite(t_start) and np.isfinite(t_end)) or t_start >= t_end:
+        return np.array([], dtype=np.int64), np.array([], dtype=np.int64)
+    on_times_s = on_samples.astype(float) / fs
+    mask = (on_times_s >= t_start) & (on_times_s <= t_end)
+    return on_samples[mask], off_samples[mask]
+
+
+def _expected_frame_at_led_on(
+    oe_idx: np.ndarray, frame_idx: np.ndarray, peak_frames: np.ndarray, on_s: int
+) -> float:
+    """
+    Which peak lands closest in OE time to this LED ON? Return that peak's frame index as expected.
+    Tolerates extra/missing blinks (no strict peak_frames[k] = event k).
+    """
+    if len(peak_frames) == 0:
+        return np.nan
+    oe_at_peak = np.zeros(len(peak_frames))
+    for j in range(len(peak_frames)):
+        pj = int(np.argmin(np.abs(frame_idx - float(peak_frames[j]))))
+        oe_at_peak[j] = oe_idx[pj]
+    j_star = int(np.argmin(np.abs(oe_at_peak - on_s)))
+    return float(peak_frames[j_star])
+
+
+def compute_led_alignment_shift(
+    block,
+    df_left: pd.DataFrame,
+    df_right: pd.DataFrame,
+) -> Tuple[int, int]:
+    """
+    Compute the whole-dataset shift (in rows) so that for each eye, the first
+    LED blink's peak frame aligns with the *first* Open Ephys LED ON event in
+    the epoch where both eyes have data. This keeps the 1:1 mapping (event k
+    -> peak_frames[k]) used by drift correction consistent so the first event
+    needs no (or minimal) corrections.
+
+    Returns
+    -------
+    (shift_left, shift_right) : tuple of int
+        Apply via shift_eye_df_by_index(dfL, shift_left), shift_eye_df_by_index(dfR, shift_right).
+    """
+    fs = _get_fs(block)
+    on_samples_all = _get_led_on_edge_oe_samples(block, fs)
+    if len(on_samples_all) == 0:
+        return 0, 0
+    on_samples_all = np.asarray(on_samples_all, dtype=np.int64)
+    off_samples_all = _get_led_off_oe_samples(block, fs, on_samples_all)
+    t_start, t_end = _get_eye_data_epoch_oe_seconds(df_left, df_right, fs)
+    on_samples, _ = _filter_led_events_to_eye_epoch(
+        on_samples_all, off_samples_all, fs, t_start, t_end
+    )
+    if len(on_samples) == 0:
+        on_samples = on_samples_all
+
+    def shift_for_eye(df: pd.DataFrame, peak_frames: np.ndarray) -> int:
+        if len(peak_frames) == 0 or len(on_samples) == 0:
+            return 0
+        first_blink_frame = int(peak_frames[0])
+        df = df.sort_index()
+        oe_idx = df.index.to_numpy(dtype=np.int64)
+        frame_idx = df['frame_idx'].to_numpy(dtype=float)
+        valid = np.isfinite(frame_idx)
+        if not np.any(valid):
+            return 0
+        # q: row where frame_idx is nearest to first_blink_frame (first blink in this eye's trace)
+        dist = np.where(valid, np.abs(frame_idx - first_blink_frame), np.inf)
+        q = int(np.argmin(dist))
+        # Align first blink to the *first* LED ON in the epoch (on_samples[0]), so that
+        # drift correction's 1:1 mapping (event k -> peak_frames[k]) is consistent.
+        # Using "closest" LED ON would put peak_frames[0] at event j != 0, making event 0
+        # appear to need maximal corrections and breaking sync.
+        target_on_sample = int(on_samples[0])
+        p = int(np.argmin(np.abs(oe_idx - target_on_sample)))
+        return int(p - q)
+
+    shift_left = shift_for_eye(df_left, getattr(block, 'led_blink_peak_frames_l', np.array([], dtype=int)))
+    shift_right = shift_for_eye(df_right, getattr(block, 'led_blink_peak_frames_r', np.array([], dtype=int)))
+    return shift_left, shift_right
+
+
+def apply_drift_correction(
+    block,
+    df_left: pd.DataFrame,
+    df_right: pd.DataFrame,
+    max_event_offset_frac: float = 0.6,
+    min_interval_frames: int = 1500,
+    drift_threshold_frames: float = 1.0,
+    tolerance_seconds: float = 0.017,
+    max_corrections_per_event: int = 100,
+    verbose: bool = True,
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Correct cumulative drift so that each blink's brightness peak (in OE time)
+    aligns with the corresponding LED-ON TTL time within a time tolerance.
+    Inserts or removes one frame at a time (same as manual pipeline) until
+    alignment is within tolerance or a per-event limit is reached.
+
+    Alignment is measured in **time**: for each LED-ON event we find the OE time
+    of the row where frame_idx is closest to that blink's peak frame; that time
+    must be within tolerance_seconds of the LED-ON TTL time. Greater deviation
+    triggers one insert or remove in the blink window, then re-evaluation.
+
+    Parameters
+    ----------
+    block : BlockSync
+        Must have oe_events (LED_driver, LED_driver_fall), led_blink_peak_frames_l/r,
+        and sample_rate / get_sample_rate().
+    df_left, df_right : pd.DataFrame
+        Eye data from simple_sync_build (optionally after compute_led_alignment_shift).
+    max_event_offset_frac, min_interval_frames, drift_threshold_frames : float, int
+        Unused; kept for API compatibility.
+    tolerance_seconds : float
+        Acceptable alignment error in seconds (default 0.017 = 17 ms). Alignment
+        is correct when |oe_time_of_peak - led_on_time| <= tolerance_seconds.
+    max_corrections_per_event : int
+        Maximum insert/remove operations per LED event (safety limit).
+    verbose : bool
+        Print summary and per-event diagnostics when corrections are applied.
+
+    Returns
+    -------
+    (df_left_corrected, df_right_corrected) : tuple of pd.DataFrame
+    """
+    from eye_tracking_system_tools.preprocessing.block_sync_visualization import (
+        insert_duplicate_frames_slide,
+        remove_frame_at_pos,
+    )
+
+    fs = _get_fs(block)
+    on_samples_all = _get_led_on_edge_oe_samples(block, fs)
+    off_samples_all = _get_led_off_oe_samples(block, fs, on_samples_all)
+    t_start, t_end = _get_eye_data_epoch_oe_seconds(df_left, df_right, fs)
+    on_samples, off_samples = _filter_led_events_to_eye_epoch(
+        on_samples_all, off_samples_all, fs, t_start, t_end
+    )
+    if len(on_samples) < 1:
+        if verbose:
+            print("[INFO] No LED ON edges in eye-data epoch; skipping drift correction.")
+        return df_left.copy(), df_right.copy()
+
+    on_times_s = on_samples.astype(float) / fs
+    # Restrict peak search to a window around each blink so we don't pick a row from another blink
+    margin_oe_samples = int(1.0 * fs)
+
+    def _oe_time_at_peak_row(
+        out: pd.DataFrame,
+        peak_frame: float,
+        fs: float,
+        on_s: Optional[int] = None,
+        off_s: Optional[int] = None,
+    ) -> Tuple[float, int]:
+        """OE time (seconds) of the row where frame_idx is closest to peak_frame.
+        If on_s and off_s are given, only consider rows in [off_s - margin, on_s + margin]
+        so we find the peak for *this* blink, not another one."""
+        oe_idx = out.index.to_numpy(dtype=np.int64)
+        frame_idx = out['frame_idx'].to_numpy(dtype=float)
+        valid = np.isfinite(frame_idx)
+        if not np.any(valid):
+            return np.nan, -1
+        dist = np.where(valid, np.abs(frame_idx - float(peak_frame)), np.inf)
+        if on_s is not None and off_s is not None:
+            in_window = (oe_idx >= off_s - margin_oe_samples) & (oe_idx <= on_s + margin_oe_samples)
+            dist = np.where(in_window, dist, np.inf)
+        if not np.any(np.isfinite(dist)):
+            return np.nan, -1
+        r = int(np.argmin(dist))
+        oe_time = float(oe_idx[r]) / fs
+        return oe_time, r
+
+    def correct_drift_eye(df: pd.DataFrame, peak_frames: np.ndarray, label: str) -> pd.DataFrame:
+        if len(peak_frames) == 0 or len(on_samples) == 0:
+            return df.copy()
+        out = df.sort_index().copy()
+        n_events = min(len(on_samples), len(peak_frames), len(off_samples))
+        peak_frames = peak_frames[:n_events]
+        n_ins = 0
+        n_rem = 0
+        has_brightness = 'brightness' in out.columns
+        for k in range(n_events):
+            on_s = int(on_samples[k])
+            off_s = int(off_samples[k])
+            t_led_on = float(on_times_s[k])
+            peak_frame_k = float(peak_frames[k])
+            if not np.isfinite(peak_frame_k):
+                continue
+            oe_time_peak, _ = _oe_time_at_peak_row(out, peak_frame_k, fs, on_s=on_s, off_s=off_s)
+            dt_start = oe_time_peak - t_led_on if np.isfinite(oe_time_peak) else 0.0
+            n_corrected_this_event = 0
+            prev_abs_dt = np.inf
+            for _ in range(max_corrections_per_event):
+                oe_idx = out.index.to_numpy(dtype=np.int64)
+                frame_idx = out['frame_idx'].to_numpy(dtype=float)
+                oe_time_peak, row_peak = _oe_time_at_peak_row(out, peak_frame_k, fs, on_s=on_s, off_s=off_s)
+                if not np.isfinite(oe_time_peak):
+                    break
+                dt = oe_time_peak - t_led_on
+                if abs(dt) <= tolerance_seconds:
+                    break
+                pos_after_off = int(np.searchsorted(oe_idx, off_s, side='right'))
+                pos_at_on = int(np.searchsorted(oe_idx, on_s, side='left'))
+                pos_at_on = int(np.clip(pos_at_on, 0, len(oe_idx) - 1))
+                if pos_at_on > 0 and abs(oe_idx[pos_at_on - 1] - on_s) < abs(oe_idx[pos_at_on] - on_s):
+                    pos_at_on = pos_at_on - 1
+                if pos_after_off >= len(oe_idx) or pos_after_off <= 0:
+                    break
+                if abs(dt) >= prev_abs_dt:
+                    break
+                prev_abs_dt = abs(dt)
+                if dt > 0:
+                    # Peak is late (peak OE time > LED ON): remove frame so peak moves earlier in OE time
+                    out = remove_frame_at_pos(out, [pos_after_off], mode='pos', verbose=False)
+                    n_rem += 1
+                    n_corrected_this_event += 1
+                else:
+                    # Peak is early: insert frame so peak moves later in OE time
+                    if has_brightness:
+                        brightness = out['brightness'].to_numpy(dtype=float)
+                        in_blink = (oe_idx >= off_s) & (oe_idx <= on_s)
+                        if np.any(in_blink):
+                            b = np.nan_to_num(brightness, nan=np.inf, posinf=np.inf, neginf=np.inf)
+                            blink_b = np.where(in_blink, b, np.inf)
+                            pos_insert = int(np.argmin(blink_b))
+                        else:
+                            pos_insert = pos_after_off
+                    else:
+                        pos_insert = pos_after_off
+                    if pos_insert >= pos_at_on:
+                        pos_insert = max(0, pos_after_off)
+                    out = insert_duplicate_frames_slide(
+                        out, [pos_insert], mode='pos', duplicate='current', verbose=False
+                    )
+                    n_ins += 1
+                    n_corrected_this_event += 1
+            if verbose and n_corrected_this_event > 0:
+                oe_time_peak_end, _ = _oe_time_at_peak_row(out, peak_frame_k, fs, on_s=on_s, off_s=off_s)
+                dt_end = oe_time_peak_end - t_led_on if np.isfinite(oe_time_peak_end) else np.nan
+                print(
+                    f"[DIAG] Drift {label} event k={k}: corrections={n_corrected_this_event}, "
+                    f"dt_start={dt_start*1000:.1f}ms, dt_end={dt_end*1000:.1f}ms (tolerance ±{tolerance_seconds*1000:.0f}ms)"
+                )
+            if n_corrected_this_event >= max_corrections_per_event and verbose:
+                oe_time_peak_end, _ = _oe_time_at_peak_row(out, peak_frame_k, fs, on_s=on_s, off_s=off_s)
+                dt_end = oe_time_peak_end - t_led_on if np.isfinite(oe_time_peak_end) else np.nan
+                if abs(dt_end) > tolerance_seconds:
+                    print(
+                        f"[WARN] Drift correction {label}: hit limit at event k={k} "
+                        f"(remaining dt={dt_end*1000:.1f}ms). Check sync or increase max_corrections_per_event."
+                    )
+        if verbose and (n_ins or n_rem):
+            print(f"[INFO] Drift correction {label} (vs LED): inserted {n_ins}, removed {n_rem} frame(s)")
+        return out
+
+    peak_l = getattr(block, 'led_blink_peak_frames_l', np.array([], dtype=int))
+    peak_r = getattr(block, 'led_blink_peak_frames_r', np.array([], dtype=int))
+    dfL_out = correct_drift_eye(df_left, peak_l, "LEFT")
+    dfR_out = correct_drift_eye(df_right, peak_r, "RIGHT")
+    return dfL_out, dfR_out
+
+
+def compute_drift_correction_diagnostics(
+    block,
+    df_left: pd.DataFrame,
+    df_right: pd.DataFrame,
+    drift_threshold_frames: float = 1.0,
+    tolerance_seconds: float = 0.017,
+) -> Dict[str, Any]:
+    """
+    Compute per-event alignment diagnostics without modifying data (for plots and debugging).
+    Uses the same time-based criterion as apply_drift_correction: alignment is the OE time
+    of the row where frame_idx is closest to the blink peak, vs LED-ON time.
+
+    Returns
+    -------
+    dict with keys:
+        fs, on_samples, off_samples, on_times_s, off_times_s, eye_epoch_*
+        left_events, right_events : list of dicts with k, oe_time_s_led_on, oe_time_s_expected,
+        dt_ms (alignment error in ms), within_tolerance, current_frame, expected_frame, etc.
+    """
+    fs = _get_fs(block)
+    on_samples_all = _get_led_on_edge_oe_samples(block, fs)
+    off_samples_all = _get_led_off_oe_samples(block, fs, on_samples_all)
+    t_start, t_end = _get_eye_data_epoch_oe_seconds(df_left, df_right, fs)
+    on_samples, off_samples = _filter_led_events_to_eye_epoch(
+        on_samples_all, off_samples_all, fs, t_start, t_end
+    )
+    on_times_s = on_samples.astype(float) / fs
+    off_times_s = off_samples.astype(float) / fs
+    margin_oe_samples = int(1.0 * fs)
+
+    def diagnose_eye(df: pd.DataFrame, peak_frames: np.ndarray) -> List[Dict[str, Any]]:
+        events = []
+        if len(peak_frames) == 0 or len(on_samples) == 0:
+            return events
+        df = df.sort_index()
+        oe_idx = df.index.to_numpy(dtype=np.int64)
+        frame_idx = df['frame_idx'].to_numpy(dtype=float)
+        oe_time_s = df['oe_time_s'].to_numpy(dtype=float) if 'oe_time_s' in df.columns else (oe_idx.astype(float) / fs)
+        n_events = min(len(on_samples), len(peak_frames), len(off_samples))
+        peak_frames = peak_frames[:n_events]
+        for k in range(n_events):
+            on_s = int(on_samples[k])
+            off_s = int(off_samples[k])
+            pos_at_on = np.searchsorted(oe_idx, on_s, side='left')
+            pos_at_on = int(np.clip(pos_at_on, 0, len(oe_idx) - 1))
+            if pos_at_on > 0 and abs(oe_idx[pos_at_on - 1] - on_s) < abs(oe_idx[pos_at_on] - on_s):
+                pos_at_on = pos_at_on - 1
+            current_frame = frame_idx[pos_at_on]
+            expected_frame = float(peak_frames[k])
+            oe_time_s_current = float(oe_time_s[pos_at_on]) if pos_at_on < len(oe_time_s) else np.nan
+            oe_time_s_led_on = on_times_s[k]
+
+            # OE time of the row where the peak frame lands, restricted to this blink's window
+            if np.isfinite(expected_frame):
+                dist = np.abs(frame_idx - expected_frame)
+                in_window = (oe_idx >= off_s - margin_oe_samples) & (oe_idx <= on_s + margin_oe_samples)
+                dist = np.where(in_window, dist, np.inf)
+                if np.any(np.isfinite(dist)):
+                    pos_expected = int(np.argmin(dist))
+                    oe_time_s_expected = float(oe_time_s[pos_expected])
+                else:
+                    oe_time_s_expected = np.nan
+            else:
+                oe_time_s_expected = np.nan
+
+            dt_s = (oe_time_s_expected - oe_time_s_led_on) if np.isfinite(oe_time_s_expected) else np.nan
+            dt_ms = dt_s * 1000.0 if np.isfinite(dt_s) else np.nan
+            within_tolerance = abs(dt_s) <= tolerance_seconds if np.isfinite(dt_s) else False
+            error_frames = current_frame - expected_frame if (np.isfinite(current_frame) and np.isfinite(expected_frame)) else np.nan
+            pos_after_off = np.searchsorted(oe_idx, off_s, side='right')
+            if not within_tolerance and 0 < pos_after_off < len(oe_idx):
+                correction = 'remove' if dt_s > 0 else 'insert'
+            else:
+                correction = 'none'
+
+            events.append({
+                'k': k,
+                'oe_time_s_led_on': oe_time_s_led_on,
+                'oe_time_s_current': oe_time_s_current,
+                'oe_time_s_expected': oe_time_s_expected,
+                'dt_s': dt_s,
+                'dt_ms': dt_ms,
+                'within_tolerance': within_tolerance,
+                'current_frame': current_frame,
+                'expected_frame': expected_frame,
+                'error_frames': error_frames,
+                'correction': correction,
+                'pos_at_on': pos_at_on,
+                'pos_after_off': pos_after_off,
+            })
+        return events
+
+    peak_l = getattr(block, 'led_blink_peak_frames_l', np.array([], dtype=int))
+    peak_r = getattr(block, 'led_blink_peak_frames_r', np.array([], dtype=int))
+    return {
+        'fs': fs,
+        'on_samples': on_samples,
+        'off_samples': off_samples,
+        'on_times_s': on_times_s,
+        'off_times_s': off_times_s,
+        'tolerance_seconds': tolerance_seconds,
+        'eye_epoch_t_start': t_start,
+        'eye_epoch_t_end': t_end,
+        'left_events': diagnose_eye(df_left, peak_l),
+        'right_events': diagnose_eye(df_right, peak_r),
+    }
+
 
 def build_final_sync_df_merge_nearest(
     block,

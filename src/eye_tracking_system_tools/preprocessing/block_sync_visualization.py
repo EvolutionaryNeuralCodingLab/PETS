@@ -679,6 +679,8 @@ def plot_sync_verification_verbose_bokeh(
     - Orange dashed: same for RIGHT.
     - Light blue dotted: for each event, OE time where the expected peak frame (minimum) lands for LEFT.
     - Light coral dotted: same for RIGHT.
+    - Little red circles: detected LED blink peak frames on the trace (L = darker red, R = lighter red), as in find_led_blinks().
+      Use these to verify peak detection: if one eye's circles sit on the dips and the other's do not, peak detection or sync is off.
     - A table below listing per event: k, LED ON (s), L: current_frame, expected_frame, error_frames, correction; R: same.
 
     Use this to debug why drift correction does or does not run, and where the analysis thinks the minimal peak is
@@ -786,6 +788,32 @@ def plot_sync_verification_verbose_bokeh(
             p.add_layout(
                 Span(location=float(t), dimension="height", line_color="#f08080", line_alpha=0.7, line_width=1, line_dash="dotted")
             )
+
+    # Detected LED blink peak frames as little red circles on the trace (like find_led_blinks)
+    # so we can see if peak detection is the source of L/R mismatch
+    def _peak_frames_to_oe_time_brightness(df: pd.DataFrame, peak_frames: np.ndarray):
+        if len(peak_frames) == 0 or df is None or len(df) == 0:
+            return [], []
+        df = df.sort_index()
+        frame_idx = df["frame_idx"].to_numpy(dtype=float)
+        oe_time_s = df["oe_time_s"].to_numpy(dtype=float) if "oe_time_s" in df.columns else df.index.to_numpy(dtype=float) / diagnostics["fs"]
+        brightness = df["brightness"].to_numpy(dtype=float)
+        x_vals, y_vals = [], []
+        for pf in np.atleast_1d(peak_frames):
+            dist = np.abs(frame_idx - float(pf))
+            pos = int(np.argmin(dist))
+            x_vals.append(float(oe_time_s[pos]))
+            y_vals.append(float(brightness[pos]) if np.isfinite(brightness[pos]) else np.nan)
+        return x_vals, y_vals
+
+    peak_l = getattr(block, "led_blink_peak_frames_l", np.array([], dtype=int))
+    peak_r = getattr(block, "led_blink_peak_frames_r", np.array([], dtype=int))
+    xL_peaks, yL_peaks = _peak_frames_to_oe_time_brightness(dfL, peak_l)
+    xR_peaks, yR_peaks = _peak_frames_to_oe_time_brightness(dfR, peak_r)
+    if xL_peaks:
+        p.circle(xL_peaks, yL_peaks, size=8, color="#cc0000", alpha=0.95, legend_label="L detected peaks")
+    if xR_peaks:
+        p.circle(xR_peaks, yR_peaks, size=6, color="#ff4444", alpha=0.9, legend_label="R detected peaks")
 
     # Build diagnostics table text (time-based: dt_ms = alignment error in ms; OK = within tolerance)
     tol_ms = diagnostics.get("tolerance_seconds", 0.017) * 1000

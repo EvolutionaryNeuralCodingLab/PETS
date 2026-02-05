@@ -41,19 +41,27 @@ def _locate_eye_timestamps_csv(mp4: Path) -> Path:
     """
     Find <stem>_timestamps.csv even if the mp4 is *_LE.mp4 / *_RE.mp4
     while the CSV is <base>_timestamps.csv.
+    Uses case-insensitive matching so Timestamps.csv / .CSV are found on Linux.
     """
+    mp4 = Path(mp4)
     stem = mp4.stem
     stripped = re.sub(r'([_\-]?)(LE|RE)$', '', stem, flags=re.IGNORECASE)
-    # 1) exact in same folder
+    # 1) exact in same folder (try common casing variants)
     for s in (stem, stripped):
-        p = mp4.with_name(s + "_timestamps.csv")
-        if p.exists():
-            return p
-    # 2) fuzzy in same folder
+        for ext in ("_timestamps.csv", "_Timestamps.csv", "_timestamps.CSV"):
+            p = mp4.with_name(s + ext)
+            if p.exists():
+                return p
+    # 2) fuzzy in same folder (case-sensitive glob)
     for pat in (f"{stripped}*timestamp*.csv", f"{stripped}*time*.csv",
                 "*timestamp*.csv", "*time*.csv"):
         for p in mp4.parent.glob(pat):
             return p
+    # 2b) case-insensitive fallback in same folder (e.g. Linux: Timestamps.csv, .CSV)
+    for p in mp4.parent.iterdir():
+        if p.is_file() and p.suffix.lower() == ".csv":
+            if "timestamp" in p.stem.lower() or "time" in p.stem.lower():
+                return p
     # 3) common subfolders
     for sub in ("timestamps", "frames_timestamps"):
         for d in (mp4.parent / sub, mp4.parent.parent / sub):
@@ -62,12 +70,20 @@ def _locate_eye_timestamps_csv(mp4: Path) -> Path:
                             "*timestamp*.csv", "*time*.csv"):
                     for p in d.glob(pat):
                         return p
+                for p in d.iterdir():
+                    if p.is_file() and p.suffix.lower() == ".csv":
+                        if "timestamp" in p.stem.lower() or "time" in p.stem.lower():
+                            return p
     # 4) LE/RE root recursive
     root = mp4.parents[1]
     for pat in (f"{stripped}*timestamp*.csv", f"{stripped}*time*.csv",
                 "*timestamp*.csv", "*time*.csv"):
         for p in root.rglob(pat):
             return p
+    for p in root.rglob("*.csv"):
+        if p.is_file() and p.suffix.lower() == ".csv":
+            if "timestamp" in p.stem.lower() or "time" in p.stem.lower():
+                return p
     raise FileNotFoundError(f"Timestamp CSV not found near {mp4}")
 
 def _normalize_to_seconds(t: np.ndarray) -> np.ndarray:
@@ -837,6 +853,102 @@ def compute_drift_correction_diagnostics(
         'eye_epoch_t_end': t_end,
         'left_events': diagnose_eye(df_left, peak_l),
         'right_events': diagnose_eye(df_right, peak_r),
+    }
+
+
+def compute_sync_self_verification_correlation(
+    block,
+    df_left: pd.DataFrame,
+    df_right: pd.DataFrame,
+    window_seconds: float = 0.5,
+    min_correlation_threshold: float = 0.4,
+    interp_hz: float = 100.0,
+) -> Dict[str, Any]:
+    """
+    Self-verification: check that corrected L/R brightness vectors correlate around LED blink events.
+    When sync is correct, both eyes should dip together with similar magnitude at each blink.
+
+    Parameters
+    ----------
+    block : BlockSync-like
+        Used for LED ON times (via _get_led_on_edge_oe_samples and epoch filtering).
+    df_left, df_right : pd.DataFrame
+        Corrected eye data with columns oe_time_s (or index/sample rate), brightness.
+    window_seconds : float
+        Half-window around each LED ON time (s). Correlation is computed in [t_led - window, t_led + window].
+    min_correlation_threshold : float
+        Sync is considered passed when mean correlation across events >= this (default 0.4).
+    interp_hz : float
+        Sample rate (Hz) of the common time grid used for interpolation before correlation.
+
+    Returns
+    -------
+    dict with keys:
+        passed : bool
+            True if mean_correlation >= min_correlation_threshold.
+        mean_correlation : float
+            Mean of per-event correlations (NaN if no valid events).
+        per_event_correlation : list of float
+            Correlation in each blink window.
+        min_correlation_threshold : float
+            Echo of the threshold used.
+        n_events : int
+            Number of LED events used.
+    """
+    fs = _get_fs(block)
+    on_samples_all = _get_led_on_edge_oe_samples(block, fs)
+    off_samples_all = _get_led_off_oe_samples(block, fs, on_samples_all)
+    t_start, t_end = _get_eye_data_epoch_oe_seconds(df_left, df_right, fs)
+    on_samples, _ = _filter_led_events_to_eye_epoch(
+        on_samples_all, off_samples_all, fs, t_start, t_end
+    )
+    on_times_s = on_samples.astype(float) / fs
+
+    def _oe_time_s(df: pd.DataFrame) -> np.ndarray:
+        if "oe_time_s" in df.columns:
+            return df["oe_time_s"].to_numpy(dtype=float)
+        return df.index.to_numpy(dtype=np.int64).astype(float) / fs
+
+    tL = _oe_time_s(df_left)
+    bL = df_left["brightness"].to_numpy(dtype=float)
+    tR = _oe_time_s(df_right)
+    bR = df_right["brightness"].to_numpy(dtype=float)
+
+    per_event = []
+    for t_led in on_times_s:
+        t_lo, t_hi = t_led - window_seconds, t_led + window_seconds
+        maskL = (tL >= t_lo) & (tL <= t_hi) & np.isfinite(bL)
+        maskR = (tR >= t_lo) & (tR <= t_hi) & np.isfinite(bR)
+        if np.sum(maskL) < 5 or np.sum(maskR) < 5:
+            per_event.append(np.nan)
+            continue
+        # Common time grid in this window; interp requires increasing xp
+        n_pts = max(10, int(2 * window_seconds * interp_hz))
+        t_grid = np.linspace(t_lo, t_hi, n_pts)
+        sL = np.argsort(tL[maskL])
+        tL_w = np.sort(tL[maskL])
+        bL_w = bL[maskL][sL]
+        sR = np.argsort(tR[maskR])
+        tR_w = np.sort(tR[maskR])
+        bR_w = bR[maskR][sR]
+        vL = np.interp(t_grid, tL_w, bL_w)
+        vR = np.interp(t_grid, tR_w, bR_w)
+        if np.std(vL) < 1e-10 or np.std(vR) < 1e-10:
+            per_event.append(np.nan)
+            continue
+        r = np.corrcoef(vL, vR)[0, 1]
+        per_event.append(float(r) if np.isfinite(r) else np.nan)
+
+    valid = [c for c in per_event if np.isfinite(c)]
+    mean_corr = float(np.mean(valid)) if valid else np.nan
+    passed = np.isfinite(mean_corr) and mean_corr >= min_correlation_threshold
+
+    return {
+        "passed": bool(passed),
+        "mean_correlation": mean_corr,
+        "per_event_correlation": per_event,
+        "min_correlation_threshold": min_correlation_threshold,
+        "n_events": len(on_times_s),
     }
 
 

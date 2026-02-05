@@ -109,6 +109,8 @@ class BlockSync:
         self.arena_timestamps = None
         self.re_videos = None
         self.le_videos = None
+        self.le_frame_count = None  # set by handle_eye_videos() for L/R eye line auto-assignment
+        self.re_frame_count = None
         self.arena_sync_df = None
         self.anchor_vid_name = None
         self.arena_frame_val_list = None
@@ -464,6 +466,19 @@ class BlockSync:
                           "DLC" not in vid]
         self.re_videos = [vid for vid in glob.glob(str(self.block_path) + r'\eye_videos\RE\**\*.mp4') if
                           "DLC" not in vid]
+        # Store frame counts for manual line mapping (L_eye_TTL / R_eye_TTL auto-assignment)
+        if self.le_videos:
+            cap_le = cv2.VideoCapture(str(self.le_videos[0]))
+            n = int(cap_le.get(cv2.CAP_PROP_FRAME_COUNT))
+            cap_le.release()
+            if n > 0:
+                self.le_frame_count = n
+        if self.re_videos:
+            cap_re = cv2.VideoCapture(str(self.re_videos[0]))
+            n = int(cap_re.get(cv2.CAP_PROP_FRAME_COUNT))
+            cap_re.release()
+            if n > 0:
+                self.re_frame_count = n
 
     @staticmethod
     def get_roi_auto_brightest_2x2(vid_path, threshold_value=30):
@@ -1113,16 +1128,22 @@ class BlockSync:
             count_a = len(df_on[df_on["line"] == line_a])
             count_b = len(df_on[df_on["line"] == line_b])
 
-            left_frame_count = right_frame_count = None
-            if self.le_videos and len(self.le_videos) > 0 and self.re_videos and len(self.re_videos) > 0:
-                cap_l = cv2.VideoCapture(str(self.le_videos[0]))
-                cap_r = cv2.VideoCapture(str(self.re_videos[0]))
-                left_frame_count = int(cap_l.get(cv2.CAP_PROP_FRAME_COUNT))
-                right_frame_count = int(cap_r.get(cv2.CAP_PROP_FRAME_COUNT))
-                cap_l.release()
-                cap_r.release()
+            # Use frame counts from handle_eye_videos() when available; otherwise try opening videos once
+            left_frame_count = getattr(self, 'le_frame_count', None)
+            right_frame_count = getattr(self, 're_frame_count', None)
+            if (left_frame_count is None or right_frame_count is None or left_frame_count <= 0 or right_frame_count <= 0):
+                if self.le_videos and len(self.le_videos) > 0 and self.re_videos and len(self.re_videos) > 0:
+                    cap_l = cv2.VideoCapture(str(self.le_videos[0]))
+                    cap_r = cv2.VideoCapture(str(self.re_videos[0]))
+                    left_frame_count = int(cap_l.get(cv2.CAP_PROP_FRAME_COUNT))
+                    right_frame_count = int(cap_r.get(cv2.CAP_PROP_FRAME_COUNT))
+                    cap_l.release()
+                    cap_r.release()
+                else:
+                    left_frame_count = right_frame_count = None
+            if left_frame_count is not None and right_frame_count is not None:
                 print(f"  Left eye video: {left_frame_count} frames | Right eye video: {right_frame_count} frames")
-                print(f"  Line {line_a}: {count_a} events | Line {line_b}: {count_b} events")
+            print(f"  Line {line_a}: {count_a} events | Line {line_b}: {count_b} events")
 
             if (left_frame_count is not None and right_frame_count is not None
                     and left_frame_count > 0 and right_frame_count > 0):

@@ -2399,43 +2399,146 @@ class BlockSync:
 
         return result
 
-    def collect_lights_out_events(self, data, roll_w_size=1500, plot=False, plot_title='peak detector output'):
-        """Identifies potential lights-out events from the given data.
+    def collect_lights_out_events(
+        self,
+        data,
+        roll_w_size=1500,
+        plot=False,
+        plot_title='peak detector output',
+        fps=60,
+        min_led_interval_s=50.0,
+        max_led_interval_s=70.0,
+        min_spacing_s=30.0,
+        first_peak_search_window_s=60.0,
+        nominal_led_interval_s=60.0,
+        frame_count=None,
+        min_depth_zscore=5.0,
+    ):
+        """Identifies LED blink (lights-out) events from the given data.
+
+        The number of possible LED blinks is at most floor(duration_seconds/60) + 1 to allow
+        TTL arrival ambiguity (e.g. 121 s can be 2 or 3 events). The first peak is chosen from
+        *all* detections in the first 60 s by best fit to a 60 s grid (no pre-cap), then the
+        chain is built from that; if the chain exceeds N_max, the least prominent in the chain
+        are dropped (the first peak is never dropped).
+
+        Only minima whose z-score is at or below -min_depth_zscore are considered (i.e. brightness
+        must drop at least min_depth_zscore standard deviations below the rolling mean) to reject noise.
 
         Args:
             data (list or array): The data containing light measurements.
             roll_w_size (int, optional): The window size for rolling z-score calculation. Defaults to 1500.
-            plot (binary): when True, plots the output and detection results
-            plot_title (str): plot title for differentiation
+            plot (bool): when True, plots the output and detection results.
+            plot_title (str): plot title for differentiation.
+            fps (float): Frames per second (used to convert intervals to frames). Default 60.
+            min_led_interval_s (float): Minimum interval between consecutive LED blinks (seconds). Default 50.
+            max_led_interval_s (float): Maximum interval between consecutive LED blinks (seconds). Default 70.
+            min_spacing_s (float): If two peaks are closer than this (seconds), treat as detection error. Default 30.
+            first_peak_search_window_s (float): Only consider detections in the first N seconds as first-peak candidates. Default 60.
+            nominal_led_interval_s (float): Ideal interval between LED blinks (seconds) for grid scoring. Default 60.
+            frame_count (int, optional): Total frames in recording (e.g. block.le_frame_count). If None, len(data) is used.
+            min_depth_zscore (float): Minimum depth of a valid blink: z-score at the minimum must be <= -min_depth_zscore. Default 5.0.
         Returns:
             tuple: (expanded_indices, peak_indices). expanded_indices are frame indices for removal
             (peak +/- 2); peak_indices are the center (minimum brightness) frame of each blink, for sync alignment.
         """
-
         print(f'data length is {len(data)}')
-        # Convert data to numpy array if needed
         data = np.asarray(data)
         if len(data) == 0:
             raise ValueError("Input data is empty")
-        
-        # use a function to get relative z-scores and deal with changes in ambient light
+
         z_score_data = self.rolling_window_z_scores(data, roll_w_size=roll_w_size)
         z_score_data = z_score_data[:len(data)]
         print(f'z_score length is {len(z_score_data)}')
-        
-        # Check for invalid values
+
         if np.any(~np.isfinite(z_score_data)):
             print("Warning: z_score_data contains NaN or Inf values. Replacing with 0.")
             z_score_data = np.nan_to_num(z_score_data, nan=0.0, posinf=0.0, neginf=0.0)
-        # detect peaks based on the scipy algorithm (minima in brightness = peaks in -z_score)
-        peak_indices, _ = scipy_find_peaks(-1 * z_score_data, width=1, distance=3000)
 
-        # expand the peaks to include the dimming and re-lighting frames
+        min_distance_frames = int(min_spacing_s * fps)
+        min_led_frames = int(min_led_interval_s * fps)
+        max_led_frames = int(max_led_interval_s * fps)
+        nominal_interval_frames = int(nominal_led_interval_s * fps)
+        first_window_frames = int(first_peak_search_window_s * fps)
+        n_frames = len(z_score_data)
+
+        # Max number of LED blinks: allow floor(duration/60) + 1 for TTL arrival ambiguity
+        # (e.g. 121 s can be 2 events if TTL just before start, or 3 if TTL in first second)
+        n_frames_for_duration = int(frame_count) if frame_count is not None else n_frames
+        duration_s = n_frames_for_duration / fps
+        N_max = max(1, int(duration_s // 60) + 1)
+
+        # Detect local minima (peaks in -z_score) and get prominence (depth of each minimum).
+        # Require height >= min_depth_zscore so z_score at minimum <= -min_depth_zscore (reject noise).
+        neg_z = -1 * z_score_data
+        raw_peaks, props = scipy_find_peaks(
+            neg_z,
+            width=1,
+            distance=min_distance_frames,
+            prominence=(0, None),
+            height=(min_depth_zscore, None),
+        )
+        prominence = props.get("prominence", np.ones(len(raw_peaks)))
+
+        if len(raw_peaks) == 0:
+            peak_indices = np.array([], dtype=int)
+        else:
+            # First-peak candidates: ALL raw peaks in the first 60 s (do not pre-cap by N_max here,
+            # or we can drop the true first blink when it is not in "top N by prominence")
+            first_candidates = raw_peaks[raw_peaks < first_window_frames]
+            if len(first_candidates) == 0:
+                first_candidates = np.array([raw_peaks[0]], dtype=int)
+                print("  LED filter: no peak in first 60 s, using earliest detection as first peak")
+
+            # Score each first-peak candidate by fit to ideal 60 s grid (mean distance to nearest raw peak)
+            best_candidate = None
+            best_score = np.inf
+            for c in first_candidates:
+                grid = c + np.arange(0, 1 + (n_frames - c) // nominal_interval_frames) * nominal_interval_frames
+                grid = grid[grid < n_frames]
+                if len(grid) == 0:
+                    continue
+                dists = np.min(np.abs(raw_peaks - grid[:, np.newaxis]), axis=1)
+                score = float(np.mean(dists))
+                if score < best_score:
+                    best_score = score
+                    best_candidate = c
+
+            if best_candidate is None:
+                peak_indices = np.array([raw_peaks[0]], dtype=int)
+                print("  LED filter: no valid grid, using earliest detection as first peak")
+            else:
+                # Build chain from best first peak over ALL raw peaks (50-70 s intervals)
+                kept = [int(best_candidate)]
+                for p in np.sort(raw_peaks):
+                    if p <= kept[-1]:
+                        continue
+                    interval = p - kept[-1]
+                    if min_led_frames <= interval <= max_led_frames:
+                        kept.append(int(p))
+                peak_indices = np.asarray(kept, dtype=int)
+
+                # If chain has more than N_max, drop the least prominent in the chain (never drop first peak)
+                if len(kept) > N_max:
+                    # prominence for each kept peak (by index into raw_peaks)
+                    kept_prom = np.array([prominence[np.argmin(np.abs(raw_peaks - k))] for k in kept])
+                    # sort by prominence descending; keep first peak + top (N_max-1) by prominence
+                    order = np.argsort(kept_prom)[::-1]
+                    first_idx = np.argmin(np.abs(peak_indices - best_candidate))
+                    keep_mask = np.zeros(len(kept), dtype=bool)
+                    keep_mask[first_idx] = True
+                    remaining = [i for i in order if i != first_idx][: N_max - 1]
+                    for i in remaining:
+                        keep_mask[i] = True
+                    peak_indices = np.sort(peak_indices[keep_mask])
+                    print(f"  LED filter: trimmed to {N_max} peaks (max events = floor({duration_s:.0f}s/60)+1 = {N_max}); first peak from best 60 s fit in first {first_peak_search_window_s} s")
+                elif len(kept) < len(raw_peaks):
+                    print(f"  LED filter: kept {len(kept)} peaks (60 s grid from best first peak in first {first_peak_search_window_s} s)")
+
+        # Expand to peak +/- 2 for removal
         if len(peak_indices) == 0:
-            # No peaks found, return empty arrays
             expanded_indices = np.array([], dtype=int)
         else:
-            # Ensure indices stay within bounds [0, len(z_score_data)-1]
             max_idx = len(z_score_data) - 1
             expanded_indices = np.sort(np.array([
                 np.clip(peak_indices - 2, 0, max_idx),
@@ -2444,11 +2547,9 @@ class BlockSync:
                 np.clip(peak_indices + 1, 0, max_idx),
                 np.clip(peak_indices + 2, 0, max_idx)
             ]).flatten())
-            # Remove duplicates while preserving order
             expanded_indices = np.unique(expanded_indices)
 
         if plot:
-            # Lazy import to avoid circular dependency
             from eye_tracking_system_tools.preprocessing import utility_functions as uf
             uf.bokeh_plotter([z_score_data], ['z_score'],
                              plot_name=plot_title,
@@ -2469,13 +2570,19 @@ class BlockSync:
             r_vals = self.re_frame_val_list
             l_vals = self.le_frame_val_list
         print('collecting left-eye data')
-        l_expanded, l_peaks = self.collect_lights_out_events(data=l_vals,
-                                                           plot=plot,
-                                                           plot_title='Left eye peak detection output')
+        l_expanded, l_peaks = self.collect_lights_out_events(
+            data=l_vals,
+            plot=plot,
+            plot_title='Left eye peak detection output',
+            frame_count=getattr(self, 'le_frame_count', None),
+        )
         print("collecting right eye data")
-        r_expanded, r_peaks = self.collect_lights_out_events(data=r_vals,
-                                                            plot=plot,
-                                                            plot_title='right eye peak detection output')
+        r_expanded, r_peaks = self.collect_lights_out_events(
+            data=r_vals,
+            plot=plot,
+            plot_title='right eye peak detection output',
+            frame_count=getattr(self, 're_frame_count', None),
+        )
         self.led_blink_frames_l = l_expanded
         self.led_blink_frames_r = r_expanded
         self.led_blink_peak_frames_l = l_peaks

@@ -420,9 +420,15 @@ class BlockSync:
             str(file) for file in eye_vid_path.rglob('*.h264') if 'DLC' not in str(file)
         ]
         converted_files = [str(file) for file in eye_vid_path.rglob('*.mp4') if 'DLC' not in str(file)]
-        print(f'converting files: {files_to_convert} \n avoiding conversion on files: {converted_files}')
-        if len(files_to_convert) == 0:
-            print('found no eye videos to convert (already .mp4 or none present); continuing to validate and set video lists.')
+        converted_set = set(converted_files)
+        # Only need conversion when .h264 exists and corresponding .mp4 does not (e.g. converted on another machine)
+        def _needs_conversion(h264_path):
+            base = h264_path[:-5]  # strip '.h264'
+            return (base + '.mp4') not in converted_set and (base + '_LE.mp4') not in converted_set
+        files_that_need_conversion = [f for f in files_to_convert if _needs_conversion(f)]
+        print(f'h264 files found: {len(files_to_convert)}; already have .mp4 (skip): {len(files_to_convert) - len(files_that_need_conversion)}; to convert: {len(files_that_need_conversion)}')
+        if len(files_that_need_conversion) == 0:
+            print('no eye videos to convert (all .mp4 present or no .h264); continuing to validate and set video lists.')
         else:
             # MP4Box must be on PATH (e.g. from gpac: apt install gpac on Ubuntu)
             mp4box = shutil.which('MP4Box')
@@ -431,18 +437,14 @@ class BlockSync:
                     "MP4Box not found on PATH. Install GPAC: on Ubuntu/Debian run "
                     "sudo apt install gpac; on Windows install GPAC and add it to PATH."
                 )
-            for file in files_to_convert:
+            for file in files_that_need_conversion:
                 fps = file[file.find('hz') - 2:file.find('hz')]
                 if len(fps) != 2:
                     fps = 60
                     print('could not determine fps, using 60...')
-                if str(fr'{file[:-5]}.mp4') not in converted_files:
-                    if str(fr'{file[:-5]}_LE.mp4') not in converted_files:
-                        out_mp4 = f'{file[:-5]}.mp4'
-                        sp.run([mp4box, '-fps', str(fps), '-add', file, out_mp4], check=True)
-                        print(fr'{file} converted ')
-                else:
-                    print(f'The file {file[:-5]}.mp4 already exists, no conversion necessary')
+                out_mp4 = f'{file[:-5]}.mp4'
+                sp.run([mp4box, '-fps', str(fps), '-add', file, out_mp4], check=True)
+                print(fr'{file} converted ')
         print('Validating videos...')
         videos_to_inspect = \
             [str(file) for file in eye_vid_path.rglob('*.mp4') if 'DLC' not in str(file)]

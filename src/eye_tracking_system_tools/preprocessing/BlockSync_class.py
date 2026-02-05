@@ -419,19 +419,19 @@ class BlockSync:
         converted_files = [str(file) for file in eye_vid_path.rglob('*.mp4') if 'DLC' not in str(file)]
         print(f'converting files: {files_to_convert} \n avoiding conversion on files: {converted_files}')
         if len(files_to_convert) == 0:
-            print('found no eye videos to handle...')
-            return None
-        for file in files_to_convert:
-            fps = file[file.find('hz') - 2:file.find('hz')]
-            if len(fps) != 2:
-                fps = 60
-                print('could not determine fps, using 60...')
-            if str(fr'{file[:-5]}.mp4') not in converted_files:
-                if str(fr'{file[:-5]}_LE.mp4') not in converted_files:
-                    sp.run(f'MP4Box -fps {fps} -add {file} {file[:-5]}.mp4')
-                    print(fr'{file} converted ')
-            else:
-                print(f'The file {file[:-5]}.mp4 already exists, no conversion necessary')
+            print('found no eye videos to convert (already .mp4 or none present); continuing to validate and set video lists.')
+        else:
+            for file in files_to_convert:
+                fps = file[file.find('hz') - 2:file.find('hz')]
+                if len(fps) != 2:
+                    fps = 60
+                    print('could not determine fps, using 60...')
+                if str(fr'{file[:-5]}.mp4') not in converted_files:
+                    if str(fr'{file[:-5]}_LE.mp4') not in converted_files:
+                        sp.run(f'MP4Box -fps {fps} -add {file} {file[:-5]}.mp4')
+                        print(fr'{file} converted ')
+                else:
+                    print(f'The file {file[:-5]}.mp4 already exists, no conversion necessary')
         print('Validating videos...')
         videos_to_inspect = \
             [str(file) for file in eye_vid_path.rglob('*.mp4') if 'DLC' not in str(file)]
@@ -453,7 +453,7 @@ class BlockSync:
 
         stamp = 'LE'
         path_to_stamp = eye_vid_path / stamp
-        videos_to_stamp = glob.glob(str(path_to_stamp) + r'\**\*.mp4', recursive=True)
+        videos_to_stamp = [str(p) for p in path_to_stamp.rglob('*.mp4')]
         for vid in videos_to_stamp:
             if stamp + '.mp4' not in str(vid):
                 print('stamping LE video')
@@ -462,10 +462,11 @@ class BlockSync:
                 except FileExistsError as e:
                     print('could not re-stamp the video because the label is already there')
 
-        self.le_videos = [vid for vid in glob.glob(str(self.block_path) + r'\eye_videos\LE\**\*.mp4') if
-                          "DLC" not in vid]
-        self.re_videos = [vid for vid in glob.glob(str(self.block_path) + r'\eye_videos\RE\**\*.mp4') if
-                          "DLC" not in vid]
+        # Use pathlib so LE/RE lists and frame counts work on both Windows and Linux
+        le_dir = self.block_path / 'eye_videos' / 'LE'
+        re_dir = self.block_path / 'eye_videos' / 'RE'
+        self.le_videos = [str(p) for p in le_dir.rglob('*.mp4') if 'DLC' not in str(p)]
+        self.re_videos = [str(p) for p in re_dir.rglob('*.mp4') if 'DLC' not in str(p)]
         # Store frame counts for manual line mapping (L_eye_TTL / R_eye_TTL auto-assignment)
         if self.le_videos:
             cap_le = cv2.VideoCapture(str(self.le_videos[0]))

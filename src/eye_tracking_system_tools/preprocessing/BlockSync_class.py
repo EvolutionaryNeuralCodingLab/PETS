@@ -3,6 +3,7 @@ import h5py
 import math
 import os
 import pathlib
+import shutil
 from pathlib import Path
 import subprocess as sp
 import cv2
@@ -407,8 +408,10 @@ class BlockSync:
 
     def handle_eye_videos(self):
         """
-        This method converts and renames the eye tracking videos in the files tree into workable .mp4 files
-        ONLY WORKS ON WINDOWS MACHINES WITH MP4BOX INSTALLED AS A COMMAND LINE MODULE
+        Convert and rename eye tracking .h264 videos into .mp4 and set video lists.
+
+        Requires MP4Box on PATH (from GPAC: on Ubuntu/Debian install with
+        ``sudo apt install gpac``; on Windows install GPAC and add it to PATH).
         """
         print('handling eye video files')
         eye_vid_path = self.block_path / 'eye_videos'
@@ -421,6 +424,13 @@ class BlockSync:
         if len(files_to_convert) == 0:
             print('found no eye videos to convert (already .mp4 or none present); continuing to validate and set video lists.')
         else:
+            # MP4Box must be on PATH (e.g. from gpac: apt install gpac on Ubuntu)
+            mp4box = shutil.which('MP4Box')
+            if not mp4box:
+                raise FileNotFoundError(
+                    "MP4Box not found on PATH. Install GPAC: on Ubuntu/Debian run "
+                    "sudo apt install gpac; on Windows install GPAC and add it to PATH."
+                )
             for file in files_to_convert:
                 fps = file[file.find('hz') - 2:file.find('hz')]
                 if len(fps) != 2:
@@ -428,7 +438,8 @@ class BlockSync:
                     print('could not determine fps, using 60...')
                 if str(fr'{file[:-5]}.mp4') not in converted_files:
                     if str(fr'{file[:-5]}_LE.mp4') not in converted_files:
-                        sp.run(f'MP4Box -fps {fps} -add {file} {file[:-5]}.mp4')
+                        out_mp4 = f'{file[:-5]}.mp4'
+                        sp.run([mp4box, '-fps', str(fps), '-add', file, out_mp4], check=True)
                         print(fr'{file} converted ')
                 else:
                     print(f'The file {file[:-5]}.mp4 already exists, no conversion necessary')

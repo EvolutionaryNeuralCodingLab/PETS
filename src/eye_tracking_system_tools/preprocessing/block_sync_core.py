@@ -10,11 +10,20 @@ from pathlib import Path
 from typing import Optional, Tuple, Dict, List, Any
 from dataclasses import dataclass
 
+import pickle
 import re
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
+import cv2
+from scipy.signal import fftconvolve
+
+try:
+    from tqdm import tqdm
+except ImportError:
+    def tqdm(iterable, desc=None, unit=None):
+        return iterable
 
 
 # simple approach
@@ -1394,6 +1403,141 @@ def add_intermediate_elements(input_vector, gap_to_bridge):
             output_vector.extend(range(input_vector[i] + 1, input_vector[i + 1]))
         output_vector.append(input_vector[i + 1])
     return np.sort(np.unique(output_vector))
+
+
+# ============================================================================
+# Standalone jitter computation for parallel batch processing
+# ============================================================================
+
+
+def _normxcorr2_jitter(template, image, mode="full"):
+    """Normalized cross-correlation (same logic as BlockSync.normxcorr2) for jitter worker."""
+    template = template - np.mean(template)
+    image = image - np.mean(image)
+    a1 = np.ones(template.shape)
+    ar = np.flipud(np.fliplr(template))
+    out = fftconvolve(image, ar.conj(), mode=mode)
+    image = fftconvolve(np.square(image), a1, mode=mode) - np.square(
+        fftconvolve(image, a1, mode=mode)
+    ) / (np.prod(template.shape))
+    image[np.where(image < 0)] = 0
+    template_sq = np.sum(np.square(template))
+    out = out / np.sqrt(image * template_sq)
+    out[np.where(np.logical_not(np.isfinite(out)))] = 0
+    return out
+
+
+def _sort_jitter_dict_result(jitter_dict):
+    """Convert top_correlation_xy to top_correlation_x/y (same as BlockSync.sort_jitter_dict)."""
+    curr_data = dict(jitter_dict)
+    if "top_correlation_xy" in curr_data:
+        xy = np.array(curr_data["top_correlation_xy"])
+        curr_data["top_correlation_x"] = xy[:, 0]
+        curr_data["top_correlation_y"] = xy[:, 1]
+        del curr_data["top_correlation_xy"]
+    return curr_data
+
+
+def compute_cross_correlation_standalone(
+    video_path, roi, correlate_with_first_frame=True, show_progress=True
+):
+    """
+    Compute jitter (frame-to-frame displacement via cross-correlation) for one video.
+    Standalone version for use in worker processes; no BlockSync instance needed.
+    """
+    x, y, w, h = tuple(roi)
+    ref_correlation_ind_xy = None
+    top_correlation_values = []
+    top_correlation_xy = []
+    top_correlation_dist = []
+    x_displacement = []
+    y_displacement = []
+    first_frame = None
+
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        raise RuntimeError(f"Cannot open video: {video_path}")
+    ret, prev_frame = cap.read()
+    if not ret:
+        cap.release()
+        raise RuntimeError(f"Cannot read first frame: {video_path}")
+
+    prev_gray = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
+    prev_roi = prev_gray[y : y + h, x : x + w]
+    num_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    iterator = range(num_frames)
+    if show_progress:
+        iterator = tqdm(iterator, desc="Cross-correlation", unit="frame")
+
+    for _ in iterator:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        roi_frame = gray_frame[y : y + h, x : x + w]
+        if first_frame is None:
+            first_frame = roi_frame.copy()
+        correlation = _normxcorr2_jitter(prev_roi, roi_frame)
+        if correlate_with_first_frame:
+            correlation = _normxcorr2_jitter(first_frame, roi_frame)
+        curr_max_coords = np.where(correlation == np.max(correlation))
+        x_cur, y_cur = int(curr_max_coords[0][0]), int(curr_max_coords[1][0])
+        if ref_correlation_ind_xy is None:
+            ref_correlation_ind_xy = [x_cur, y_cur]
+        x_ref, y_ref = ref_correlation_ind_xy[0], ref_correlation_ind_xy[1]
+        current_distance = np.sqrt((x_ref - x_cur) ** 2 + (y_ref - y_cur) ** 2)
+        x_displacement.append(x_ref - x_cur)
+        y_displacement.append(y_ref - y_cur)
+        top_correlation_dist.append(current_distance)
+        top_correlation_xy.append([x_cur, y_cur])
+        top_correlation_values.append(float(np.max(correlation)))
+        prev_roi = roi_frame
+
+    cap.release()
+    result_dict = {
+        "top_correlation_values": top_correlation_values,
+        "top_correlation_dist": top_correlation_dist,
+        "top_correlation_xy": top_correlation_xy,
+        "y_displacement": y_displacement,
+        "x_displacement": x_displacement,
+    }
+    return _sort_jitter_dict_result(result_dict)
+
+
+def run_jitter_report_worker(args):
+    """
+    Run jitter report for one block in a worker process (for parallel batch).
+    args: (le_video_path, re_video_path, left_roi, right_roi, analysis_path, overwrite)
+    Paths must be strings for pickling. analysis_path can be str or Path.
+    Returns: (status, analysis_path_str, error_msg)
+    status in ('skipped', 'computed', 'failed').
+    """
+    (
+        le_video_path,
+        re_video_path,
+        left_roi,
+        right_roi,
+        analysis_path,
+        overwrite,
+    ) = args
+    analysis_path = Path(analysis_path)
+    out_path = analysis_path / "jitter_report_dict.pkl"
+    try:
+        if out_path.exists() and not overwrite:
+            return ("skipped", str(analysis_path), None)
+        le_jitter = compute_cross_correlation_standalone(
+            le_video_path, left_roi, show_progress=False
+        )
+        re_jitter = compute_cross_correlation_standalone(
+            re_video_path, right_roi, show_progress=False
+        )
+        jitter_report_dict = {"left_eye": le_jitter, "right_eye": re_jitter}
+        analysis_path.mkdir(parents=True, exist_ok=True)
+        with open(out_path, "wb") as f:
+            pickle.dump(jitter_report_dict, f)
+        return ("computed", str(analysis_path), None)
+    except Exception as e:
+        return ("failed", str(analysis_path), str(e))
 
 
 def find_jittery_frames(block, eye, max_distance, diff_threshold, gap_to_bridge=6):

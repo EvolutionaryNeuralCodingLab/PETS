@@ -74,9 +74,13 @@ def get_analysis_folders(block_path: Path) -> list[tuple[str, Path]]:
     """
     Return list of (folder_name, path) for each analysis folder to report.
 
+    Prefer the root block_path/analysis folder: if it has both required files
+    (brightness + jitter pickles), return only that. Otherwise return the root
+    plus all analysis subdirs so we report subfolders only when root is not ready.
+
     - If block_path/analysis does not exist, return [].
-    - If block_path/analysis contains only files (no subdirs), return [(".", analysis_path)].
-    - If block_path/analysis contains subdirs, return one entry per subdir (name, subdir_path).
+    - If root has both required pickles, return [(".", analysis_base)] only.
+    - Else return [(".", analysis_base)] + one entry per subdir (so root and subdirs are reported).
     """
     analysis_base = block_path / "analysis"
     if not analysis_base.is_dir():
@@ -85,12 +89,14 @@ def get_analysis_folders(block_path: Path) -> list[tuple[str, Path]]:
     entries = list(analysis_base.iterdir())
     subdirs = [e for e in entries if e.is_dir()]
     files_in_root = [e for e in entries if e.is_file()]
+    root_file_names = [p.name for p in files_in_root]
+    has_brightness, has_jitter = check_ready(root_file_names)
 
-    if subdirs:
-        return [(d.name, d) for d in subdirs]
-    if files_in_root:
+    if has_brightness and has_jitter:
         return [(".", analysis_base)]
-    return [(".", analysis_base)]
+    result = [(".", analysis_base)]
+    result.extend((d.name, d) for d in subdirs)
+    return result
 
 
 def list_analysis_files(analysis_path: Path) -> list[str]:

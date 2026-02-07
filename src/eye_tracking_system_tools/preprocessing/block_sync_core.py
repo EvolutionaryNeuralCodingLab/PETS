@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Optional, Tuple, Dict, List, Any
 from dataclasses import dataclass
 
+import os
 import pickle
 import re
 import numpy as np
@@ -1536,6 +1537,9 @@ def run_jitter_report_worker(args):
     """
     Run jitter report for one block in a worker process (for parallel batch).
 
+    Sets OMP_NUM_THREADS=1 in this process to avoid libgomp segfaults when
+    ProcessPoolExecutor is used with NumPy/SciPy (nested parallelism).
+
     args: (le_video_path, re_video_path, left_roi, right_roi, analysis_path, overwrite)
           or with optional progress: (..., progress_queue, block_id).
     Paths must be strings for pickling. analysis_path can be str or Path.
@@ -1545,6 +1549,11 @@ def run_jitter_report_worker(args):
     Returns: (status, analysis_path_str, error_msg)
     status in ('skipped', 'computed', 'failed').
     """
+    # Avoid libgomp segfaults with multiprocessing: use single-threaded OpenMP in worker
+    os.environ["OMP_NUM_THREADS"] = "1"
+    os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+    os.environ.setdefault("MKL_NUM_THREADS", "1")
+
     progress_queue = None
     block_id = None
     if len(args) == 8:

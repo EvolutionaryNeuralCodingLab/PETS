@@ -1438,12 +1438,24 @@ def _sort_jitter_dict_result(jitter_dict):
     return curr_data
 
 
+# Progress report interval (frames) when using progress_callback in jitter workers
+JITTER_PROGRESS_INTERVAL = 200
+
+
 def compute_cross_correlation_standalone(
-    video_path, roi, correlate_with_first_frame=True, show_progress=True
+    video_path,
+    roi,
+    correlate_with_first_frame=True,
+    show_progress=True,
+    progress_callback=None,
 ):
     """
     Compute jitter (frame-to-frame displacement via cross-correlation) for one video.
     Standalone version for use in worker processes; no BlockSync instance needed.
+
+    If progress_callback is provided, it is called as progress_callback(current_frame, total_frames)
+    every JITTER_PROGRESS_INTERVAL frames (and on the last frame). Use from workers to report
+    progress to the main process via a shared queue.
     """
     x, y, w, h = tuple(roi)
     ref_correlation_ind_xy = None
@@ -1466,10 +1478,10 @@ def compute_cross_correlation_standalone(
     prev_roi = prev_gray[y : y + h, x : x + w]
     num_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     iterator = range(num_frames)
-    if show_progress:
+    if show_progress and progress_callback is None:
         iterator = tqdm(iterator, desc="Cross-correlation", unit="frame")
 
-    for _ in iterator:
+    for frame_idx in iterator:
         ret, frame = cap.read()
         if not ret:
             break
@@ -1492,6 +1504,12 @@ def compute_cross_correlation_standalone(
         top_correlation_xy.append([x_cur, y_cur])
         top_correlation_values.append(float(np.max(correlation)))
         prev_roi = roi_frame
+        if progress_callback is not None:
+            if (frame_idx + 1) % JITTER_PROGRESS_INTERVAL == 0 or (frame_idx + 1) == num_frames:
+                try:
+                    progress_callback(frame_idx + 1, num_frames)
+                except Exception:
+                    pass
 
     cap.release()
     result_dict = {
@@ -1504,39 +1522,109 @@ def compute_cross_correlation_standalone(
     return _sort_jitter_dict_result(result_dict)
 
 
+def _video_frame_count(video_path):
+    """Return frame count for a video file (opens and releases)."""
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        return 0
+    n = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    cap.release()
+    return n
+
+
 def run_jitter_report_worker(args):
     """
     Run jitter report for one block in a worker process (for parallel batch).
+
     args: (le_video_path, re_video_path, left_roi, right_roi, analysis_path, overwrite)
+          or with optional progress: (..., progress_queue, block_id).
     Paths must be strings for pickling. analysis_path can be str or Path.
+    When progress_queue and block_id are provided (args length 8), progress is sent
+    as ("init", block_id, total_frames), ("progress", block_id, current, total), ("done", block_id).
+
     Returns: (status, analysis_path_str, error_msg)
     status in ('skipped', 'computed', 'failed').
     """
-    (
-        le_video_path,
-        re_video_path,
-        left_roi,
-        right_roi,
-        analysis_path,
-        overwrite,
-    ) = args
+    progress_queue = None
+    block_id = None
+    if len(args) == 8:
+        (
+            le_video_path,
+            re_video_path,
+            left_roi,
+            right_roi,
+            analysis_path,
+            overwrite,
+            progress_queue,
+            block_id,
+        ) = args
+    else:
+        (
+            le_video_path,
+            re_video_path,
+            left_roi,
+            right_roi,
+            analysis_path,
+            overwrite,
+        ) = args
     analysis_path = Path(analysis_path)
     out_path = analysis_path / "jitter_report_dict.pkl"
     try:
         if out_path.exists() and not overwrite:
+            if progress_queue is not None and block_id is not None:
+                try:
+                    progress_queue.put(("done", block_id))
+                except Exception:
+                    pass
             return ("skipped", str(analysis_path), None)
+        total_left = _video_frame_count(le_video_path)
+        total_right = _video_frame_count(re_video_path)
+        total_frames = total_left + total_right
+        if progress_queue is not None and block_id is not None:
+            try:
+                progress_queue.put(("init", block_id, total_frames))
+            except Exception:
+                pass
+
+        def make_callback(eye_offset):
+            def cb(current, total):
+                if progress_queue is not None and block_id is not None:
+                    try:
+                        progress_queue.put(
+                            ("progress", block_id, eye_offset + current, total_frames)
+                        )
+                    except Exception:
+                        pass
+            return cb
+
         le_jitter = compute_cross_correlation_standalone(
-            le_video_path, left_roi, show_progress=False
+            le_video_path,
+            left_roi,
+            show_progress=False,
+            progress_callback=make_callback(0) if progress_queue else None,
         )
         re_jitter = compute_cross_correlation_standalone(
-            re_video_path, right_roi, show_progress=False
+            re_video_path,
+            right_roi,
+            show_progress=False,
+            progress_callback=make_callback(total_left) if progress_queue else None,
         )
+        if progress_queue is not None and block_id is not None:
+            try:
+                progress_queue.put(("done", block_id))
+            except Exception:
+                pass
         jitter_report_dict = {"left_eye": le_jitter, "right_eye": re_jitter}
         analysis_path.mkdir(parents=True, exist_ok=True)
         with open(out_path, "wb") as f:
             pickle.dump(jitter_report_dict, f)
         return ("computed", str(analysis_path), None)
     except Exception as e:
+        if progress_queue is not None and block_id is not None:
+            try:
+                progress_queue.put(("done", block_id))
+            except Exception:
+                pass
         return ("failed", str(analysis_path), str(e))
 
 

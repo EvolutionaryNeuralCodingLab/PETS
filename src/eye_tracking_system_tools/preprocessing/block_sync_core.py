@@ -1412,18 +1412,20 @@ def add_intermediate_elements(input_vector, gap_to_bridge):
 
 
 def _normxcorr2_jitter(template, image, mode="full"):
-    """Normalized cross-correlation (same logic as BlockSync.normxcorr2) for jitter worker."""
-    template = template - np.mean(template)
-    image = image - np.mean(image)
-    a1 = np.ones(template.shape)
+    """Normalized cross-correlation for jitter. Use mode='full' so large displacements are correctly
+    measured and can be flagged as inadmissible; mode='same' would cap at ~half ROI and can alias."""
+    template = np.asarray(template, dtype=np.float32) - np.mean(template)
+    image = np.asarray(image, dtype=np.float32) - np.mean(image)
+    a1 = np.ones(template.shape, dtype=np.float32)
     ar = np.flipud(np.fliplr(template))
     out = fftconvolve(image, ar.conj(), mode=mode)
     image = fftconvolve(np.square(image), a1, mode=mode) - np.square(
         fftconvolve(image, a1, mode=mode)
     ) / (np.prod(template.shape))
-    image[np.where(image < 0)] = 0
+    image = np.maximum(image, 0)
     template_sq = np.sum(np.square(template))
-    out = out / np.sqrt(image * template_sq)
+    denom = np.sqrt(np.maximum(image * template_sq, 1e-20))
+    out = np.divide(out, denom, out=np.zeros_like(out), where=denom > 1e-10)
     out[np.where(np.logical_not(np.isfinite(out)))] = 0
     return out
 
@@ -1490,9 +1492,11 @@ def compute_cross_correlation_standalone(
         roi_frame = gray_frame[y : y + h, x : x + w]
         if first_frame is None:
             first_frame = roi_frame.copy()
-        correlation = _normxcorr2_jitter(prev_roi, roi_frame)
+        # Only one correlation per frame: avoid redundant FFT (was 2x work before)
         if correlate_with_first_frame:
             correlation = _normxcorr2_jitter(first_frame, roi_frame)
+        else:
+            correlation = _normxcorr2_jitter(prev_roi, roi_frame)
         curr_max_coords = np.where(correlation == np.max(correlation))
         x_cur, y_cur = int(curr_max_coords[0][0]), int(curr_max_coords[1][0])
         if ref_correlation_ind_xy is None:

@@ -401,33 +401,65 @@ def plot_kde(ax, x, y, nbins, title, xlim=False, ylim=False, global_max=None, gl
 
 def block_generator(block_numbers, experiment_path, animal, bad_blocks=[]):
     """
-    creates a block_collection to iterate over with multi-block functions
-    :param block_numbers: list of block numbers to loop over
-    :param experiment_path: pathlib.Path instance to the experiment folder
-    :param animal: string
-    :param bad_blocks: blocks to ignore
-    :return:
+    Create a block_collection to iterate over with multi-block functions.
+
+    Supports two usage patterns:
+
+    1. Single animal (original):
+       animal = "PV_126"
+       block_numbers = [6, 7]
+       Returns blocks for that animal with those block numbers.
+
+    2. Multiple animals with per-animal block lists:
+       animal = ["PV_106", "PV_126"]
+       block_numbers = [[15], [6, 7]]
+       Returns blocks for PV_106 with block 15 and PV_126 with blocks 6 and 7
+       (one flat list). bad_blocks applies to all animals.
+
+    :param block_numbers: list of block numbers, or list of lists (one per animal)
+    :param experiment_path: pathlib.Path or str to the experiment folder
+    :param animal: string (animal name) or list of strings (one per animal)
+    :param bad_blocks: blocks to ignore (single list, applied to all animals)
+    :return: list of BlockSync instances
     """
-    p = pathlib.Path(experiment_path) / animal
-    date_folder_list = [i for i in p.iterdir() if 'block' not in str(i).lower() and i.is_dir()]
-    block_collection = []
-    for date_path in date_folder_list:
-        date = date_path.name
-        # list all the blocks in the folder:
-        folder_list = [i for i in date_path.iterdir()]
-        for block in folder_list:
-            if 'block' in str(block):
-                block_number = block.name[-3:]
-                try:
-                    if int(block_number) in block_numbers and int(block_number) not in bad_blocks:
-                        # block definition
-                        block = BlockSync(animal_call=animal,
-                                          experiment_date=date, block_num=block_number,
-                                          path_to_animal_folder=str(experiment_path))
-                        block_collection.append(block)
-                except ValueError:
-                    continue
-    return block_collection
+    experiment_path = pathlib.Path(experiment_path)
+    if bad_blocks is None:
+        bad_blocks = []
+
+    def _blocks_for_one_animal(anim, bnums):
+        p = experiment_path / anim
+        if not p.exists():
+            return []
+        date_folder_list = [i for i in p.iterdir() if 'block' not in str(i).lower() and i.is_dir()]
+        out = []
+        for date_path in date_folder_list:
+            date = date_path.name
+            folder_list = [i for i in date_path.iterdir()]
+            for block in folder_list:
+                if 'block' in str(block):
+                    block_number = block.name[-3:]
+                    try:
+                        if int(block_number) in bnums and int(block_number) not in bad_blocks:
+                            block = BlockSync(
+                                animal_call=anim,
+                                experiment_date=date,
+                                block_num=block_number,
+                                path_to_animal_folder=str(experiment_path),
+                            )
+                            out.append(block)
+                    except ValueError:
+                        continue
+        return out
+
+    # Multi-animal: animal and block_numbers are lists of same length, block_numbers is list-of-lists
+    if isinstance(animal, (list, tuple)) and isinstance(block_numbers, (list, tuple)) and len(animal) == len(block_numbers):
+        if len(block_numbers) > 0 and isinstance(block_numbers[0], (list, tuple)):
+            block_collection = []
+            for anim, bnums in zip(animal, block_numbers):
+                block_collection.extend(_blocks_for_one_animal(anim, list(bnums)))
+            return block_collection
+    # Single animal (original behavior)
+    return _blocks_for_one_animal(animal, list(block_numbers))
 
 
 def create_video_from_segments(segments_df, blocklist, export_path):

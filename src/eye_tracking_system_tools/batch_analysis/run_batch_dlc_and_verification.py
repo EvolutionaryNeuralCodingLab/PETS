@@ -8,7 +8,7 @@ steps (jitter correction, LED cleanup, find_jittery_frames, create_eye_data, exp
 then runs the data verification GUI for each block/eye with a terminal progress bar.
 
 Usage:
-  python -m eye_tracking_system_tools.preprocessing.run_batch_dlc_and_verification \\
+  python -m eye_tracking_system_tools.batch_analysis.run_batch_dlc_and_verification \\
       path/to/sync_log_batch_analysis_output_YYYY_MM_DD.txt [--no-verify] [--channeldict-json PATH]
 
 If more than 10% of a block's frames are removed by find_jittery_frames, the block

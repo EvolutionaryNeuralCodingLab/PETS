@@ -7,8 +7,8 @@ files in each block's analysis folder(s), and flags blocks that are "ready" for
 further processing (have both eye brightness pickle and jitter report pickle).
 
 Usage:
-  python -m eye_tracking_system_tools.preprocessing.get_animal_block_report EXPERIMENT_PATH ANIMAL [ANIMAL ...]
-  python -m eye_tracking_system_tools.preprocessing.get_animal_block_report EXPERIMENT_PATH --animals AN1 AN2 -o report.csv
+  python -m eye_tracking_system_tools.batch_analysis.get_animal_block_report EXPERIMENT_PATH ANIMAL [ANIMAL ...]
+  python -m eye_tracking_system_tools.batch_analysis.get_animal_block_report EXPERIMENT_PATH --animals AN1 AN2 -o report.csv
 
 Output:
   - Full report CSV with columns: animal, experiment_date, block_num, block_path, analysis_folder,

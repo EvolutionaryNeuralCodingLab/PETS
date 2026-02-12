@@ -2,18 +2,22 @@
 """
 Generate a block sync preprocessing report for given experiment and animals.
 
-For each animal, discovers all block folders under the experiment path, lists
-files in each block's analysis folder(s), and flags blocks that are "ready" for
-further processing (have both eye brightness pickle and jitter report pickle).
+For each animal, discovers all block folders under the experiment path, scans
+the full analysis tree for each block (analysis root + internal subfolders), and
+flags blocks that are "ready" for further processing (have both eye brightness
+pickle and jitter report pickle anywhere in that tree).
 
 Usage:
   python -m eye_tracking_system_tools.batch_analysis.get_animal_block_report EXPERIMENT_PATH ANIMAL [ANIMAL ...]
   python -m eye_tracking_system_tools.batch_analysis.get_animal_block_report EXPERIMENT_PATH --animals AN1 AN2 -o report.csv
 
 Output:
-  - Full report CSV with columns: animal, experiment_date, block_num, block_path, analysis_folder,
-    analysis_path, files_in_analysis, has_brightness_pickle, has_jitter_pickle, ready
-  - Console summary of blocks that are ready (have both brightness and jitter pickles).
+  - Full report CSV with one row per block and columns: animal, experiment_date,
+    block_num, block_path, analysis_path, has_brightness_pickle,
+    has_jitter_pickle, ready, brightness_found_at, jitter_found_at,
+    files_found_count
+  - Console summary of blocks that are ready (have both brightness and jitter
+    pickles somewhere under analysis/).
 """
 
 from __future__ import annotations
@@ -70,42 +74,6 @@ def discover_blocks(experiment_path: Path, animals: list[str]) -> list[dict]:
     return rows
 
 
-def get_analysis_folders(block_path: Path) -> list[tuple[str, Path]]:
-    """
-    Return list of (folder_name, path) for each analysis folder to report.
-
-    Prefer the root block_path/analysis folder: if it has both required files
-    (brightness + jitter pickles), return only that. Otherwise return the root
-    plus all analysis subdirs so we report subfolders only when root is not ready.
-
-    - If block_path/analysis does not exist, return [].
-    - If root has both required pickles, return [(".", analysis_base)] only.
-    - Else return [(".", analysis_base)] + one entry per subdir (so root and subdirs are reported).
-    """
-    analysis_base = block_path / "analysis"
-    if not analysis_base.is_dir():
-        return []
-
-    entries = list(analysis_base.iterdir())
-    subdirs = [e for e in entries if e.is_dir()]
-    files_in_root = [e for e in entries if e.is_file()]
-    root_file_names = [p.name for p in files_in_root]
-    has_brightness, has_jitter = check_ready(root_file_names)
-
-    if has_brightness and has_jitter:
-        return [(".", analysis_base)]
-    result = [(".", analysis_base)]
-    result.extend((d.name, d) for d in subdirs)
-    return result
-
-
-def list_analysis_files(analysis_path: Path) -> list[str]:
-    """List names of all files in analysis_path (non-recursive)."""
-    if not analysis_path.is_dir():
-        return []
-    return [p.name for p in analysis_path.iterdir() if p.is_file()]
-
-
 def check_ready(files: list[str]) -> tuple[bool, bool]:
     """Return (has_brightness_pickle, has_jitter_pickle)."""
     file_set = set(files)
@@ -115,42 +83,56 @@ def check_ready(files: list[str]) -> tuple[bool, bool]:
 
 
 def build_report_rows(experiment_path: Path, animals: list[str]) -> list[dict]:
-    """Build full report: one row per (block, analysis_folder)."""
+    """Build full report: one row per block (recursive analysis scan)."""
     blocks = discover_blocks(experiment_path, animals)
     report = []
     for b in blocks:
         block_path = b["block_path"]
-        analysis_folders = get_analysis_folders(block_path)
-        if not analysis_folders:
+        analysis_path = block_path / "analysis"
+        if not analysis_path.is_dir():
             report.append({
                 "animal": b["animal"],
                 "experiment_date": b["experiment_date"],
                 "block_num": b["block_num"],
                 "block_path": str(block_path),
-                "analysis_folder": "",
                 "analysis_path": "",
-                "files_in_analysis": "",
                 "has_brightness_pickle": False,
                 "has_jitter_pickle": False,
                 "ready": False,
+                "brightness_found_at": "",
+                "jitter_found_at": "",
+                "files_found_count": 0,
             })
             continue
-        for folder_name, apath in analysis_folders:
-            files = list_analysis_files(apath)
-            files_str = "; ".join(sorted(files)) if files else ""
-            has_brightness, has_jitter = check_ready(files)
-            report.append({
-                "animal": b["animal"],
-                "experiment_date": b["experiment_date"],
-                "block_num": b["block_num"],
-                "block_path": str(block_path),
-                "analysis_folder": folder_name,
-                "analysis_path": str(apath),
-                "files_in_analysis": files_str,
-                "has_brightness_pickle": has_brightness,
-                "has_jitter_pickle": has_jitter,
-                "ready": has_brightness and has_jitter,
-            })
+
+        all_files = [p for p in analysis_path.rglob("*") if p.is_file()]
+        file_names = [p.name for p in all_files]
+        has_brightness, has_jitter = check_ready(file_names)
+
+        brightness_matches = [
+            str(p.relative_to(analysis_path))
+            for p in all_files
+            if p.name in BRIGHTNESS_PICKLE_NAMES
+        ]
+        jitter_matches = [
+            str(p.relative_to(analysis_path))
+            for p in all_files
+            if p.name == JITTER_REPORT_PICKLE_NAME
+        ]
+
+        report.append({
+            "animal": b["animal"],
+            "experiment_date": b["experiment_date"],
+            "block_num": b["block_num"],
+            "block_path": str(block_path),
+            "analysis_path": str(analysis_path),
+            "has_brightness_pickle": has_brightness,
+            "has_jitter_pickle": has_jitter,
+            "ready": has_brightness and has_jitter,
+            "brightness_found_at": "; ".join(brightness_matches),
+            "jitter_found_at": "; ".join(jitter_matches),
+            "files_found_count": len(all_files),
+        })
     return report
 
 
@@ -179,27 +161,25 @@ def print_ready_summary(report: list[dict]) -> None:
         print("None.")
     else:
         for r in ready:
-            sub = f" / {r['analysis_folder']}" if r["analysis_folder"] and r["analysis_folder"] != "." else ""
-            print(f"  {r['animal']}  date={r['experiment_date']}  block={r['block_num']}{sub}")
+            print(f"  {r['animal']}  date={r['experiment_date']}  block={r['block_num']}")
             print(f"    -> {r['analysis_path']}")
     print()
 
     if not_ready:
-        print("Blocks not ready (missing brightness and/or jitter pickle):")
+        print("Blocks not ready (missing brightness and/or jitter pickle anywhere under analysis/):")
         for r in not_ready:
-            sub = f" / {r['analysis_folder']}" if r.get("analysis_folder") and r["analysis_folder"] != "." else ""
             reason = []
             if not r.get("has_brightness_pickle"):
                 reason.append("brightness")
             if not r.get("has_jitter_pickle"):
                 reason.append("jitter")
-            print(f"  {r['animal']}  date={r['experiment_date']}  block={r['block_num']}{sub}  (missing: {', '.join(reason)})")
+            print(f"  {r['animal']}  date={r['experiment_date']}  block={r['block_num']}  (missing: {', '.join(reason)})")
     print()
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Generate block sync preprocessing report: list blocks and analysis files, flag ready blocks."
+        description="Generate block sync preprocessing report: one row per block, recursive analysis scan."
     )
     parser.add_argument(
         "experiment_path",

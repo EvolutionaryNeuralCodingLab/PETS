@@ -125,7 +125,8 @@ The typical workflow follows this order:
 
 **Outputs:**
 - `block_path/analysis/<analysis_subfolder_name>/dlc_data/` - DLC tracking results
-- `block_path/analysis/<analysis_subfolder_name>/eye_data_2d.csv` - Final eye tracking data (2D)
+- `block_path/analysis/<analysis_subfolder_name>/left_eye_data.csv` - Final left-eye tracking data (2D)
+- `block_path/analysis/<analysis_subfolder_name>/right_eye_data.csv` - Final right-eye tracking data (2D)
 - Corrected eye data (after interactive verification GUI)
 
 **Key features:**
@@ -201,6 +202,41 @@ BLOCKS READY FOR FURTHER PROCESSING
 
 ---
 
+### 5. `promote_latest_analysis_outputs.py`
+
+**Purpose:** Promote the newest heavy-computation files from dated analysis subfolders (for example `analysis/batch_analysis_output_2026_02_05/`) to the analysis root (`analysis/`), so default `BlockSync` initialization automatically loads the latest data.
+
+**When to run:** After running one or more batch pipelines across different dates/names and before interactive per-block work.
+
+**Default promoted files:**
+- Brightness: newest of `eye_brightness_values_dict.pkl` or `eye_brightness.pickle` -> `analysis/eye_brightness_values_dict.pkl`
+- Jitter: newest `jitter_report_dict.pkl` -> `analysis/jitter_report_dict.pkl`
+
+**Safety behavior:**
+- Existing root files are backed up by default to `analysis/__promote_backup__/<timestamp>/`
+- `--dry-run` mode previews all changes without copying files
+
+**Usage:**
+```bash
+# Preview changes only:
+python -m eye_tracking_system_tools.batch_analysis.promote_latest_analysis_outputs \
+    /path/to/experiment PV_126 PV_106 --dry-run
+
+# Apply promotions (default source prefix: batch_analysis_output_):
+python -m eye_tracking_system_tools.batch_analysis.promote_latest_analysis_outputs \
+    /path/to/experiment PV_126 PV_106
+
+# Include every analysis subfolder as source (not just batch_analysis_output_*):
+python -m eye_tracking_system_tools.batch_analysis.promote_latest_analysis_outputs \
+    /path/to/experiment PV_126 --source-prefix ""
+
+# Save a detailed report:
+python -m eye_tracking_system_tools.batch_analysis.promote_latest_analysis_outputs \
+    /path/to/experiment PV_126 -o promote_report.csv
+```
+
+---
+
 ## Folder Structure
 
 After running the batch scripts, your data structure will look like:
@@ -223,7 +259,8 @@ experiment_path/
                     ├── jitter_report_dict.pkl
                     ├── jitter_rois.pkl
                     ├── dlc_data/
-                    ├── eye_data_2d.csv
+                    ├── left_eye_data.csv
+                    ├── right_eye_data.csv
                     └── ... (other outputs)
 ```
 
@@ -243,7 +280,7 @@ experiment_path/
 4. **Resume interrupted runs:**
    - Batch sync: Set `previous_analysis_subfolder_name` to continue from a previous run
    - Jitter: Already-computed reports are skipped automatically
-   - DLC: Re-run the script; it will skip blocks that already have `eye_data_2d.csv` (unless you use `--overwrite-dlc`)
+   - DLC: Re-run the script if needed; final exports are `left_eye_data.csv` and `right_eye_data.csv` (use `--overwrite-dlc` to force re-read of DLC data)
 
 5. **Handle failures:**
    - Check the sync log for error messages

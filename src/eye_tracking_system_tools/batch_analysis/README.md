@@ -202,15 +202,20 @@ BLOCKS READY FOR FURTHER PROCESSING
 
 ---
 
-### 5. `promote_latest_analysis_outputs.py`
+### 5. `promote_latest_analysis_outputs.py` and `promote_latest_analysis_outputs.ipynb`
 
-**Purpose:** Promote the newest heavy-computation files from dated analysis subfolders (for example `analysis/batch_analysis_output_2026_02_05/`) to the analysis root (`analysis/`), so default `BlockSync` initialization automatically loads the latest data.
+**Purpose:** Promote the newest heavy-computation files from dated analysis subfolders (for example `analysis/batch_analysis_output_2026_02_05/`) and the analysis root itself to the analysis root (`analysis/`), so default `BlockSync` initialization automatically loads the latest data.
 
 **When to run:** After running one or more batch pipelines across different dates/names and before interactive per-block work.
 
 **Default promoted files:**
 - Brightness: newest of `eye_brightness_values_dict.pkl` or `eye_brightness.pickle` -> `analysis/eye_brightness_values_dict.pkl`
 - Jitter: newest `jitter_report_dict.pkl` -> `analysis/jitter_report_dict.pkl`
+- Sync: newest `final_sync_df.csv` -> `analysis/final_sync_df.csv`
+
+**Behavior:** The script considers both the analysis root and its subfolders when choosing the "most recent" file by mtime. If the current top-level file is already the newest, it is left in place (no copy).
+
+**Notebook:** Use `promote_latest_analysis_outputs.ipynb` to set parameters (experiment path, animals, prefix, dry_run, etc.) in one cell and run the promotion in the next.
 
 **Safety behavior:**
 - Existing root files are backed up by default to `analysis/__promote_backup__/<timestamp>/`

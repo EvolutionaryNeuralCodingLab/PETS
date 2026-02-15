@@ -3,8 +3,8 @@
 # ============================================================================
 # Moved from block_synchronization.ipynb for maintainability.
 # Import: from eye_tracking_system_tools.preprocessing.block_sync_visualization import (
-#     plot_simple_sync_bokeh, hover_inspect_eyes_bokeh, sanity_plot_final_df,
-#     insert_dup_by_pos, insert_dup_by_oe_sample, remove_frame_at_pos,
+#     plot_simple_sync_bokeh, hover_inspect_eyes_bokeh, make_final_df_sanity_figure,
+#     sanity_plot_final_df, insert_dup_by_pos, insert_dup_by_oe_sample, remove_frame_at_pos,
 #     interactive_sync_tool_bokeh, plot_sync_verification_with_electrophys,
 #     plot_led_off_events_viewer, ...)
 # ============================================================================
@@ -232,19 +232,19 @@ def hover_inspect_eyes_bokeh(
     show(column(p))
 
 
-def sanity_plot_final_df(
+def make_final_df_sanity_figure(
     final_df: pd.DataFrame,
     fs: float,
     show_led: bool = True,
     block=None,
     title: str = "final_df sanity",
 ):
-    """Plot final_df L_values/R_values vs OE time with optional LED verticals."""
+    """Build (do not show) a Bokeh figure of final_df L_values/R_values vs OE time with optional LED verticals.
+    Returns the figure for use in layouts (e.g. Tabs)."""
     x_s = np.asarray(final_df["Arena_TTL"], dtype=float) / fs
     yL = np.asarray(final_df["L_values"], dtype=float)
     yR = np.asarray(final_df["R_values"], dtype=float)
 
-    output_notebook()
     p = figure(
         title=title,
         x_axis_label="OE time (s)",
@@ -289,6 +289,19 @@ def sanity_plot_final_df(
                             line_dash="dashed",
                         )
                     )
+    return p
+
+
+def sanity_plot_final_df(
+    final_df: pd.DataFrame,
+    fs: float,
+    show_led: bool = True,
+    block=None,
+    title: str = "final_df sanity",
+):
+    """Plot final_df L_values/R_values vs OE time with optional LED verticals."""
+    output_notebook()
+    p = make_final_df_sanity_figure(final_df, fs, show_led=show_led, block=block, title=title)
     show(p)
 
 

@@ -13,6 +13,12 @@ Default promoted outputs:
     -> copied to analysis/eye_brightness_values_dict.pkl
   - Jitter: jitter_report_dict.pkl
     -> copied to analysis/jitter_report_dict.pkl
+  - Sync: final_sync_df.csv
+    -> copied to analysis/final_sync_df.csv
+
+The script considers both the analysis root and its subfolders when choosing the
+"most recent" file by mtime. If the current top-level file is already the newest,
+it is left in place (status: already_latest).
 """
 
 from __future__ import annotations
@@ -45,6 +51,11 @@ DEFAULT_SPECS = (
         name="jitter",
         candidates=("jitter_report_dict.pkl",),
         destination_name="jitter_report_dict.pkl",
+    ),
+    PromoteSpec(
+        name="final_sync_df",
+        candidates=("final_sync_df.csv",),
+        destination_name="final_sync_df.csv",
     ),
 )
 
@@ -90,6 +101,149 @@ def copy_promoted_file(src: Path, dest: Path, dry_run: bool) -> None:
         return
     dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(src, dest)
+
+
+def run_promote(
+    experiment_path: Path,
+    animals: list[str],
+    *,
+    source_prefix: str = "batch_analysis_output_",
+    no_backup: bool = False,
+    dry_run: bool = False,
+    output_csv: Path | None = None,
+) -> int:
+    """
+    Promote latest analysis outputs (brightness, jitter, final_sync_df) to analysis root.
+
+    Considers both the analysis root and its subfolders when choosing the most recent
+    file by mtime. Returns 0 on success, 1 on invalid inputs.
+    """
+    if not experiment_path.is_dir():
+        print(f"Error: experiment path is not a directory: {experiment_path}", file=sys.stderr)
+        return 1
+
+    if not animals:
+        print("Error: provide at least one animal.", file=sys.stderr)
+        return 1
+
+    blocks = discover_blocks(experiment_path, animals)
+    if not blocks:
+        print("No blocks found for the requested animals.")
+        return 0
+
+    run_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    rows: list[dict[str, str]] = []
+    promoted_count = 0
+    skipped_count = 0
+
+    print(f"Found {len(blocks)} block(s).")
+    if dry_run:
+        print("[DRY RUN] No files will be copied.")
+
+    for block in blocks:
+        block_path = Path(block["block_path"])
+        analysis_root = block_path / "analysis"
+        if not analysis_root.is_dir():
+            rows.append(
+                {
+                    "animal": str(block["animal"]),
+                    "date": str(block["experiment_date"]),
+                    "block_num": str(block["block_num"]),
+                    "status": "no_analysis_folder",
+                    "target": "",
+                    "source": "",
+                    "note": "",
+                }
+            )
+            skipped_count += 1
+            continue
+
+        prefix = source_prefix if source_prefix != "" else None
+        source_folders = get_source_folders(analysis_root, prefix=prefix)
+        # Include analysis root so top-level files are considered for "most recent"
+        search_folders = [analysis_root] + source_folders
+
+        for spec in DEFAULT_SPECS:
+            src = choose_latest_candidate(search_folders, spec.candidates)
+            dest = analysis_root / spec.destination_name
+
+            if src is None:
+                rows.append(
+                    {
+                        "animal": str(block["animal"]),
+                        "date": str(block["experiment_date"]),
+                        "block_num": str(block["block_num"]),
+                        "status": "missing_source",
+                        "target": str(dest),
+                        "source": "",
+                        "note": f"{spec.name}: candidates={','.join(spec.candidates)}",
+                    }
+                )
+                skipped_count += 1
+                continue
+
+            src_resolved = src.resolve()
+            dest_exists = dest.exists()
+            dest_same = dest_exists and dest.resolve() == src_resolved
+
+            if dest_same:
+                rows.append(
+                    {
+                        "animal": str(block["animal"]),
+                        "date": str(block["experiment_date"]),
+                        "block_num": str(block["block_num"]),
+                        "status": "already_latest",
+                        "target": str(dest),
+                        "source": str(src),
+                        "note": spec.name,
+                    }
+                )
+                skipped_count += 1
+                continue
+
+            backup_note = ""
+            if dest_exists and not no_backup:
+                backup_root = analysis_root / "__promote_backup__" / run_stamp
+                backup_path = backup_destination(dest, backup_root, dry_run=dry_run)
+                backup_note = f"backup={backup_path}"
+
+            copy_promoted_file(src, dest, dry_run=dry_run)
+            promoted_count += 1
+            rows.append(
+                {
+                    "animal": str(block["animal"]),
+                    "date": str(block["experiment_date"]),
+                    "block_num": str(block["block_num"]),
+                    "status": "promoted",
+                    "target": str(dest),
+                    "source": str(src),
+                    "note": f"{spec.name}; {backup_note}".strip("; "),
+                }
+            )
+
+    print("\nPromotion summary")
+    print("-" * 60)
+    print(f"Promoted: {promoted_count}")
+    print(f"Skipped : {skipped_count}")
+    print(f"Total rows: {len(rows)}")
+
+    for r in rows:
+        if r["status"] == "promoted":
+            print(
+                f"[{r['animal']} block {r['block_num']}] {r['status']}: "
+                f"{Path(r['source']).name} -> {r['target']}"
+            )
+
+    if output_csv:
+        output_csv.parent.mkdir(parents=True, exist_ok=True)
+        with open(output_csv, "w", newline="", encoding="utf-8") as f:
+            fieldnames = ["animal", "date", "block_num", "status", "target", "source", "note"]
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(rows)
+        print(f"\nDetailed CSV written to: {output_csv}")
+
+    return 0
 
 
 def main() -> int:
@@ -140,147 +294,15 @@ def main() -> int:
         help="Optional CSV path for operation report.",
     )
     args = parser.parse_args()
-
-    experiment_path = Path(args.experiment_path)
-    if not experiment_path.is_dir():
-        print(f"Error: experiment path is not a directory: {experiment_path}", file=sys.stderr)
-        return 1
-
     animals = parse_animals(args)
-    if not animals:
-        print("Error: provide at least one animal (positional or --animals).", file=sys.stderr)
-        return 1
-
-    blocks = discover_blocks(experiment_path, animals)
-    if not blocks:
-        print("No blocks found for the requested animals.")
-        return 0
-
-    run_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    rows: list[dict[str, str]] = []
-    promoted_count = 0
-    skipped_count = 0
-
-    print(f"Found {len(blocks)} block(s).")
-    if args.dry_run:
-        print("[DRY RUN] No files will be copied.")
-
-    for block in blocks:
-        block_path = Path(block["block_path"])
-        analysis_root = block_path / "analysis"
-        if not analysis_root.is_dir():
-            rows.append(
-                {
-                    "animal": str(block["animal"]),
-                    "date": str(block["experiment_date"]),
-                    "block_num": str(block["block_num"]),
-                    "status": "no_analysis_folder",
-                    "target": "",
-                    "source": "",
-                    "note": "",
-                }
-            )
-            skipped_count += 1
-            continue
-
-        prefix = args.source_prefix if args.source_prefix != "" else None
-        source_folders = get_source_folders(analysis_root, prefix=prefix)
-        if not source_folders:
-            rows.append(
-                {
-                    "animal": str(block["animal"]),
-                    "date": str(block["experiment_date"]),
-                    "block_num": str(block["block_num"]),
-                    "status": "no_source_subfolders",
-                    "target": "",
-                    "source": "",
-                    "note": f"prefix={args.source_prefix!r}",
-                }
-            )
-            skipped_count += 1
-            continue
-
-        for spec in DEFAULT_SPECS:
-            src = choose_latest_candidate(source_folders, spec.candidates)
-            dest = analysis_root / spec.destination_name
-
-            if src is None:
-                rows.append(
-                    {
-                        "animal": str(block["animal"]),
-                        "date": str(block["experiment_date"]),
-                        "block_num": str(block["block_num"]),
-                        "status": "missing_source",
-                        "target": str(dest),
-                        "source": "",
-                        "note": f"{spec.name}: candidates={','.join(spec.candidates)}",
-                    }
-                )
-                skipped_count += 1
-                continue
-
-            src_resolved = src.resolve()
-            dest_exists = dest.exists()
-            dest_same = dest_exists and dest.resolve() == src_resolved
-
-            if dest_same:
-                rows.append(
-                    {
-                        "animal": str(block["animal"]),
-                        "date": str(block["experiment_date"]),
-                        "block_num": str(block["block_num"]),
-                        "status": "already_latest",
-                        "target": str(dest),
-                        "source": str(src),
-                        "note": spec.name,
-                    }
-                )
-                skipped_count += 1
-                continue
-
-            backup_note = ""
-            if dest_exists and not args.no_backup:
-                backup_root = analysis_root / "__promote_backup__" / run_stamp
-                backup_path = backup_destination(dest, backup_root, dry_run=args.dry_run)
-                backup_note = f"backup={backup_path}"
-
-            copy_promoted_file(src, dest, dry_run=args.dry_run)
-            promoted_count += 1
-            rows.append(
-                {
-                    "animal": str(block["animal"]),
-                    "date": str(block["experiment_date"]),
-                    "block_num": str(block["block_num"]),
-                    "status": "promoted",
-                    "target": str(dest),
-                    "source": str(src),
-                    "note": f"{spec.name}; {backup_note}".strip("; "),
-                }
-            )
-
-    print("\nPromotion summary")
-    print("-" * 60)
-    print(f"Promoted: {promoted_count}")
-    print(f"Skipped : {skipped_count}")
-    print(f"Total rows: {len(rows)}")
-
-    for r in rows:
-        if r["status"] == "promoted":
-            print(
-                f"[{r['animal']} block {r['block_num']}] {r['status']}: "
-                f"{Path(r['source']).name} -> {r['target']}"
-            )
-
-    if args.output_csv:
-        args.output_csv.parent.mkdir(parents=True, exist_ok=True)
-        with open(args.output_csv, "w", newline="", encoding="utf-8") as f:
-            fieldnames = ["animal", "date", "block_num", "status", "target", "source", "note"]
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            writer.writeheader()
-            writer.writerows(rows)
-        print(f"\nDetailed CSV written to: {args.output_csv}")
-
-    return 0
+    return run_promote(
+        experiment_path=Path(args.experiment_path),
+        animals=animals,
+        source_prefix=args.source_prefix,
+        no_backup=args.no_backup,
+        dry_run=args.dry_run,
+        output_csv=args.output_csv,
+    )
 
 
 if __name__ == "__main__":

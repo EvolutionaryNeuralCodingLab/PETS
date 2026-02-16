@@ -8,13 +8,14 @@ Why:
   usually reads from analysis root, so this script copies the newest outputs
   (by file mtime) to analysis/ so they are auto-picked by BlockSync.
 
-Default promoted outputs:
+Default promoted outputs (aligned with batch_block_synchronization.ipynb):
   - Brightness: newest of {eye_brightness_values_dict.pkl, eye_brightness.pickle}
-    -> copied to analysis/eye_brightness_values_dict.pkl
-  - Jitter: jitter_report_dict.pkl
-    -> copied to analysis/jitter_report_dict.pkl
-  - Sync: final_sync_df.csv
-    -> copied to analysis/final_sync_df.csv
+    -> analysis/eye_brightness_values_dict.pkl
+  - Jitter: jitter_report_dict.pkl -> analysis/jitter_report_dict.pkl
+  - Sync dataframe: newest of {final_sync_df.csv, blocksync_df.csv}
+    -> analysis/final_sync_df.csv and analysis/blocksync_df.csv (same content)
+  - Eye sync CSVs: eye_left_corrected_sync.csv, eye_right_corrected_sync.csv,
+    eye_left_simple_sync.csv, eye_right_simple_sync.csv -> analysis/<same name>
 
 The script considers both the analysis root and its subfolders when choosing the
 "most recent" file by mtime. If the current top-level file is already the newest,
@@ -41,6 +42,9 @@ class PromoteSpec:
     destination_name: str
 
 
+# Sync dataframe: batch pipeline writes blocksync_df.csv; legacy may write final_sync_df.csv.
+SYNC_DF_CANDIDATES = ("final_sync_df.csv", "blocksync_df.csv")
+
 DEFAULT_SPECS = (
     PromoteSpec(
         name="brightness",
@@ -54,8 +58,33 @@ DEFAULT_SPECS = (
     ),
     PromoteSpec(
         name="final_sync_df",
-        candidates=("final_sync_df.csv",),
+        candidates=SYNC_DF_CANDIDATES,
         destination_name="final_sync_df.csv",
+    ),
+    PromoteSpec(
+        name="blocksync_df",
+        candidates=SYNC_DF_CANDIDATES,
+        destination_name="blocksync_df.csv",
+    ),
+    PromoteSpec(
+        name="eye_left_corrected_sync",
+        candidates=("eye_left_corrected_sync.csv",),
+        destination_name="eye_left_corrected_sync.csv",
+    ),
+    PromoteSpec(
+        name="eye_right_corrected_sync",
+        candidates=("eye_right_corrected_sync.csv",),
+        destination_name="eye_right_corrected_sync.csv",
+    ),
+    PromoteSpec(
+        name="eye_left_simple_sync",
+        candidates=("eye_left_simple_sync.csv",),
+        destination_name="eye_left_simple_sync.csv",
+    ),
+    PromoteSpec(
+        name="eye_right_simple_sync",
+        candidates=("eye_right_simple_sync.csv",),
+        destination_name="eye_right_simple_sync.csv",
     ),
 )
 
@@ -113,7 +142,7 @@ def run_promote(
     output_csv: Path | None = None,
 ) -> int:
     """
-    Promote latest analysis outputs (brightness, jitter, final_sync_df) to analysis root.
+    Promote latest analysis outputs (brightness, jitter, sync dataframe, eye sync CSVs) to analysis root.
 
     Considers both the analysis root and its subfolders when choosing the most recent
     file by mtime. Returns 0 on success, 1 on invalid inputs.

@@ -12,8 +12,8 @@ Default promoted outputs (aligned with batch_block_synchronization.ipynb):
   - Brightness: newest of {eye_brightness_values_dict.pkl, eye_brightness.pickle}
     -> analysis/eye_brightness_values_dict.pkl
   - Jitter: jitter_report_dict.pkl -> analysis/jitter_report_dict.pkl
-  - Sync dataframe: newest of {final_sync_df.csv, blocksync_df.csv}
-    -> analysis/final_sync_df.csv and analysis/blocksync_df.csv (same content)
+  - Sync dataframe: newest of {final_sync_df.csv, blocksync_df.csv} -> analysis/final_sync_df.csv
+    (checks both names for backward compatibility, but standardizes on final_sync_df.csv)
   - Eye sync CSVs: eye_left_corrected_sync.csv, eye_right_corrected_sync.csv,
     eye_left_simple_sync.csv, eye_right_simple_sync.csv -> analysis/<same name>
 
@@ -42,7 +42,7 @@ class PromoteSpec:
     destination_name: str
 
 
-# Sync dataframe: batch pipeline writes blocksync_df.csv; legacy may write final_sync_df.csv.
+# Sync dataframe: check both names for backward compatibility, but standardize on final_sync_df.csv
 SYNC_DF_CANDIDATES = ("final_sync_df.csv", "blocksync_df.csv")
 
 DEFAULT_SPECS = (
@@ -60,11 +60,6 @@ DEFAULT_SPECS = (
         name="final_sync_df",
         candidates=SYNC_DF_CANDIDATES,
         destination_name="final_sync_df.csv",
-    ),
-    PromoteSpec(
-        name="blocksync_df",
-        candidates=SYNC_DF_CANDIDATES,
-        destination_name="blocksync_df.csv",
     ),
     PromoteSpec(
         name="eye_left_corrected_sync",

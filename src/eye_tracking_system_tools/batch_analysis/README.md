@@ -211,7 +211,7 @@ BLOCKS READY FOR FURTHER PROCESSING
 **Default promoted files (aligned with batch_block_synchronization):**
 - Brightness: newest of `eye_brightness_values_dict.pkl` or `eye_brightness.pickle` -> `analysis/eye_brightness_values_dict.pkl`
 - Jitter: newest `jitter_report_dict.pkl` -> `analysis/jitter_report_dict.pkl`
-- Sync dataframe: newest of `final_sync_df.csv` or `blocksync_df.csv` -> `analysis/final_sync_df.csv` and `analysis/blocksync_df.csv`
+- Sync dataframe: newest of `final_sync_df.csv` or `blocksync_df.csv` -> `analysis/final_sync_df.csv` (checks both for backward compatibility, standardizes on final_sync_df.csv)
 - Eye sync CSVs: `eye_left_corrected_sync.csv`, `eye_right_corrected_sync.csv`, `eye_left_simple_sync.csv`, `eye_right_simple_sync.csv` -> `analysis/<same name>`
 
 **Behavior:** The script considers both the analysis root and its subfolders when choosing the "most recent" file by mtime. If the current top-level file is already the newest, it is left in place (no copy).

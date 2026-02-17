@@ -971,7 +971,7 @@ def build_final_sync_df_merge_nearest(
     pre_shift_left:  int = 0,       # apply EXACT slider-like index shift BEFORE merge
     pre_shift_right: int = 0,
     export_csv: bool = True,
-    csv_name: str = "blocksync_df.csv",
+    csv_name: str = "final_sync_df.csv",
     verbose: bool = True,
 ) -> pd.DataFrame:
     """
@@ -1334,17 +1334,34 @@ def export_final_sync_df(block,
 def load_final_sync_df(block, filename=None, verbose=True):
     """
     Load a downstream-compatible final sync dataframe from disk and set block.final_sync_df and block.blocksync_df.
+    
+    If filename is None, checks for both final_sync_df.csv and blocksync_df.csv (for backward compatibility).
+    When both exist, prefers the newer file by mtime.
     """
     ap = Path(block.analysis_path)
-    candidates = [filename] if filename else ["final_sync_df.csv", "blocksync_df.csv"]
-    path = None
+    if filename:
+        candidates = [filename]
+    else:
+        candidates = ["final_sync_df.csv", "blocksync_df.csv"]
+    
+    # Collect all existing candidates with their mtimes
+    existing = []
     for name in candidates:
         p = ap / name
         if p.exists():
-            path = p
-            break
-    if path is None:
+            existing.append((p, p.stat().st_mtime))
+    
+    if not existing:
         raise FileNotFoundError(f"No sync file found. Tried: {', '.join(str(ap / n) for n in candidates)}")
+    
+    # If both exist, prefer the newer one (by mtime)
+    if len(existing) > 1:
+        existing.sort(key=lambda x: x[1], reverse=True)  # newest first
+        if verbose:
+            all_names = [p.name for p, _ in existing]
+            print(f"[INFO] Found multiple sync files: {all_names}. Using newest: {existing[0][0].name}")
+    
+    path = existing[0][0]
 
     df = pd.read_csv(path)
     required = ['Arena_TTL','Arena_frame','L_eye_frame','R_eye_frame','L_values','R_values']

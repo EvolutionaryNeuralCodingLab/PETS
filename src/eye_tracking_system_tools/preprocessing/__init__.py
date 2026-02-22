@@ -10,4 +10,6 @@ from . import _enum_compat
 from .BlockSync_class import BlockSync
 from .OERecording import OERecording
 
-__all__ = ['BlockSync', 'OERecording']
+from .arena_alignment import load_aligned_arena_data
+
+__all__ = ['BlockSync', 'OERecording', 'load_aligned_arena_data']

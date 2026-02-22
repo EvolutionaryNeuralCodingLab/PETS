@@ -905,7 +905,12 @@ class OERecording:
         """
         window_samples = int(
             np.round(window_ms / self.sample_ms))  # round the time in ms to the nearest whole sample count
-        n_windows = len(start_time_ms)  # get the number of start times provided
+        # start_time_ms must be shape [1, n_windows] (e.g. from np.atleast_2d(np.array(times))).
+        # len() on that gives 1, so we use shape to get n_windows.
+        if isinstance(start_time_ms, np.ndarray) and start_time_ms.ndim > 1:
+            n_windows = start_time_ms.shape[1] if start_time_ms.shape[0] == 1 else start_time_ms.shape[0]
+        else:
+            n_windows = len(start_time_ms)
         start_time_ms = np.round(
             start_time_ms / self.sample_ms) * self.sample_ms  # round the start times to the nearest whole sample step
         window_ms = window_samples * self.sample_ms  # get the ms based length of the rounded window

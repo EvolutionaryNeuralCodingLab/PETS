@@ -1052,7 +1052,7 @@ class OERecording:
         This code stores bitVolts*1e6 as MicrovoltsPerADAnalog, so output is in µV when convert_microvolts=True.
 
         :param channels: channel numbers to sample from
-        :param start_time_ms: window start times in ms
+        :param start_time_ms: a list of window start times in ms
         :param window_ms: length of each window in ms
         :param convert_microvolts: when True, convert to physical units (output in **microvolts**, µV).
         :param return_timestamps: when True, return sample timestamps in ms
@@ -1066,10 +1066,10 @@ class OERecording:
         window_ms = window_samples * self.sample_ms  # get the ms based length of the rounded window
 
         # deal with the channel numbers:
-        if not channels:  # if no channels were provided
+        if len(channels) == 0:  # if no channels were provided
             channels = self.analogChannelNumbers
 
-        if not all([c in self.channelNumbers for c in channels]):  # if requested channels do not exist in the file
+        if not all([c in self.analogChannelNumbers for c in channels]):  # if requested channels do not exist in the file
             raise ValueError('one or more of the entered channels does not exist in the recording!')
         n_ch = len(channels)
 
@@ -1204,11 +1204,22 @@ class OERecording:
         window_ms = window_samples * self.sample_ms  # get the ms based length of the rounded window
 
         # deal with the channel numbers:
-        if not channels:  # if no channels were provided
-            channels = self.analogChannelNumbers
+        # For accelerometer data we index directly into self.accel_files:
+        # channels are 1-based indices into that list (1..len(self.accel_files)).
+        if not channels:  # if no channels were provided, use all accel files
+            channels = list(range(1, len(self.accel_files) + 1))
 
-        if not all([c in self.analogChannelNumbers for c in channels]):  # if requested channels do not exist in the file
-            raise ValueError('one or more of the entered channels does not exist in the recording!')
+        if len(self.accel_files) == 0:
+            raise ValueError("No accelerometer (AUX) files were found for this recording.")
+
+        if not all(1 <= int(c) <= len(self.accel_files) for c in channels):
+            raise ValueError(
+                f"Requested accelerometer channels {channels} are out of range. "
+                f"Valid indices are 1..{len(self.accel_files)} corresponding to self.accel_files."
+            )
+
+        # Ensure we are working with plain ints
+        channels = [int(c) for c in channels]
         n_ch = len(channels)
 
         # initialize some variables for the data extraction:
@@ -1267,9 +1278,11 @@ class OERecording:
             data = np.zeros(p_rec_idx.shape, dtype=np.dtype('>i2'))  # Initialize the data array for a specific channel
             curr_rec = 0  # for this channel, initialize the record counter
             if direct_paths_to_files is None:
-                c_file = self.oe_file_path / self.accel_files[channels[i] - 1]  # get path of current channel file
+                # channels use 1-based indexing into self.accel_files
+                c_file = self.oe_file_path / self.accel_files[channels[i] - 1]
             else:
-                c_file = self.oe_file_path / direct_paths_to_files[i] # get the direct path of current channel file
+                # direct_paths_to_files should already be aligned with the requested channels
+                c_file = self.oe_file_path / direct_paths_to_files[i]
             with open(c_file, 'rb') as fid:  # open the file such that it will close when left alone
                 for j in range(n_windows):  # Iterate over sampling windows
                     # use seek to go to the appropriate position in the file

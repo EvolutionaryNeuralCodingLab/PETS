@@ -3887,6 +3887,164 @@ class BlockSync:
         self.right_eye_kerr_angles.to_csv(self.analysis_path / f'right_kerr_angle_{name_tag}.csv')
         print(f'finished successfully and saved to {self.analysis_path} with tag= {name_tag}')
 
+    @staticmethod
+    def _apply_bilinear_grid_remap(
+        phi: np.ndarray,
+        theta: np.ndarray,
+        phi_edges: np.ndarray,
+        theta_edges: np.ndarray,
+        dphi_grid: np.ndarray,
+        dtheta_grid: np.ndarray,
+        *,
+        fill_value: float = np.nan,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Bilinear interpolation of a (phi,theta)->(dphi,dtheta) grid.
+
+        Correction convention: corrected = observed + delta.
+        """
+        phi = np.asarray(phi, dtype=float)
+        theta = np.asarray(theta, dtype=float)
+        if phi.shape != theta.shape:
+            raise ValueError("phi and theta must have the same shape")
+
+        phi_edges = np.asarray(phi_edges, dtype=float)
+        theta_edges = np.asarray(theta_edges, dtype=float)
+        dphi_grid = np.asarray(dphi_grid, dtype=float)
+        dtheta_grid = np.asarray(dtheta_grid, dtype=float)
+
+        nphi = phi_edges.size - 1
+        ntheta = theta_edges.size - 1
+        if dphi_grid.shape != (nphi, ntheta) or dtheta_grid.shape != (nphi, ntheta):
+            raise ValueError(
+                "Grid shape mismatch: expected "
+                f"({nphi},{ntheta}) but got dphi={dphi_grid.shape}, dtheta={dtheta_grid.shape}"
+            )
+
+        # Lower-left cell indices
+        i = np.searchsorted(phi_edges, phi, side="right") - 1
+        j = np.searchsorted(theta_edges, theta, side="right") - 1
+
+        valid = (
+            (i >= 0)
+            & (j >= 0)
+            & (i < nphi - 1)
+            & (j < ntheta - 1)
+            & np.isfinite(phi)
+            & np.isfinite(theta)
+        )
+
+        phi_corr = np.full(phi.shape, fill_value, dtype=float)
+        theta_corr = np.full(theta.shape, fill_value, dtype=float)
+        if not np.any(valid):
+            return phi_corr, theta_corr
+
+        i0 = i[valid]
+        j0 = j[valid]
+        i1 = i0 + 1
+        j1 = j0 + 1
+
+        x0 = phi_edges[i0]
+        x1 = phi_edges[i1]
+        y0 = theta_edges[j0]
+        y1 = theta_edges[j1]
+
+        tx = (phi[valid] - x0) / (x1 - x0)
+        ty = (theta[valid] - y0) / (y1 - y0)
+
+        def _interp(grid: np.ndarray) -> np.ndarray:
+            g00 = grid[i0, j0]
+            g10 = grid[i1, j0]
+            g01 = grid[i0, j1]
+            g11 = grid[i1, j1]
+            bad = ~(np.isfinite(g00) & np.isfinite(g10) & np.isfinite(g01) & np.isfinite(g11))
+            out = (
+                (1 - tx) * (1 - ty) * g00
+                + tx * (1 - ty) * g10
+                + (1 - tx) * ty * g01
+                + tx * ty * g11
+            )
+            out[bad] = np.nan
+            return out
+
+        dphi = _interp(dphi_grid)
+        dtheta = _interp(dtheta_grid)
+
+        phi_corr[valid] = phi[valid] + dphi
+        theta_corr[valid] = theta[valid] + dtheta
+        return phi_corr, theta_corr
+
+    def apply_kerr_grid_remap_from_npz(
+        self,
+        npz_path: str | Path,
+        *,
+        phi_col: str = "k_phi",
+        theta_col: str = "k_theta",
+        store_loaded_attr: str = "kerr_grid_remap",
+    ) -> None:
+        """
+        Load a remap grid exported from the simulation notebook and apply to this block's eye data.
+
+        Expects an `.npz` containing at least:
+        - phi_edges
+        - theta_edges
+        - dphi_grid
+        - dtheta_grid
+
+        The correction convention must match the notebook export:
+            corrected = observed + delta
+
+        The same `phi_col`/`theta_col` naming is assumed for both eyes (the pipeline standard).
+        Output columns are created by appending '_corr' to the input names, e.g.:
+            k_phi   -> k_phi_corr
+            k_theta -> k_theta_corr
+        """
+        npz_path = Path(npz_path)
+        if not npz_path.exists():
+            raise FileNotFoundError(f"Remap file not found: {npz_path}")
+
+        data = np.load(npz_path, allow_pickle=True)
+        phi_edges = data["phi_edges"]
+        theta_edges = data["theta_edges"]
+        dphi_grid = data["dphi_grid"]
+        dtheta_grid = data["dtheta_grid"]
+
+        # Store for debugging/reuse
+        setattr(
+            self,
+            store_loaded_attr,
+            {
+                "path": str(npz_path),
+                "phi_edges": phi_edges,
+                "theta_edges": theta_edges,
+                "dphi_grid": dphi_grid,
+                "dtheta_grid": dtheta_grid,
+                "meta": data["meta"] if "meta" in data.files else None,
+            },
+        )
+
+        def _apply_to_df(df: pd.DataFrame, out_phi: str, out_th: str) -> pd.DataFrame:
+            if df is None:
+                return df
+            if phi_col not in df.columns or theta_col not in df.columns:
+                raise KeyError(f"Expected columns {phi_col!r}, {theta_col!r} in eye dataframe.")
+            phi = pd.to_numeric(df[phi_col], errors="coerce").to_numpy(dtype=float)
+            th = pd.to_numeric(df[theta_col], errors="coerce").to_numpy(dtype=float)
+            phi_c, th_c = self._apply_bilinear_grid_remap(phi, th, phi_edges, theta_edges, dphi_grid, dtheta_grid)
+            out = df.copy()
+            out[out_phi] = phi_c
+            out[out_th] = th_c
+            return out
+
+        out_phi_col = f"{phi_col}_corr"
+        out_theta_col = f"{theta_col}_corr"
+
+        if getattr(self, "left_eye_data", None) is not None:
+            self.left_eye_data = _apply_to_df(self.left_eye_data, out_phi_col, out_theta_col)
+
+        if getattr(self, "right_eye_data", None) is not None:
+            self.right_eye_data = _apply_to_df(self.right_eye_data, out_phi_col, out_theta_col)
+
     def pupil_speed_calc(self):
 
         """This function creates a per-frame-velocity vector and

@@ -2,8 +2,12 @@
 Utilities for the data verification pipeline (scripted or notebook).
 Used by run_batch_dlc_and_verification.py for interactive verification of eye data.
 """
+from __future__ import annotations
+
 from pathlib import Path
 import pickle
+from typing import Any, Callable, Optional
+
 import numpy as np
 import pandas as pd
 import cv2
@@ -43,25 +47,36 @@ def flip_x_only(df: pd.DataFrame, frame_width: int) -> pd.DataFrame:
     return df2
 
 
-def interactive_eye_data_corrector_synced(block, eye, ref_point_xy=None):
+def interactive_ellipse_corrector(
+    df: pd.DataFrame,
+    video_path: str | Path,
+    eye: str,
+    ref_point_xy: Optional[tuple[int, int]] = None,
+    *,
+    block: Any = None,
+    on_save: Optional[Callable[[pd.DataFrame, Optional[tuple[int, int]]], None]] = None,
+) -> tuple[pd.DataFrame, Optional[tuple[int, int]]]:
     """
-    Interactive synchronized video + ellipse editor with Play/Pause, correction, Save,
-    Flip-Dot, and Skip-forward/backward (1 minute) buttons.
-    Click on the Frame window to set reference point; Save updates block.kerr_ref_*.
+    Interactive video + ellipse editor (same UI as the synced pipeline).
+
+    If ``block`` is given, Save updates ``block.left_eye_data`` / ``block.right_eye_data``
+    and ``block.kerr_ref_*`` (same behavior as ``interactive_eye_data_corrector_synced``).
+
+    If ``block`` is None and ``on_save`` is set, Save calls
+    ``on_save(df_corrected.copy(), ref_xy_or_none)``.
     """
     eye_lc = eye.lower()
-    if eye_lc == "left":
-        df_orig = block.left_eye_data.copy()
-        video = block.le_videos[0]
-    elif eye_lc == "right":
-        df_orig = block.right_eye_data.copy()
-        video = block.re_videos[0]
-    else:
+    if eye_lc not in ("left", "right"):
         raise ValueError("eye must be 'left' or 'right'")
+    if block is None and on_save is None:
+        print(
+            "[interactive_ellipse_corrector] Warning: no block and no on_save — "
+            "Save only updates in-memory data unless you assign a callback."
+        )
 
-    cap = cv2.VideoCapture(str(video))
+    cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
-        raise RuntimeError(f"Cannot open {eye} video: {video}")
+        raise RuntimeError(f"Cannot open video: {video_path}")
 
     W = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     H = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -69,7 +84,7 @@ def interactive_eye_data_corrector_synced(block, eye, ref_point_xy=None):
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     skip_frames = int(fps * 60)
 
-    df_current = df_orig.copy()
+    df_current = df.copy()
     frame_col = "eye_frame" if "eye_frame" in df_current.columns else "frame"
 
     buttons = {
@@ -136,22 +151,28 @@ def interactive_eye_data_corrector_synced(block, eye, ref_point_xy=None):
                     cap.set(cv2.CAP_PROP_POS_FRAMES, new_idx)
                     last_frame = None
                 elif name == "Save":
-                    if eye_lc == "left":
-                        block.left_eye_data = df_current.copy()
-                    else:
-                        block.right_eye_data = df_current.copy()
-                    if current_ref is not None:
-                        rx = int(round(current_ref[0]))
-                        ry = int(round(current_ref[1]))
+                    if block is not None:
                         if eye_lc == "left":
-                            block.kerr_ref_l_x = rx
-                            block.kerr_ref_l_y = ry
-                            print(f"Saved left-eye reference to block: ({rx}, {ry})")
+                            block.left_eye_data = df_current.copy()
                         else:
-                            block.kerr_ref_r_x = rx
-                            block.kerr_ref_r_y = ry
-                            print(f"Saved right-eye reference to block: ({rx}, {ry})")
-                    print(f"{eye.capitalize()} eye data saved.")
+                            block.right_eye_data = df_current.copy()
+                        if current_ref is not None:
+                            rx = int(round(current_ref[0]))
+                            ry = int(round(current_ref[1]))
+                            if eye_lc == "left":
+                                block.kerr_ref_l_x = rx
+                                block.kerr_ref_l_y = ry
+                                print(f"Saved left-eye reference to block: ({rx}, {ry})")
+                            else:
+                                block.kerr_ref_r_x = rx
+                                block.kerr_ref_r_y = ry
+                                print(f"Saved right-eye reference to block: ({rx}, {ry})")
+                        print(f"{eye.capitalize()} eye data saved.")
+                    elif on_save is not None:
+                        on_save(df_current.copy(), current_ref)
+                        print(f"{eye.capitalize()} eye data saved (on_save callback).")
+                    else:
+                        print(f"{eye.capitalize()} eye data: in-memory only (no block/on_save).")
                 elif name == "Quit":
                     running = False
                 break
@@ -211,6 +232,26 @@ def interactive_eye_data_corrector_synced(block, eye, ref_point_xy=None):
 
     cap.release()
     cv2.destroyAllWindows()
+    return df_current, current_ref
+
+
+def interactive_eye_data_corrector_synced(block, eye, ref_point_xy=None):
+    """
+    Interactive synchronized video + ellipse editor with Play/Pause, correction, Save,
+    Flip-Dot, and Skip-forward/backward (1 minute) buttons.
+    Click on the Frame window to set reference point; Save updates block.kerr_ref_*.
+    """
+    eye_lc = eye.lower()
+    if eye_lc == "left":
+        df_orig = block.left_eye_data.copy()
+        video = block.le_videos[0]
+    elif eye_lc == "right":
+        df_orig = block.right_eye_data.copy()
+        video = block.re_videos[0]
+    else:
+        raise ValueError("eye must be 'left' or 'right'")
+
+    interactive_ellipse_corrector(df_orig, video, eye_lc, ref_point_xy=ref_point_xy, block=block)
 
 
 def export_corrected_eye_data(block, include_rotation_pickle=False):

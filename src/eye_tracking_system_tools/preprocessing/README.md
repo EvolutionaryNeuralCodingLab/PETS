@@ -12,6 +12,19 @@ Before starting the preprocessing workflow, ensure that:
 
 3. **Pupil Annotations**: You have DeepLabCut (or compatible) pupil annotation files in the expected format (one `.csv` file per eye video).
 
+## Optional: Sync-free eye artifacts (parallel track)
+
+**Notebook**: `sync_free_eye_ellipse_pipeline.ipynb`  
+**Helpers**: `sync_free_eye_io.py`, `interactive_ellipse_corrector()` in `data_verification_utils.py`
+
+Use this when you want **one row per video frame** (ellipse + Kerr degrees) saved **next to the eye video**, independent of `final_sync_df`, so that regenerating synchronization does not silently desynchronize ellipse CSVs under `analysis/` (see `le_df.csv` / `left_eye_data.csv` vs `final_sync_df.csv` mtimes).
+
+**Invariant:** `eye_frame` in the sync-free tables must use the **same** frame numbering as `L_eye_frame` / `R_eye_frame` in `final_sync_df` (OpenCV frame index convention used by the verification UI).
+
+**Outputs:** CSV + JSON next to each eye `.mp4`; optional join writes `analysis/{left|right}_eye_degrees_from_syncfree_{tag}.csv`.
+
+**Staleness guard:** If `final_sync_df.csv` is newer than those mapped outputs, rerun the mapping step in the notebook.
+
 ## Workflow Steps
 
 ### Step 1: Block Synchronization
@@ -113,6 +126,7 @@ Validates temporal alignment of LFP extraction to Open Ephys timebase using LED 
 | 3 | `kerr_degree_conversion.ipynb` | Calculate gaze vectors | Verified eye data | Gaze vector data |
 | 4 | `add_accelerometer_state_annotations.ipynb` | Add state annotations | Gaze vector data | Final preprocessed data |
 | — | `lfp_led_validation.ipynb` | LFP/LED alignment check (electrophysiology, under dev) | Block with OE + LED events | Validation plots |
+| — | `sync_free_eye_ellipse_pipeline.ipynb` | DLC → ellipses → verify → Kerr (no sync); optional map to `final_sync_df` | DLC CSV, eye videos, optional `self_kerr_refs.csv` | CSV/JSON beside video; mapped CSV in `analysis/` |
 
 ## Additional Resources
 

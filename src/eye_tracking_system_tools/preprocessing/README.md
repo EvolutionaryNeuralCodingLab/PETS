@@ -12,6 +12,19 @@ Before starting the preprocessing workflow, ensure that:
 
 3. **Pupil Annotations**: You have DeepLabCut (or compatible) pupil annotation files in the expected format (one `.csv` file per eye video).
 
+## Optional: Sync-free eye artifacts (parallel track)
+
+**Notebook**: `sync_free_eye_ellipse_pipeline.ipynb`  
+**Helpers**: `sync_free_eye_io.py`, `interactive_ellipse_corrector()` in `data_verification_utils.py`
+
+Use this when you want **one row per video frame** (ellipse + Kerr degrees) saved **next to the eye video**, independent of `final_sync_df`, so that regenerating synchronization does not silently desynchronize ellipse CSVs under `analysis/` (see `le_df.csv` / `left_eye_data.csv` vs `final_sync_df.csv` mtimes).
+
+**Invariant:** `eye_frame` in the sync-free tables must use the **same** frame numbering as `L_eye_frame` / `R_eye_frame` in `final_sync_df` (OpenCV frame index convention used by the verification UI).
+
+**Outputs:** CSV + JSON next to each eye `.mp4`; optional join writes `analysis/{left|right}_eye_degrees_from_syncfree_{tag}.csv`.
+
+**Staleness guard:** If `final_sync_df.csv` is newer than those mapped outputs, rerun the mapping step in the notebook.
+
 ## Workflow Steps
 
 ### Step 1: Block Synchronization
@@ -27,6 +40,8 @@ This is the first step in the preprocessing pipeline. This notebook:
 
 **What it does:**
 - Parses Open Ephys events (or custom synchronization paradigm)
+  - Automatically extracts metadata from Open Ephys files (standalone mode, no MATLAB required)
+  - Supports both rising and falling edge detection for TTL signals
 - Aligns eye video frames to the master arena timebase
 - Performs manual correction for alignment accuracy
 - Removes camera jitter and LED blink artifacts
@@ -79,7 +94,7 @@ This step calculates gaze vectors from the 2D eye tracking data.
 
 **Notebook**: `add_accelerometer_state_annotations.ipynb`
 
-This is the final step of the preprocessing pipeline. It adds accelerometer state annotations to the processed eye-tracking data.
+This is the final step of the core preprocessing pipeline. It adds accelerometer state annotations to the processed eye-tracking data.
 
 **What it does:**
 - Integrates accelerometer data with eye-tracking data
@@ -92,6 +107,16 @@ This is the final step of the preprocessing pipeline. It adds accelerometer stat
 
 ---
 
+### Electrophysiology (under development)
+
+**Notebook**: `lfp_led_validation.ipynb`
+
+Validates temporal alignment of LFP extraction to Open Ephys timebase using LED driver events. Use after block synchronization when working with LFP or saccade-triggered analyses.
+
+**Analysis pipelines** (saccade collection, saccade-triggered LFP averages) live in `src/eye_tracking_system_tools/analysis_pipelines/`. Those pipelines and electrophysiology APIs are still under development and may change.
+
+---
+
 ## Quick Reference
 
 | Step | Notebook | Purpose | Input | Output |
@@ -100,10 +125,13 @@ This is the final step of the preprocessing pipeline. It adds accelerometer stat
 | 2 | `data_verification.ipynb` | Verify data alignment | CSV files from Step 1 | Verified/corrected eye data |
 | 3 | `kerr_degree_conversion.ipynb` | Calculate gaze vectors | Verified eye data | Gaze vector data |
 | 4 | `add_accelerometer_state_annotations.ipynb` | Add state annotations | Gaze vector data | Final preprocessed data |
+| — | `lfp_led_validation.ipynb` | LFP/LED alignment check (electrophysiology, under dev) | Block with OE + LED events | Validation plots |
+| — | `sync_free_eye_ellipse_pipeline.ipynb` | DLC → ellipses → verify → Kerr (no sync); optional map to `final_sync_df` | DLC CSV, eye videos, optional `self_kerr_refs.csv` | CSV/JSON beside video; mapped CSV in `analysis/` |
 
 ## Additional Resources
 
 - **BlockSync Class**: See `BlockSync_class.py` for the main synchronization class
+- **OERecording / Open Ephys unit conversion**: See `OERecording.py`. When `oe_rec.get_data(..., convert_microvolts=True)` is used for neural/headstage channels, the returned values are in **microvolts (µV)**. This matches the Open Ephys `.continuous` format: the header field `bitVolts` is in µV per AD count for headstage channels, so `voltage_µV = raw_int16 * bitVolts`. Per-channel `bitVolts` from each file header is used. For ADC/AUX channels, `get_analog_data` and `get_accel_data` docstrings describe their units (µV and mV respectively).
 - **Utility Functions**: See `utility_functions.py` for helper functions including `block_generator`
 - **Manual Annotation**: See `manual_outlier_annotation.ipynb` for outlier annotation tools
 
@@ -115,7 +143,10 @@ This is the final step of the preprocessing pipeline. It adds accelerometer stat
 
 2. **Missing Files**: Verify that your data structure matches the expected format (see main README)
 
-3. **Synchronization Failures**: Check that Open Ephys events are properly parsed and TTL channels are correctly configured
+3. **Synchronization Failures**: 
+   - Check that Open Ephys events are properly parsed and TTL channels are correctly configured
+   - Verify that Open Ephys recording files (`.continuous`, `.events`, `settings.xml`) are present in the `oe_files/` directory
+   - The `OERecording` class automatically extracts metadata from these files (standalone mode)
 
 4. **Data Verification Issues**: Ensure that video files are accessible and timestamps are correctly formatted
 

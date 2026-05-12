@@ -3,6 +3,7 @@ import h5py
 import math
 import os
 import pathlib
+import shutil
 from pathlib import Path
 import subprocess as sp
 import cv2
@@ -15,7 +16,7 @@ import open_ephys.analysis as oea
 import pandas as pd
 import scipy.stats as stats
 from bokeh.io import output as b_output
-from bokeh.models import HoverTool
+from bokeh.models import HoverTool, ColumnDataSource
 from bokeh.plotting import figure, show
 from bokeh.palettes import Category10
 from eye_tracking_system_tools.preprocessing.ellipse_fit import LsqEllipse
@@ -57,7 +58,7 @@ class BlockSync:
 
     """
 
-    def __init__(self, animal_call, experiment_date, block_num, path_to_animal_folder, channeldict=None, regev=False):
+    def __init__(self, animal_call, experiment_date, block_num, path_to_animal_folder, channeldict=None):
         """
             defines the relevant block for analysis
 
@@ -98,10 +99,10 @@ class BlockSync:
         except IndexError:
             print(f'block number {self.block_num} does not have open_ephys files')
 
-        if regev:
-            self.arena_path = self.block_path / 'arena_videos' / 'videos'
-        else:
-            self.arena_path = self.block_path / 'arena_videos'
+        # Auto-detect arena_videos layout: support both arena_videos/ and arena_videos/videos/
+        arena_nested = self.block_path / 'arena_videos' / 'videos'
+        arena_flat = self.block_path / 'arena_videos'
+        self.arena_path = arena_nested if arena_nested.is_dir() else arena_flat
 
         self.arena_files = None
         self.arena_videos = None
@@ -109,19 +110,27 @@ class BlockSync:
         self.arena_timestamps = None
         self.re_videos = None
         self.le_videos = None
+        self.le_frame_count = None  # set by handle_eye_videos() for L/R eye line auto-assignment
+        self.re_frame_count = None
         self.arena_sync_df = None
         self.anchor_vid_name = None
         self.arena_frame_val_list = None
         self.analysis_path = self.block_path / 'analysis'
-        self.l_e_path = self.block_path / 'eye_videos' / 'LE'
-        try:
-            self.l_e_path = self.l_e_path / os.listdir(self.l_e_path)[0]
-        except IndexError:
+
+        def _resolve_eye_folder(root_path):
+            if not root_path.exists():
+                return root_path
+            subdirs = sorted(
+                p for p in root_path.iterdir()
+                if p.is_dir() and not p.name.startswith('.')
+            )
+            return subdirs[0] if subdirs else root_path
+
+        self.l_e_path = _resolve_eye_folder(self.block_path / 'eye_videos' / 'LE')
+        if not self.l_e_path.exists():
             print('No left eye videos to work with')
-        self.r_e_path = self.block_path / 'eye_videos' / 'RE'
-        try:
-            self.r_e_path = self.r_e_path / os.listdir(self.r_e_path)[0]
-        except IndexError:
+        self.r_e_path = _resolve_eye_folder(self.block_path / 'eye_videos' / 'RE')
+        if not self.r_e_path.exists():
             print('No right eye videos to work with')
         if (self.analysis_path / 'arena_brightness.csv').exists():
             self.arena_brightness_df = pd.read_csv(self.analysis_path / 'arena_brightness.csv')
@@ -148,19 +157,29 @@ class BlockSync:
         except IndexError:
             print('No open ephys files here!!!!')
         try:
-            self.rec_node_dirname = [i for i in dirname if (p / i).is_dir()][0]
-            self.oe_path = self.block_path / 'oe_files' / self.oe_dirname / self.rec_node_dirname
+            rec_node_dirs = [i for i in dirname if (p / i).is_dir()]
+            if rec_node_dirs:
+                # OE 0.6.x: nested Record Node folder (e.g. experiment_1_recording_0/Record Node 101/)
+                self.rec_node_dirname = rec_node_dirs[0]
+                self.oe_path = self.block_path / 'oe_files' / self.oe_dirname / self.rec_node_dirname
+            else:
+                # OE 0.5.x (legacy): flat structure - experiment folder IS the recording folder
+                self.rec_node_dirname = None
+                self.oe_path = self.block_path / 'oe_files' / self.oe_dirname
             self.settings_xml = self.oe_path / 'settings.xml'
             self.sample_rate = self.get_sample_rate()
-            oe_metadata_file_path = [i for i in self.oe_path.iterdir() if 'OE_metaData' in str(i)][0]
-            if oe_metadata_file_path.is_file():
-                self.oe_metadata_file_path = oe_metadata_file_path
-                # try:
-                self.oe_rec = OERecording(self.oe_metadata_file_path)
-                print('created the .oe_rec attribute as an open ephys recording obj with get_data functionality')
-                # except Exception:
-                #     print('OERecording file could not be constructed')
-        except IndexError:
+            # Try standalone mode first (use directory), fall back to legacy mode if metadata file exists
+            oe_metadata_file_path = [i for i in self.oe_path.iterdir() if 'OE_metaData' in str(i)]
+            if len(oe_metadata_file_path) > 0 and oe_metadata_file_path[0].is_file():
+                self.oe_metadata_file_path = oe_metadata_file_path[0]
+                # Use standalone mode (directory) instead of legacy mode (metadata file)
+                self.oe_rec = OERecording(self.oe_path)
+                print('created the .oe_rec attribute as an open ephys recording obj with get_data functionality (standalone mode)')
+            else:
+                # No metadata file found, use standalone mode directly
+                self.oe_rec = OERecording(self.oe_path)
+                print('created the .oe_rec attribute as an open ephys recording obj with get_data functionality (standalone mode, no metadata file)')
+        except (IndexError, FileNotFoundError):
             print('No open ephys record node here!!!')
         self.oe_events = None
         self.block_starts = None
@@ -332,19 +351,32 @@ class BlockSync:
             return sub_df
 
         csv_export_path = self.block_path / 'oe_files' / self.oe_dirname / 'events.csv'
+        csv_export_path.parent.mkdir(parents=True, exist_ok=True)
         if not csv_export_path.is_file():
-            session = oea.Session(str(self.oe_path.parent))
-            events_df = session.recordnodes[0].recordings[0].events
-            if align_to_zero:
-                print(f'aligning to zero with {self.zeroth_sample_number}')
-                subtracted_df = subtract_number_from_column(events_df,
-                                                            int(self.zeroth_sample_number),
-                                                            ['sample_number'])
-                subtracted_df.to_csv(csv_export_path)
-                print(f'open ephys events aligned to zero & exported to csv file at {csv_export_path}')
-            else:
+            try:
+                # Try open_ephys.analysis (OE 0.6.x format)
+                session = oea.Session(str(self.oe_path.parent))
+                events_df = session.recordnodes[0].recordings[0].events
+                if align_to_zero:
+                    print(f'aligning to zero with {self.zeroth_sample_number}')
+                    subtracted_df = subtract_number_from_column(events_df,
+                                                                int(self.zeroth_sample_number),
+                                                                ['sample_number'])
+                    subtracted_df.to_csv(csv_export_path)
+                    print(f'open ephys events aligned to zero & exported to csv file at {csv_export_path}')
+                else:
+                    events_df.to_csv(csv_export_path)
+                    print(f'open ephys events exported to csv file at {csv_export_path}')
+            except Exception:
+                # Fallback: use standalone binary .events reader (OE 0.5.x and 0.6.x)
+                print('open_ephys.analysis failed, using standalone binary .events reader')
+                zeroth = int(self.zeroth_sample_number) if self.zeroth_sample_number is not None else None
+                events_df = self.oe_rec.read_events_to_dataframe(
+                    align_to_zero=align_to_zero,
+                    zeroth_sample=zeroth
+                )
                 events_df.to_csv(csv_export_path)
-                print(f'open ephys events exported to csv file at {csv_export_path}')
+                print(f'open ephys events (standalone) exported to csv file at {csv_export_path}')
         else:
             print('events.csv file already exists')
 
@@ -382,8 +414,10 @@ class BlockSync:
 
     def handle_eye_videos(self):
         """
-        This method converts and renames the eye tracking videos in the files tree into workable .mp4 files
-        ONLY WORKS ON WINDOWS MACHINES WITH MP4BOX INSTALLED AS A COMMAND LINE MODULE
+        Convert and rename eye tracking .h264 videos into .mp4 and set video lists.
+
+        Requires MP4Box on PATH (from GPAC: on Ubuntu/Debian install with
+        ``sudo apt install gpac``; on Windows install GPAC and add it to PATH).
         """
         print('handling eye video files')
         eye_vid_path = self.block_path / 'eye_videos'
@@ -392,21 +426,31 @@ class BlockSync:
             str(file) for file in eye_vid_path.rglob('*.h264') if 'DLC' not in str(file)
         ]
         converted_files = [str(file) for file in eye_vid_path.rglob('*.mp4') if 'DLC' not in str(file)]
-        print(f'converting files: {files_to_convert} \n avoiding conversion on files: {converted_files}')
-        if len(files_to_convert) == 0:
-            print('found no eye videos to handle...')
-            return None
-        for file in files_to_convert:
-            fps = file[file.find('hz') - 2:file.find('hz')]
-            if len(fps) != 2:
-                fps = 60
-                print('could not determine fps, using 60...')
-            if str(fr'{file[:-5]}.mp4') not in converted_files:
-                if str(fr'{file[:-5]}_LE.mp4') not in converted_files:
-                    sp.run(f'MP4Box -fps {fps} -add {file} {file[:-5]}.mp4')
-                    print(fr'{file} converted ')
-            else:
-                print(f'The file {file[:-5]}.mp4 already exists, no conversion necessary')
+        converted_set = set(converted_files)
+        # Only need conversion when .h264 exists and corresponding .mp4 does not (e.g. converted on another machine)
+        def _needs_conversion(h264_path):
+            base = h264_path[:-5]  # strip '.h264'
+            return (base + '.mp4') not in converted_set and (base + '_LE.mp4') not in converted_set
+        files_that_need_conversion = [f for f in files_to_convert if _needs_conversion(f)]
+        print(f'h264 files found: {len(files_to_convert)}; already have .mp4 (skip): {len(files_to_convert) - len(files_that_need_conversion)}; to convert: {len(files_that_need_conversion)}')
+        if len(files_that_need_conversion) == 0:
+            print('no eye videos to convert (all .mp4 present or no .h264); continuing to validate and set video lists.')
+        else:
+            # MP4Box must be on PATH (e.g. from gpac: apt install gpac on Ubuntu)
+            mp4box = shutil.which('MP4Box')
+            if not mp4box:
+                raise FileNotFoundError(
+                    "MP4Box not found on PATH. Install GPAC: on Ubuntu/Debian run "
+                    "sudo apt install gpac; on Windows install GPAC and add it to PATH."
+                )
+            for file in files_that_need_conversion:
+                fps = file[file.find('hz') - 2:file.find('hz')]
+                if len(fps) != 2:
+                    fps = 60
+                    print('could not determine fps, using 60...')
+                out_mp4 = f'{file[:-5]}.mp4'
+                sp.run([mp4box, '-fps', str(fps), '-add', file, out_mp4], check=True)
+                print(fr'{file} converted ')
         print('Validating videos...')
         videos_to_inspect = \
             [str(file) for file in eye_vid_path.rglob('*.mp4') if 'DLC' not in str(file)]
@@ -428,7 +472,7 @@ class BlockSync:
 
         stamp = 'LE'
         path_to_stamp = eye_vid_path / stamp
-        videos_to_stamp = glob.glob(str(path_to_stamp) + r'\**\*.mp4', recursive=True)
+        videos_to_stamp = [str(p) for p in path_to_stamp.rglob('*.mp4')]
         for vid in videos_to_stamp:
             if stamp + '.mp4' not in str(vid):
                 print('stamping LE video')
@@ -437,10 +481,61 @@ class BlockSync:
                 except FileExistsError as e:
                     print('could not re-stamp the video because the label is already there')
 
-        self.le_videos = [vid for vid in glob.glob(str(self.block_path) + r'\eye_videos\LE\**\*.mp4') if
-                          "DLC" not in vid]
-        self.re_videos = [vid for vid in glob.glob(str(self.block_path) + r'\eye_videos\RE\**\*.mp4') if
-                          "DLC" not in vid]
+        # Use pathlib so LE/RE lists and frame counts work on both Windows and Linux
+        le_dir = self.block_path / 'eye_videos' / 'LE'
+        re_dir = self.block_path / 'eye_videos' / 'RE'
+        self.le_videos = [str(p) for p in le_dir.rglob('*.mp4') if 'DLC' not in str(p)]
+        self.re_videos = [str(p) for p in re_dir.rglob('*.mp4') if 'DLC' not in str(p)]
+        # Store frame counts for manual line mapping (L_eye_TTL / R_eye_TTL auto-assignment)
+        if self.le_videos:
+            cap_le = cv2.VideoCapture(str(self.le_videos[0]))
+            n = int(cap_le.get(cv2.CAP_PROP_FRAME_COUNT))
+            cap_le.release()
+            if n > 0:
+                self.le_frame_count = n
+        if self.re_videos:
+            cap_re = cv2.VideoCapture(str(self.re_videos[0]))
+            n = int(cap_re.get(cv2.CAP_PROP_FRAME_COUNT))
+            cap_re.release()
+            if n > 0:
+                self.re_frame_count = n
+
+    @staticmethod
+    def get_roi_auto_brightest_2x2(vid_path, threshold_value=30):
+        """
+        Choose a 2x2 pixel ROI at the brightest spot of the first frame (after threshold).
+        Used for automatic brightness extraction when manual ROI selection is not desired.
+
+        Parameters
+        ----------
+        vid_path : str or Path
+            Path to the eye video.
+        threshold_value : float
+            Threshold applied before finding brightest 2x2 (same as in produce_frame_val_list_with_roi).
+
+        Returns
+        -------
+        tuple or None
+            ROI (x, y, 2, 2) for use with produce_frame_val_list_with_roi, or None if the frame
+            cannot be read or is too small.
+        """
+        cap = cv2.VideoCapture(str(vid_path))
+        if not cap.isOpened():
+            return None
+        ret, frame = cap.read()
+        cap.release()
+        if not ret or frame is None:
+            return None
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        _, thresh = cv2.threshold(gray, threshold_value, 255, cv2.THRESH_TOZERO)
+        h, w = thresh.shape
+        if h < 2 or w < 2:
+            return None
+        kernel = np.ones((2, 2), dtype=np.float32)
+        sums = cv2.filter2D(thresh.astype(np.float32), -1, kernel)
+        valid = sums[0 : h - 1, 0 : w - 1]
+        yi, xi = np.unravel_index(np.argmax(valid), valid.shape)
+        return (int(xi), int(yi), 2, 2)
 
     @staticmethod
     def produce_frame_val_list_with_roi(vid_path, roi, threshold_value):
@@ -494,7 +589,7 @@ class BlockSync:
         print(f'Finished video {vid_path}, processed {len(frame_val_list)} frames')
         return frame_val_list
 
-    def get_eye_brightness_vectors(self, threshold_value=30, export=True):
+    def get_eye_brightness_vectors(self, threshold_value=30, export=True, use_auto_roi=True, create_if_missing=False):
         """
         This is a utility function that generates the eye brightness vectors for later synchronization.
         This step should be performed by a long looper over all data before synchronization.
@@ -505,6 +600,12 @@ class BlockSync:
             The threshold value to use as mask before calculating brightness
         export: bool
             If True, will export the vectors into two .csv files
+        use_auto_roi: bool
+            If True, try to use a 2x2 ROI at the brightest spot of the first frame for each eye.
+            If auto ROI fails for any eye (or is not desired), falls back to manual ROI selection.
+        create_if_missing: bool
+            If True and the brightness pkl does not exist, create it without prompting (for scripts).
+            If False, prompt the user when the file is missing.
 
         Returns
         -------
@@ -527,28 +628,51 @@ class BlockSync:
                 self.le_frame_val_list = eye_brightness_dict.get('left_eye', None)
                 self.re_frame_val_list = eye_brightness_dict.get('right_eye', None)
         else:
-            answer = input('No eye brightness file exists. Want to create it? (no / any other answer): ')
-            if answer.lower() == 'no':
-                return
+            if not create_if_missing:
+                answer = input('No eye brightness file exists. Want to create it? (no / any other answer): ')
+                if answer.lower() == 'no':
+                    return
+            else:
+                print('No eye brightness file exists. Creating with auto ROI.')
 
-            # Select ROIs for both videos
             rois = {}
-            for eye, vid in zip(['Left Eye', 'Right Eye'], [self.le_videos[0], self.re_videos[0]]):
-                cap = cv2.VideoCapture(vid)
-                if not cap.isOpened():
-                    print(f"Error: Cannot open video {vid}")
-                    continue
+            if use_auto_roi:
+                roi_le = self.get_roi_auto_brightest_2x2(self.le_videos[0], threshold_value)
+                roi_re = self.get_roi_auto_brightest_2x2(self.re_videos[0], threshold_value)
+                if roi_le is not None and roi_re is not None:
+                    rois['Left Eye'] = roi_le
+                    rois['Right Eye'] = roi_re
+                    print('Using automatic 2x2 ROI at brightest spot for both eyes.')
+                else:
+                    if roi_le is None:
+                        print('Auto ROI failed for left eye, falling back to manual selection.')
+                    if roi_re is None:
+                        print('Auto ROI failed for right eye, falling back to manual selection.')
+                    rois = {}
 
-                ret, frame = cap.read()
-                if not ret:
-                    print(f"Error: Cannot read the first frame of {vid}")
+            if not rois:
+                if create_if_missing:
+                    raise RuntimeError(
+                        "Auto ROI failed for at least one eye and create_if_missing=True; "
+                        "cannot prompt for manual ROI. Create brightness manually or set use_auto_roi=False."
+                    )
+                # Manual ROI selection
+                for eye, vid in zip(['Left Eye', 'Right Eye'], [self.le_videos[0], self.re_videos[0]]):
+                    cap = cv2.VideoCapture(vid)
+                    if not cap.isOpened():
+                        print(f"Error: Cannot open video {vid}")
+                        continue
+
+                    ret, frame = cap.read()
+                    if not ret:
+                        print(f"Error: Cannot read the first frame of {vid}")
+                        cap.release()
+                        continue
+
+                    roi = cv2.selectROI(f"Select ROI for {eye}", frame, showCrosshair=True, fromCenter=False)
+                    rois[eye] = roi
+                    cv2.destroyWindow(f"Select ROI for {eye}")
                     cap.release()
-                    continue
-
-                roi = cv2.selectROI(f"Select ROI for {eye}", frame, showCrosshair=True, fromCenter=False)
-                rois[eye] = roi
-                cv2.destroyWindow(f"Select ROI for {eye}")
-                cap.release()
 
             # Calculate brightness vectors
             self.le_frame_val_list = self.produce_frame_val_list_with_roi(self.le_videos[0], rois['Left Eye'],
@@ -644,12 +768,21 @@ class BlockSync:
 
         # --- read source ---
         df = pd.read_csv(open_ephys_csv_path)
+        # Ensure expected columns exist (line, state, sample_number)
+        for col in ("line", "state", "sample_number"):
+            if col not in df.columns:
+                raise ValueError(
+                    f"events.csv must have columns 'line', 'state', 'sample_number'. Found: {list(df.columns)}"
+                )
         channels = np.unique(df["line"].to_numpy(copy=True))
         df_onstate = df[df["state"] == 1]  # rising edges only
 
         # --- if user provided role->line map, convert to the expected line->role dict ---
         if manual_line_map is not None:
             channel_names = {int(v): str(k) for k, v in manual_line_map.items()}
+        elif channel_names is None or not channel_names:
+            # No channel mapping: use line numbers as role names (e.g. line_1, line_2)
+            channel_names = {int(c): f"line_{int(c)}" for c in channels}
 
         ls = []
 
@@ -658,18 +791,27 @@ class BlockSync:
         arena_start_timestamp = None
         arena_end_timestamp = None
 
-        for chan in channels:
-            if chan not in channel_names.keys():
-                continue
+        # Iterate over channel_names to ensure every mapped role (including L_eye_TTL, R_eye_TTL)
+        # is processed. Use line numbers from the mapping so we don't miss roles due to
+        # iteration order or type mismatches between events.csv "line" and our keys.
+        for chan_int, sname in channel_names.items():
+            # Match line (events.csv "line" may be int or float)
+            line_vals = pd.to_numeric(df_onstate["line"], errors="coerce")
+            mask = line_vals == chan_int
+            s = df_onstate.loc[mask, "sample_number"].copy()
+            s.name = sname
 
-            sname = channel_names[chan]
-            s = pd.Series(df_onstate["sample_number"][df_onstate["line"] == chan], name=sname)
+            if len(s) == 0 and sname in ("L_eye_TTL", "R_eye_TTL"):
+                raise ValueError(
+                    f"No rising-edge events found for {sname} (line {chan_int}) in events.csv. "
+                    "Check that the line numbers match the data."
+                )
 
             # Arena handling
             if sname == arena_channel_name:
                 if len(s) < 2:
                     raise ValueError(
-                        f"Arena channel '{arena_channel_name}' (line {chan}) has <2 rising edges; cannot define window."
+                        f"Arena channel '{arena_channel_name}' (line {chan_int}) has <2 rising edges; cannot define window."
                     )
 
                 if arena_window is not None:
@@ -733,7 +875,7 @@ class BlockSync:
                         # IMPORTANT: fail loudly so the wrapper can catch and launch manual mode
                         raise ValueError(
                             f"Could not infer arena start/stop from breaks: found {option_count} gaps > {gap_threshold_ms} ms "
-                            f"for arena_channel_name='{arena_channel_name}' (line {chan})."
+                            f"for arena_channel_name='{arena_channel_name}' (line {chan_int})."
                         )
 
             # Counter per channel (rising edge count)
@@ -753,6 +895,16 @@ class BlockSync:
 
         open_ephys_events = pd.concat(ls, axis=1)
 
+        # Ensure L_eye_TTL and R_eye_TTL exist when in mapping (required for downstream sync)
+        for req_col in ("L_eye_TTL", "R_eye_TTL"):
+            if req_col in channel_names.values() and req_col not in open_ephys_events.columns:
+                raise ValueError(
+                    f"parsed_events is missing required column '{req_col}'. "
+                    f"channel_names={channel_names}. Columns: {list(open_ephys_events.columns)}"
+                )
+            if req_col in channel_names.values() and f"{req_col}_frame" not in open_ephys_events.columns:
+                raise ValueError(f"parsed_events is missing required column '{req_col}_frame'.")
+
         # Ensure arena was found/parsed
         if arena_start_stop is None or len(arena_start_stop) == 0 or arena_start_timestamp is None or arena_end_timestamp is None:
             raise ValueError(
@@ -769,6 +921,37 @@ class BlockSync:
         open_ephys_events.loc[open_ephys_events[f"{arena_channel_name}_frame"] < 0, f"{arena_channel_name}_frame"] = np.nan
         open_ephys_events.loc[open_ephys_events[arena_channel_name] > arena_end_timestamp, f"{arena_channel_name}_frame"] = np.nan
 
+        # Extract falling edges for LED_driver if it exists in channel_names
+        led_driver_line = None
+        for line, name in channel_names.items():
+            if name == 'LED_driver':
+                led_driver_line = line
+                break
+        
+        if led_driver_line is not None:
+            # Extract falling edges (state == 0) for LED_driver
+            df_offstate = df[df["state"] == 0]  # falling edges
+            led_falling_samples = df_offstate["sample_number"][df_offstate["line"] == led_driver_line].values
+            if len(led_falling_samples) > 0:
+                # Create a Series with indices offset to avoid overlap with existing data
+                # Use a large offset (e.g., 1000000) so indices don't conflict
+                # dropna() will still extract the values correctly
+                offset = 1000000
+                led_falling = pd.Series(
+                    led_falling_samples,
+                    index=range(offset, offset + len(led_falling_samples)),
+                    name="LED_driver_fall"
+                )
+                # Concatenate - pandas will align indices, NaN where indices don't match
+                # dropna() will extract the actual falling edge values
+                open_ephys_events = pd.concat([open_ephys_events, led_falling], axis=1)
+                # Verify the column was added and has values
+                if 'LED_driver_fall' in open_ephys_events.columns:
+                    n_falling = open_ephys_events['LED_driver_fall'].dropna().shape[0]
+                    print(f"Added {len(led_falling_samples)} falling edges for LED_driver (verified: {n_falling} non-NaN values in column)")
+                else:
+                    print(f"Warning: LED_driver_fall column not found after concatenation")
+
         # Export
         if export_path is not None:
             open_ephys_events.to_csv(export_path)
@@ -778,6 +961,10 @@ class BlockSync:
 
     def _summarize_ttl_lines_from_events_csv(self, events_csv_path: Path) -> pd.DataFrame:
         df = pd.read_csv(events_csv_path)
+        if "line" not in df.columns or "state" not in df.columns or "sample_number" not in df.columns:
+            raise ValueError(
+                f"events.csv must have columns 'line', 'state', 'sample_number'. Found: {list(df.columns)}"
+            )
         df_on = df[df["state"] == 1].copy()
 
         out = []
@@ -802,6 +989,8 @@ class BlockSync:
                 t_last_s=float(s[-1] / self.sample_rate),
             ))
 
+        if not out:
+            return pd.DataFrame(columns=["line", "n_rising", "est_hz", "median_dt_ms", "t_first_s", "t_last_s"])
         return pd.DataFrame(out).sort_values(["n_rising"], ascending=False).reset_index(drop=True)
 
 
@@ -811,16 +1000,20 @@ class BlockSync:
         df_on = df[df["state"] == 1].copy()
 
         lines = sorted(df_on["line"].unique().tolist())
-        line_to_row = {ln: i for i, ln in enumerate(lines)}
+        # Use actual Open Ephys line numbers for y-axis (not row indices) so the plot
+        # matches the 'line' column in events.csv and manual_line_map entries.
+        y_min = min(lines) - 0.5
+        y_max = max(lines) + 0.5
 
         p = figure(
             width=1500,
             height=max(300, 22 * len(lines)),
             x_axis_label="Time (s)",
-            y_axis_label="TTL line (row index)",
+            y_axis_label="TTL line (Open Ephys line number)",
             title=title,
             tools="pan,wheel_zoom,box_zoom,reset,save",
-            active_scroll="wheel_zoom"
+            active_scroll="wheel_zoom",
+            y_range=(y_min, y_max),
         )
 
         palette = Category10[10]
@@ -830,14 +1023,37 @@ class BlockSync:
             s = df_on.loc[df_on["line"] == ln, "sample_number"].to_numpy(dtype=np.int64)
             s.sort()
             if len(s) > max_points_per_line:
-                idx = rng.choice(len(s), size=max_points_per_line, replace=False)
-                s = np.sort(s[idx])
+                pick = rng.choice(len(s), size=max_points_per_line, replace=False)
+                order = np.argsort(s[pick])
+                idx = pick[order]  # original rising-edge indices
+                s = s[pick][order]
+            else:
+                idx = np.arange(len(s))
 
             t = s / float(self.sample_rate)
-            y = np.full_like(t, fill_value=line_to_row[ln], dtype=float)
-            p.circle(t, y, size=3, alpha=0.55, color=palette[i % len(palette)], legend_label=f"line {ln}")
+            y = np.full_like(t, fill_value=float(ln), dtype=float)
+            source = ColumnDataSource(data=dict(
+                x=t,
+                y=y,
+                time_s=t,
+                line_num=np.full_like(t, ln, dtype=np.int32),
+                index=idx.astype(np.int32),
+                sample_number=s.astype(np.int64),
+            ))
+            p.scatter(
+                x="x", y="y", size=3, alpha=0.55,
+                color=palette[i % len(palette)], legend_label=f"line {ln}",
+                source=source
+            )
 
-        p.add_tools(HoverTool(tooltips=[("time (s)", "$x{0.000}"), ("row", "$y{0}")]))
+        p.add_tools(HoverTool(
+            tooltips=[
+                ("time (s)", "@time_s{0.000}"),
+                ("line", "@line_num"),
+                ("index", "@index"),
+                ("sample_number", "@sample_number"),
+            ]
+        ))
         p.legend.click_policy = "hide"
         show(p)
         return p
@@ -909,10 +1125,66 @@ class BlockSync:
         # --- role mapping ---
         print("\nManual mapping: assign Open Ephys digital 'line' numbers to roles.")
         manual_line_map = {}
-        for role in required_roles:
-            val = input(f"Enter line number for {role} (or blank to skip): ").strip()
-            if val != "":
-                manual_line_map[role] = int(val)
+
+        # Arena (required)
+        val = input(f"Enter line number for {arena_channel_name}: ").strip()
+        if val != "":
+            manual_line_map[arena_channel_name] = int(val)
+
+        # Eye channels: user selects both together, we auto-detect L vs R by matching event count to video frame count
+        eye_lines_raw = input(
+            "Enter the two line numbers for eye cameras (comma-separated, order doesn't matter): "
+        ).strip()
+        if eye_lines_raw:
+            eye_line_nums = [int(x.strip()) for x in eye_lines_raw.split(",") if x.strip()]
+            if len(eye_line_nums) != 2:
+                raise ValueError("Exactly two line numbers required for eye cameras.")
+            line_a, line_b = eye_line_nums
+            if line_a == line_b:
+                raise ValueError("The two eye line numbers must be different.")
+
+            df_events = pd.read_csv(events_csv_path)
+            df_on = df_events[df_events["state"] == 1]
+            count_a = len(df_on[df_on["line"] == line_a])
+            count_b = len(df_on[df_on["line"] == line_b])
+
+            # Use frame counts from handle_eye_videos() when available; otherwise try opening videos once
+            left_frame_count = getattr(self, 'le_frame_count', None)
+            right_frame_count = getattr(self, 're_frame_count', None)
+            if (left_frame_count is None or right_frame_count is None or left_frame_count <= 0 or right_frame_count <= 0):
+                if self.le_videos and len(self.le_videos) > 0 and self.re_videos and len(self.re_videos) > 0:
+                    cap_l = cv2.VideoCapture(str(self.le_videos[0]))
+                    cap_r = cv2.VideoCapture(str(self.re_videos[0]))
+                    left_frame_count = int(cap_l.get(cv2.CAP_PROP_FRAME_COUNT))
+                    right_frame_count = int(cap_r.get(cv2.CAP_PROP_FRAME_COUNT))
+                    cap_l.release()
+                    cap_r.release()
+                else:
+                    left_frame_count = right_frame_count = None
+            if left_frame_count is not None and right_frame_count is not None:
+                print(f"  Left eye video: {left_frame_count} frames | Right eye video: {right_frame_count} frames")
+            print(f"  Line {line_a}: {count_a} events | Line {line_b}: {count_b} events")
+
+            if (left_frame_count is not None and right_frame_count is not None
+                    and left_frame_count > 0 and right_frame_count > 0):
+                # Assign by closest match: L_eye_TTL = line closer to left count, R_eye_TTL = line closer to right
+                diff_a_as_left = abs(count_a - left_frame_count) + abs(count_b - right_frame_count)
+                diff_a_as_right = abs(count_a - right_frame_count) + abs(count_b - left_frame_count)
+                if diff_a_as_left <= diff_a_as_right:
+                    manual_line_map["L_eye_TTL"] = line_a
+                    manual_line_map["R_eye_TTL"] = line_b
+                    print(f"  Auto-assigned: L_eye_TTL=line {line_a}, R_eye_TTL=line {line_b}")
+                else:
+                    manual_line_map["L_eye_TTL"] = line_b
+                    manual_line_map["R_eye_TTL"] = line_a
+                    print(f"  Auto-assigned: L_eye_TTL=line {line_b}, R_eye_TTL=line {line_a}")
+            else:
+                # Fallback: ask user which is which
+                print("  (Could not read video frame counts; please specify which line is which.)")
+                l_val = input(f"  Which line is L_eye_TTL? ({line_a} or {line_b}): ").strip()
+                r_val = input(f"  Which line is R_eye_TTL? ({line_a} or {line_b}): ").strip()
+                manual_line_map["L_eye_TTL"] = int(l_val)
+                manual_line_map["R_eye_TTL"] = int(r_val)
 
         # allow additional optional roles
         while True:
@@ -925,6 +1197,11 @@ class BlockSync:
 
         if arena_channel_name not in manual_line_map:
             raise ValueError(f"You must map {arena_channel_name} for manual window selection.")
+        if "L_eye_TTL" not in manual_line_map or "R_eye_TTL" not in manual_line_map:
+            raise ValueError(
+                "You must map both eye camera lines (L_eye_TTL and R_eye_TTL) for synchronization. "
+                "Enter the two line numbers when prompted."
+            )
 
         # --- arena window selection ---
         df = pd.read_csv(events_csv_path)
@@ -937,11 +1214,55 @@ class BlockSync:
 
         print(f"\nArena line {manual_line_map[arena_channel_name]} has {len(arena_samples)} rising edges.")
         print("Choose arena sync window.\n"
-            "You can specify by rising-edge INDEX (0..N-1) or by SAMPLE_NUMBER.\n")
+            "  'i' = index (rising-edge index 0..N-1)\n"
+            "  's' = sample_number\n"
+            "  'a' = automatic (detect pauses/breaks, like when channeldict is provided)\n")
 
-        mode = input("Window selection mode: 'i' (index) or 's' (sample_number) [i]: ").strip().lower() or "i"
+        mode = input("Window selection mode (i/s/a) [i]: ").strip().lower() or "i"
 
-        if mode == "i":
+        if mode == "a":
+            # Automatic: detect pauses (gaps > threshold) and pick start/end
+            gap_default = 1000.0
+            gap_raw = input(
+                f"Gap threshold (ms) for pause detection [{gap_default}]: "
+            ).strip() or str(gap_default)
+            gap_threshold_ms = float(gap_raw)
+
+            diff_arr_ms = np.diff(arena_samples) / (self.sample_rate / 1000.0)
+            arena_start_stop = np.where(diff_arr_ms > gap_threshold_ms)[0]
+            option_count = len(arena_start_stop)
+
+            if option_count == 0:
+                raise ValueError(
+                    f"No gaps > {gap_threshold_ms} ms found. "
+                    "Try a lower threshold or use manual mode (i/s)."
+                )
+            if option_count == 1:
+                # Single break: use before and after
+                br = arena_start_stop[0]
+                arena_start_timestamp = int(arena_samples[0])
+                arena_end_timestamp = int(arena_samples[-1])
+                arena_start_index = 0
+                print(f"Found 1 break at index {br}; using full range.")
+            elif option_count == 2:
+                arena_start_timestamp = int(arena_samples[arena_start_stop[0] + 1])
+                arena_end_timestamp = int(arena_samples[arena_start_stop[1]])
+                arena_start_index = int(arena_start_stop[0]) + 1
+                print(f"Found 2 breaks; arena window: sample {arena_start_timestamp} to {arena_end_timestamp}")
+            else:
+                # Pick largest gap between consecutive breaks
+                ind_max_diff = int(np.argmax(np.diff(arena_start_stop)))
+                start_ind = int(arena_start_stop[ind_max_diff])
+                end_ind = int(arena_start_stop[ind_max_diff + 1])
+                arena_start_timestamp = int(arena_samples[start_ind + 1])
+                arena_end_timestamp = int(arena_samples[end_ind])
+                arena_start_index = start_ind + 1
+                print(
+                    f"Found {option_count} breaks; used largest gap (indices {start_ind}-{end_ind}). "
+                    f"Arena window: sample {arena_start_timestamp} to {arena_end_timestamp}"
+                )
+
+        elif mode == "i":
             start_raw = input("Start rising-edge index (e.g., 0): ").strip()
             end_raw = input("End rising-edge index (e.g., -1, last, N-1): ").strip()
 
@@ -954,7 +1275,7 @@ class BlockSync:
             arena_start_timestamp = int(arena_samples[start_i])
             arena_end_timestamp = int(arena_samples[end_i])
             arena_start_index = start_i
-                
+
         else:
             arena_start_timestamp = int(input("Start SAMPLE_NUMBER: ").strip())
             arena_end_timestamp = int(input("End SAMPLE_NUMBER: ").strip())
@@ -1026,13 +1347,49 @@ class BlockSync:
             if len(zL) == 0:
                 raise ValueError("Existing parsed_events.csv cannot find timestamp for last arena frame.")
             self.arena_vid_last_t = zL[arena_channel_name].values[0]
+            
+            # Check if LED_driver_fall column exists, if not, add it from events.csv
+            if 'LED_driver_fall' not in self.oe_events.columns and self.channeldict is not None:
+                # Find LED_driver line number
+                led_driver_line = None
+                for line, name in self.channeldict.items():
+                    if name == 'LED_driver':
+                        led_driver_line = line
+                        break
+                
+                if led_driver_line is not None:
+                    # Try to read from events.csv
+                    # Use the same path structure as in the parsing code
+                    events_csv_path = self.block_path / "oe_files" / self.oe_dirname / "events.csv"
+                    if events_csv_path.exists():
+                        try:
+                            df_events = pd.read_csv(events_csv_path)
+                            # Extract falling edges (state == 0) for LED_driver
+                            df_offstate = df_events[df_events["state"] == 0]
+                            led_falling_samples = df_offstate["sample_number"][df_offstate["line"] == led_driver_line].values
+                            if len(led_falling_samples) > 0:
+                                # Create Series with offset index to avoid conflicts
+                                offset = 1000000
+                                led_falling = pd.Series(
+                                    led_falling_samples,
+                                    index=range(offset, offset + len(led_falling_samples)),
+                                    name="LED_driver_fall"
+                                )
+                                # Concatenate with existing oe_events
+                                self.oe_events = pd.concat([self.oe_events, led_falling], axis=1)
+                                print(f"Added {len(led_falling_samples)} falling edges for LED_driver from events.csv")
+                                # Save updated parsed_events.csv
+                                self.oe_events.to_csv(parsed_path)
+                                print(f"Updated {parsed_path} with falling edges")
+                        except Exception as e:
+                            print(f"Warning: Could not add falling edges from events.csv: {e}")
 
         else:
             # Create events.csv
             self.oe_events_to_csv(align_to_zero=align_to_zero)
 
-            events_csv_path = self.block_path / "oe_files" / self.exp_date_time / "events.csv"
-            ex_path = self.block_path / "oe_files" / self.exp_date_time / "parsed_events.csv"
+            events_csv_path = self.block_path / "oe_files" / self.oe_dirname / "events.csv"
+            ex_path = self.block_path / "oe_files" / self.oe_dirname / "parsed_events.csv"
 
             try:
                 # ---- AUTO PATH (original paradigm) ----
@@ -1760,8 +2117,9 @@ class BlockSync:
         pupil_xs_before_flip = data[pupil_elements[np.arange(0, len(pupil_elements), 3)]]
 
         # flip the data around the midpoint of the x-axis (shooting the eye through a camera flips right and left)
-        pupil_xs = 320 * 2 - pupil_xs_before_flip
-
+        # side-step an old flip convention
+        #pupil_xs = 320 * 2 - pupil_xs_before_flip
+        pupil_xs = pupil_xs_before_flip
         # get Y coords (no need to flip as opencv conventions already start with origin at top left of frame
         # and so, positive Y is maintained as up in a flipped image as we have)
         pupil_ys = data[pupil_elements[np.arange(1, len(pupil_elements), 3)]]
@@ -1777,7 +2135,9 @@ class BlockSync:
         # Do the same for the edges
         edge_elements = np.array([x for x in data.columns if 'edge' in x])
         edge_xs_before_flip = data[edge_elements[np.arange(0, len(edge_elements), 3)]]
-        edge_xs = 320 * 2 - edge_xs_before_flip
+        # side-step an old flip convention
+        #edge_xs = 320 * 2 - edge_xs_before_flip
+        edge_xs = edge_xs_before_flip
         edge_ys = data[edge_elements[np.arange(1, len(edge_elements), 3)]]
         edge_ps = data[edge_elements[np.arange(2, len(edge_elements), 3)]]
         edge_ps = edge_ps.rename(columns=dict(zip(edge_ps.columns, edge_xs.columns)))
@@ -2058,42 +2418,146 @@ class BlockSync:
 
         return result
 
-    def collect_lights_out_events(self, data, roll_w_size=1500, plot=False, plot_title='peak detector output'):
-        """Identifies potential lights-out events from the given data.
+    def collect_lights_out_events(
+        self,
+        data,
+        roll_w_size=1500,
+        plot=False,
+        plot_title='peak detector output',
+        fps=60,
+        min_led_interval_s=50.0,
+        max_led_interval_s=70.0,
+        min_spacing_s=30.0,
+        first_peak_search_window_s=60.0,
+        nominal_led_interval_s=60.0,
+        frame_count=None,
+        min_depth_zscore=5.0,
+    ):
+        """Identifies LED blink (lights-out) events from the given data.
+
+        The number of possible LED blinks is at most floor(duration_seconds/60) + 1 to allow
+        TTL arrival ambiguity (e.g. 121 s can be 2 or 3 events). The first peak is chosen from
+        *all* detections in the first 60 s by best fit to a 60 s grid (no pre-cap), then the
+        chain is built from that; if the chain exceeds N_max, the least prominent in the chain
+        are dropped (the first peak is never dropped).
+
+        Only minima whose z-score is at or below -min_depth_zscore are considered (i.e. brightness
+        must drop at least min_depth_zscore standard deviations below the rolling mean) to reject noise.
 
         Args:
             data (list or array): The data containing light measurements.
             roll_w_size (int, optional): The window size for rolling z-score calculation. Defaults to 1500.
-            plot (binary): when True, plots the output and detection results
-            plot_title (str): plot title for differentiation
+            plot (bool): when True, plots the output and detection results.
+            plot_title (str): plot title for differentiation.
+            fps (float): Frames per second (used to convert intervals to frames). Default 60.
+            min_led_interval_s (float): Minimum interval between consecutive LED blinks (seconds). Default 50.
+            max_led_interval_s (float): Maximum interval between consecutive LED blinks (seconds). Default 70.
+            min_spacing_s (float): If two peaks are closer than this (seconds), treat as detection error. Default 30.
+            first_peak_search_window_s (float): Only consider detections in the first N seconds as first-peak candidates. Default 60.
+            nominal_led_interval_s (float): Ideal interval between LED blinks (seconds) for grid scoring. Default 60.
+            frame_count (int, optional): Total frames in recording (e.g. block.le_frame_count). If None, len(data) is used.
+            min_depth_zscore (float): Minimum depth of a valid blink: z-score at the minimum must be <= -min_depth_zscore. Default 5.0.
         Returns:
-            list: Indices of the identified potential lights-out events.
+            tuple: (expanded_indices, peak_indices). expanded_indices are frame indices for removal
+            (peak +/- 2); peak_indices are the center (minimum brightness) frame of each blink, for sync alignment.
         """
-
         print(f'data length is {len(data)}')
-        # Convert data to numpy array if needed
         data = np.asarray(data)
         if len(data) == 0:
             raise ValueError("Input data is empty")
-        
-        # use a function to get relative z-scores and deal with changes in ambient light
+
         z_score_data = self.rolling_window_z_scores(data, roll_w_size=roll_w_size)
         z_score_data = z_score_data[:len(data)]
         print(f'z_score length is {len(z_score_data)}')
-        
-        # Check for invalid values
+
         if np.any(~np.isfinite(z_score_data)):
             print("Warning: z_score_data contains NaN or Inf values. Replacing with 0.")
             z_score_data = np.nan_to_num(z_score_data, nan=0.0, posinf=0.0, neginf=0.0)
-        # detect peaks based on the scipy algorithm
-        peak_indices, _ = scipy_find_peaks(-1 * z_score_data, width=1, distance=3000)
 
-        # expand the peaks to include the dimming and re-lighting frames
+        min_distance_frames = int(min_spacing_s * fps)
+        min_led_frames = int(min_led_interval_s * fps)
+        max_led_frames = int(max_led_interval_s * fps)
+        nominal_interval_frames = int(nominal_led_interval_s * fps)
+        first_window_frames = int(first_peak_search_window_s * fps)
+        n_frames = len(z_score_data)
+
+        # Max number of LED blinks: allow floor(duration/60) + 1 for TTL arrival ambiguity
+        # (e.g. 121 s can be 2 events if TTL just before start, or 3 if TTL in first second)
+        n_frames_for_duration = int(frame_count) if frame_count is not None else n_frames
+        duration_s = n_frames_for_duration / fps
+        N_max = max(1, int(duration_s // 60) + 1)
+
+        # Detect local minima (peaks in -z_score) and get prominence (depth of each minimum).
+        # Require height >= min_depth_zscore so z_score at minimum <= -min_depth_zscore (reject noise).
+        neg_z = -1 * z_score_data
+        raw_peaks, props = scipy_find_peaks(
+            neg_z,
+            width=1,
+            distance=min_distance_frames,
+            prominence=(0, None),
+            height=(min_depth_zscore, None),
+        )
+        prominence = props.get("prominence", np.ones(len(raw_peaks)))
+
+        if len(raw_peaks) == 0:
+            peak_indices = np.array([], dtype=int)
+        else:
+            # First-peak candidates: ALL raw peaks in the first 60 s (do not pre-cap by N_max here,
+            # or we can drop the true first blink when it is not in "top N by prominence")
+            first_candidates = raw_peaks[raw_peaks < first_window_frames]
+            if len(first_candidates) == 0:
+                first_candidates = np.array([raw_peaks[0]], dtype=int)
+                print("  LED filter: no peak in first 60 s, using earliest detection as first peak")
+
+            # Score each first-peak candidate by fit to ideal 60 s grid (mean distance to nearest raw peak)
+            best_candidate = None
+            best_score = np.inf
+            for c in first_candidates:
+                grid = c + np.arange(0, 1 + (n_frames - c) // nominal_interval_frames) * nominal_interval_frames
+                grid = grid[grid < n_frames]
+                if len(grid) == 0:
+                    continue
+                dists = np.min(np.abs(raw_peaks - grid[:, np.newaxis]), axis=1)
+                score = float(np.mean(dists))
+                if score < best_score:
+                    best_score = score
+                    best_candidate = c
+
+            if best_candidate is None:
+                peak_indices = np.array([raw_peaks[0]], dtype=int)
+                print("  LED filter: no valid grid, using earliest detection as first peak")
+            else:
+                # Build chain from best first peak over ALL raw peaks (50-70 s intervals)
+                kept = [int(best_candidate)]
+                for p in np.sort(raw_peaks):
+                    if p <= kept[-1]:
+                        continue
+                    interval = p - kept[-1]
+                    if min_led_frames <= interval <= max_led_frames:
+                        kept.append(int(p))
+                peak_indices = np.asarray(kept, dtype=int)
+
+                # If chain has more than N_max, drop the least prominent in the chain (never drop first peak)
+                if len(kept) > N_max:
+                    # prominence for each kept peak (by index into raw_peaks)
+                    kept_prom = np.array([prominence[np.argmin(np.abs(raw_peaks - k))] for k in kept])
+                    # sort by prominence descending; keep first peak + top (N_max-1) by prominence
+                    order = np.argsort(kept_prom)[::-1]
+                    first_idx = np.argmin(np.abs(peak_indices - best_candidate))
+                    keep_mask = np.zeros(len(kept), dtype=bool)
+                    keep_mask[first_idx] = True
+                    remaining = [i for i in order if i != first_idx][: N_max - 1]
+                    for i in remaining:
+                        keep_mask[i] = True
+                    peak_indices = np.sort(peak_indices[keep_mask])
+                    print(f"  LED filter: trimmed to {N_max} peaks (max events = floor({duration_s:.0f}s/60)+1 = {N_max}); first peak from best 60 s fit in first {first_peak_search_window_s} s")
+                elif len(kept) < len(raw_peaks):
+                    print(f"  LED filter: kept {len(kept)} peaks (60 s grid from best first peak in first {first_peak_search_window_s} s)")
+
+        # Expand to peak +/- 2 for removal
         if len(peak_indices) == 0:
-            # No peaks found, return empty array
             expanded_indices = np.array([], dtype=int)
         else:
-            # Ensure indices stay within bounds [0, len(z_score_data)-1]
             max_idx = len(z_score_data) - 1
             expanded_indices = np.sort(np.array([
                 np.clip(peak_indices - 2, 0, max_idx),
@@ -2102,11 +2566,9 @@ class BlockSync:
                 np.clip(peak_indices + 1, 0, max_idx),
                 np.clip(peak_indices + 2, 0, max_idx)
             ]).flatten())
-            # Remove duplicates while preserving order
             expanded_indices = np.unique(expanded_indices)
 
         if plot:
-            # Lazy import to avoid circular dependency
             from eye_tracking_system_tools.preprocessing import utility_functions as uf
             uf.bokeh_plotter([z_score_data], ['z_score'],
                              plot_name=plot_title,
@@ -2114,10 +2576,11 @@ class BlockSync:
                              y_axis='brightness Z score',
                              peaks=expanded_indices)
 
-        return expanded_indices
+        return expanded_indices, np.asarray(peak_indices, dtype=int)
 
     def find_led_blink_frames(self, plot=False):
-
+        """Detect LED blink frames for both eyes. Sets led_blink_frames_l/r (expanded, for removal)
+        and led_blink_peak_frames_l/r (center of each blink, for sync alignment)."""
         try:
             r_vals = self.re_frame_val_list[0][1]
             l_vals = self.le_frame_val_list[0][1]
@@ -2126,15 +2589,23 @@ class BlockSync:
             r_vals = self.re_frame_val_list
             l_vals = self.le_frame_val_list
         print('collecting left-eye data')
-        l_peaks = self.collect_lights_out_events(data=l_vals,
-                                                 plot=plot,
-                                                 plot_title='Left eye peak detection output')
+        l_expanded, l_peaks = self.collect_lights_out_events(
+            data=l_vals,
+            plot=plot,
+            plot_title='Left eye peak detection output',
+            frame_count=getattr(self, 'le_frame_count', None),
+        )
         print("collecting right eye data")
-        r_peaks = self.collect_lights_out_events(data=r_vals,
-                                                 plot=plot,
-                                                 plot_title='right eye peak detection output')
-        self.led_blink_frames_l = l_peaks
-        self.led_blink_frames_r = r_peaks
+        r_expanded, r_peaks = self.collect_lights_out_events(
+            data=r_vals,
+            plot=plot,
+            plot_title='right eye peak detection output',
+            frame_count=getattr(self, 're_frame_count', None),
+        )
+        self.led_blink_frames_l = l_expanded
+        self.led_blink_frames_r = r_expanded
+        self.led_blink_peak_frames_l = l_peaks
+        self.led_blink_peak_frames_r = r_peaks
 
     @staticmethod
     def euclidean_distance(coord1, coord2):
@@ -3421,6 +3892,164 @@ class BlockSync:
         self.left_eye_kerr_angles.to_csv(self.analysis_path / f'left_kerr_angle_{name_tag}.csv')
         self.right_eye_kerr_angles.to_csv(self.analysis_path / f'right_kerr_angle_{name_tag}.csv')
         print(f'finished successfully and saved to {self.analysis_path} with tag= {name_tag}')
+
+    @staticmethod
+    def _apply_bilinear_grid_remap(
+        phi: np.ndarray,
+        theta: np.ndarray,
+        phi_edges: np.ndarray,
+        theta_edges: np.ndarray,
+        dphi_grid: np.ndarray,
+        dtheta_grid: np.ndarray,
+        *,
+        fill_value: float = np.nan,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Bilinear interpolation of a (phi,theta)->(dphi,dtheta) grid.
+
+        Correction convention: corrected = observed + delta.
+        """
+        phi = np.asarray(phi, dtype=float)
+        theta = np.asarray(theta, dtype=float)
+        if phi.shape != theta.shape:
+            raise ValueError("phi and theta must have the same shape")
+
+        phi_edges = np.asarray(phi_edges, dtype=float)
+        theta_edges = np.asarray(theta_edges, dtype=float)
+        dphi_grid = np.asarray(dphi_grid, dtype=float)
+        dtheta_grid = np.asarray(dtheta_grid, dtype=float)
+
+        nphi = phi_edges.size - 1
+        ntheta = theta_edges.size - 1
+        if dphi_grid.shape != (nphi, ntheta) or dtheta_grid.shape != (nphi, ntheta):
+            raise ValueError(
+                "Grid shape mismatch: expected "
+                f"({nphi},{ntheta}) but got dphi={dphi_grid.shape}, dtheta={dtheta_grid.shape}"
+            )
+
+        # Lower-left cell indices
+        i = np.searchsorted(phi_edges, phi, side="right") - 1
+        j = np.searchsorted(theta_edges, theta, side="right") - 1
+
+        valid = (
+            (i >= 0)
+            & (j >= 0)
+            & (i < nphi - 1)
+            & (j < ntheta - 1)
+            & np.isfinite(phi)
+            & np.isfinite(theta)
+        )
+
+        phi_corr = np.full(phi.shape, fill_value, dtype=float)
+        theta_corr = np.full(theta.shape, fill_value, dtype=float)
+        if not np.any(valid):
+            return phi_corr, theta_corr
+
+        i0 = i[valid]
+        j0 = j[valid]
+        i1 = i0 + 1
+        j1 = j0 + 1
+
+        x0 = phi_edges[i0]
+        x1 = phi_edges[i1]
+        y0 = theta_edges[j0]
+        y1 = theta_edges[j1]
+
+        tx = (phi[valid] - x0) / (x1 - x0)
+        ty = (theta[valid] - y0) / (y1 - y0)
+
+        def _interp(grid: np.ndarray) -> np.ndarray:
+            g00 = grid[i0, j0]
+            g10 = grid[i1, j0]
+            g01 = grid[i0, j1]
+            g11 = grid[i1, j1]
+            bad = ~(np.isfinite(g00) & np.isfinite(g10) & np.isfinite(g01) & np.isfinite(g11))
+            out = (
+                (1 - tx) * (1 - ty) * g00
+                + tx * (1 - ty) * g10
+                + (1 - tx) * ty * g01
+                + tx * ty * g11
+            )
+            out[bad] = np.nan
+            return out
+
+        dphi = _interp(dphi_grid)
+        dtheta = _interp(dtheta_grid)
+
+        phi_corr[valid] = phi[valid] + dphi
+        theta_corr[valid] = theta[valid] + dtheta
+        return phi_corr, theta_corr
+
+    def apply_kerr_grid_remap_from_npz(
+        self,
+        npz_path: str | Path,
+        *,
+        phi_col: str = "k_phi",
+        theta_col: str = "k_theta",
+        store_loaded_attr: str = "kerr_grid_remap",
+    ) -> None:
+        """
+        Load a remap grid exported from the simulation notebook and apply to this block's eye data.
+
+        Expects an `.npz` containing at least:
+        - phi_edges
+        - theta_edges
+        - dphi_grid
+        - dtheta_grid
+
+        The correction convention must match the notebook export:
+            corrected = observed + delta
+
+        The same `phi_col`/`theta_col` naming is assumed for both eyes (the pipeline standard).
+        Output columns are created by appending '_corr' to the input names, e.g.:
+            k_phi   -> k_phi_corr
+            k_theta -> k_theta_corr
+        """
+        npz_path = Path(npz_path)
+        if not npz_path.exists():
+            raise FileNotFoundError(f"Remap file not found: {npz_path}")
+
+        data = np.load(npz_path, allow_pickle=True)
+        phi_edges = data["phi_edges"]
+        theta_edges = data["theta_edges"]
+        dphi_grid = data["dphi_grid"]
+        dtheta_grid = data["dtheta_grid"]
+
+        # Store for debugging/reuse
+        setattr(
+            self,
+            store_loaded_attr,
+            {
+                "path": str(npz_path),
+                "phi_edges": phi_edges,
+                "theta_edges": theta_edges,
+                "dphi_grid": dphi_grid,
+                "dtheta_grid": dtheta_grid,
+                "meta": data["meta"] if "meta" in data.files else None,
+            },
+        )
+
+        def _apply_to_df(df: pd.DataFrame, out_phi: str, out_th: str) -> pd.DataFrame:
+            if df is None:
+                return df
+            if phi_col not in df.columns or theta_col not in df.columns:
+                raise KeyError(f"Expected columns {phi_col!r}, {theta_col!r} in eye dataframe.")
+            phi = pd.to_numeric(df[phi_col], errors="coerce").to_numpy(dtype=float)
+            th = pd.to_numeric(df[theta_col], errors="coerce").to_numpy(dtype=float)
+            phi_c, th_c = self._apply_bilinear_grid_remap(phi, th, phi_edges, theta_edges, dphi_grid, dtheta_grid)
+            out = df.copy()
+            out[out_phi] = phi_c
+            out[out_th] = th_c
+            return out
+
+        out_phi_col = f"{phi_col}_corr"
+        out_theta_col = f"{theta_col}_corr"
+
+        if getattr(self, "left_eye_data", None) is not None:
+            self.left_eye_data = _apply_to_df(self.left_eye_data, out_phi_col, out_theta_col)
+
+        if getattr(self, "right_eye_data", None) is not None:
+            self.right_eye_data = _apply_to_df(self.right_eye_data, out_phi_col, out_theta_col)
 
     def pupil_speed_calc(self):
 

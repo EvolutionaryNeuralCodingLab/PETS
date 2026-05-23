@@ -161,10 +161,19 @@ class BlockAnnotatorWindow(QtWidgets.QMainWindow):
         self.setCentralWidget(central)
         root = QtWidgets.QVBoxLayout(central)
 
-        transport = QtWidgets.QHBoxLayout()
+        transport_box = QtWidgets.QVBoxLayout()
+        transport_row1 = QtWidgets.QHBoxLayout()
+        transport_row2 = QtWidgets.QHBoxLayout()
         self._btn_play = QtWidgets.QPushButton("▶ Play")
-        self._btn_step_back = QtWidgets.QPushButton("◀")
-        self._btn_step_fwd = QtWidgets.QPushButton("▶")
+        self._btn_reverse_play = QtWidgets.QPushButton("◀ Rev play")
+        self._btn_step_back = QtWidgets.QPushButton("◀ 1")
+        self._btn_step_fwd = QtWidgets.QPushButton("1 ▶")
+        self._jump_step = QtWidgets.QSpinBox()
+        self._jump_step.setRange(1, 1_000_000)
+        self._jump_step.setValue(10)
+        self._jump_step.setPrefix("jump ")
+        self._btn_jump_back = QtWidgets.QPushButton("◀◀")
+        self._btn_jump_fwd = QtWidgets.QPushButton("▶▶")
         self._speed = QtWidgets.QDoubleSpinBox()
         self._speed.setRange(0.25, 4.0)
         self._speed.setSingleStep(0.25)
@@ -173,14 +182,21 @@ class BlockAnnotatorWindow(QtWidgets.QMainWindow):
         self._slider.setMinimum(0)
         self._slider.setMaximum(0)
         self._hud = QtWidgets.QLabel("—")
-        transport.addWidget(self._btn_play)
-        transport.addWidget(self._btn_step_back)
-        transport.addWidget(self._btn_step_fwd)
-        transport.addWidget(QtWidgets.QLabel("Speed:"))
-        transport.addWidget(self._speed)
-        transport.addWidget(self._slider, stretch=1)
-        transport.addWidget(self._hud)
-        root.addLayout(transport)
+        transport_row1.addWidget(self._btn_play)
+        transport_row1.addWidget(self._btn_reverse_play)
+        transport_row1.addWidget(self._btn_step_back)
+        transport_row1.addWidget(self._btn_step_fwd)
+        transport_row1.addWidget(QtWidgets.QLabel("Speed:"))
+        transport_row1.addWidget(self._speed)
+        transport_row1.addWidget(self._slider, stretch=1)
+        transport_row1.addWidget(self._hud)
+        transport_row2.addWidget(self._jump_step)
+        transport_row2.addWidget(self._btn_jump_back)
+        transport_row2.addWidget(self._btn_jump_fwd)
+        transport_row2.addStretch(1)
+        transport_box.addLayout(transport_row1)
+        transport_box.addLayout(transport_row2)
+        root.addLayout(transport_box)
 
         self._video_splitter = QtWidgets.QSplitter(
             QtCore.Qt.Orientation.Horizontal
@@ -269,16 +285,19 @@ class BlockAnnotatorWindow(QtWidgets.QMainWindow):
         file_menu.addSeparator()
         file_menu.addAction("Exit", self.close)
 
+        help_menu = self.menuBar().addMenu("Help")
+        help_menu.addAction("Keyboard shortcuts…", self._show_keyboard_help)
+
         self.statusBar().showMessage("Ready")
+        self._setup_shortcuts()
 
     def _wire_signals(self) -> None:
         self._btn_play.clicked.connect(self._toggle_play)
-        self._btn_step_back.clicked.connect(
-            lambda: self._playback.step(-self._config.step_rows)
-        )
-        self._btn_step_fwd.clicked.connect(
-            lambda: self._playback.step(self._config.step_rows)
-        )
+        self._btn_reverse_play.clicked.connect(self._toggle_reverse_play)
+        self._btn_step_back.clicked.connect(self._step_back_one)
+        self._btn_step_fwd.clicked.connect(self._step_forward_one)
+        self._btn_jump_back.clicked.connect(self._step_back_jump)
+        self._btn_jump_fwd.clicked.connect(self._step_forward_jump)
         self._speed.valueChanged.connect(self._playback.set_speed)
         self._slider.valueChanged.connect(self._on_slider)
         self._playback.index_changed.connect(self._on_index)
@@ -300,11 +319,43 @@ class BlockAnnotatorWindow(QtWidgets.QMainWindow):
         self._annotation.event_marked.connect(self._on_save_requested)
         self._apply_display_sizes()
 
+    def _single_step_rows(self) -> int:
+        return max(1, int(self._config.step_rows))
+
+    def _jump_step_rows(self) -> int:
+        return max(1, int(self._jump_step.value()))
+
+    def _step_back_one(self) -> None:
+        self._playback.step(-self._single_step_rows())
+
+    def _step_forward_one(self) -> None:
+        self._playback.step(self._single_step_rows())
+
+    def _step_back_jump(self) -> None:
+        self._playback.step(-self._jump_step_rows())
+
+    def _step_forward_jump(self) -> None:
+        self._playback.step(self._jump_step_rows())
+
     def _toggle_play(self) -> None:
-        self._playback.toggle_play()
+        self._playback.toggle_play(forward=True)
+
+    def _toggle_reverse_play(self) -> None:
+        self._playback.toggle_play(forward=False)
+
+    def _mark_event_shortcut(self) -> None:
+        self._annotation._btn_mark.click()
 
     def _on_playing_changed(self, playing: bool) -> None:
-        self._btn_play.setText("⏸ Pause" if playing else "▶ Play")
+        if playing and self._playback.forward:
+            self._btn_play.setText("⏸ Pause")
+            self._btn_reverse_play.setText("◀ Rev play")
+        elif playing and not self._playback.forward:
+            self._btn_play.setText("▶ Play")
+            self._btn_reverse_play.setText("⏸ Rev pause")
+        else:
+            self._btn_play.setText("▶ Play")
+            self._btn_reverse_play.setText("◀ Rev play")
 
     def _on_slider(self, value: int) -> None:
         self._playback.pause()
@@ -537,17 +588,64 @@ class BlockAnnotatorWindow(QtWidgets.QMainWindow):
             8000,
         )
 
+    def _setup_shortcuts(self) -> None:
+        def bind(key, slot):
+            sc = QtGui.QShortcut(QtGui.QKeySequence(key), self)
+            sc.setContext(QtCore.Qt.ShortcutContext.WindowShortcut)
+            sc.activated.connect(slot)
+
+        bind(QtCore.Qt.Key.Key_Space, self._toggle_play)
+        bind(QtCore.Qt.Key.Key_BracketLeft, self._step_back_one)
+        bind(QtCore.Qt.Key.Key_BracketRight, self._step_forward_one)
+        bind(QtCore.Qt.Key.Key_BraceLeft, self._step_back_jump)
+        bind(QtCore.Qt.Key.Key_BraceRight, self._step_forward_jump)
+        bind(QtCore.Qt.Key.Key_R, self._toggle_reverse_play)
+        bind(QtCore.Qt.Key.Key_M, self._mark_event_shortcut)
+
+    def _show_keyboard_help(self) -> None:
+        jump = self._jump_step.value()
+        text = f"""<h3>Block Annotator — keyboard shortcuts</h3>
+<table>
+<tr><td><b>Space</b></td><td>Play / pause (forward)</td></tr>
+<tr><td><b>R</b></td><td>Reverse play / pause</td></tr>
+<tr><td><b>[</b></td><td>Step back one row</td></tr>
+<tr><td><b>]</b></td><td>Step forward one row</td></tr>
+<tr><td><b>{{</b> (Shift+[)</td><td>Step back {jump} rows (jump size spinbox)</td></tr>
+<tr><td><b>}}</b> (Shift+])</td><td>Step forward {jump} rows</td></tr>
+<tr><td><b>M</b></td><td>Mark event (current type and range)</td></tr>
+</table>
+<p>Arrow keys are not bound; use <b>[</b> / <b>]</b> for single steps.</p>
+"""
+        QtWidgets.QMessageBox.information(self, "Keyboard shortcuts", text)
+
     def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:
-        if event.key() == QtCore.Qt.Key.Key_Space:
+        key = event.key()
+        if key == QtCore.Qt.Key.Key_Space:
             self._toggle_play()
             event.accept()
             return
-        if event.key() == QtCore.Qt.Key.Key_Left:
-            self._playback.step(-self._config.step_rows)
+        if key == QtCore.Qt.Key.Key_BracketLeft:
+            self._step_back_one()
             event.accept()
             return
-        if event.key() == QtCore.Qt.Key.Key_Right:
-            self._playback.step(self._config.step_rows)
+        if key == QtCore.Qt.Key.Key_BracketRight:
+            self._step_forward_one()
+            event.accept()
+            return
+        if key == QtCore.Qt.Key.Key_BraceLeft:
+            self._step_back_jump()
+            event.accept()
+            return
+        if key == QtCore.Qt.Key.Key_BraceRight:
+            self._step_forward_jump()
+            event.accept()
+            return
+        if key == QtCore.Qt.Key.Key_R:
+            self._toggle_reverse_play()
+            event.accept()
+            return
+        if key == QtCore.Qt.Key.Key_M:
+            self._mark_event_shortcut()
             event.accept()
             return
         super().keyPressEvent(event)

@@ -58,12 +58,15 @@ Standalone PyQt6 app for synchronized review of arena + eye videos, Open Ephys t
 
 ### Install and launch
 
-Use the **`eye_annotator`** conda env (see `environment_annotator.yml`). Do not run the GUI in `eye_repo` on Windows — conda OpenCV and PyQt6 DLLs conflict in one process.
+Use the **`eye_annotator`** conda env. Do not run the GUI in `eye_repo` on Windows — conda OpenCV and PyQt6 DLLs conflict in one process.
+
+**Another Windows PC:** copy the repo, then `environment_annotator_windows.yml` + `pip install -e . --no-deps` (see `SETUP_INSTRUCTIONS.md`).
 
 ```powershell
 cd D:\Python_projects\PETS
-conda env create -f environment_annotator.yml
+conda env create -f environment_annotator_windows.yml
 conda activate eye_annotator
+pip install -e . --no-deps
 python -m eye_tracking_system_tools.annotation.block_annotator --block "D:\path\to\block_015" --output "D:\path\to\annotator_output"
 ```
 
@@ -97,7 +100,7 @@ Saved under the output folder as `{animal}_{date}_block_{num}_annotations.json` 
 ### Controls
 
 - Transport: play/pause, slider, step buttons; speed 0.25×–4× (slow motion advances every row; fast-forward may skip rows).
-- Keyboard: Space (play/pause), Left/Right (step).
+- Keyboard: Space (play/pause), R (reverse play), `[` / `]` (step ±1 row), `{` / `}` (jump ±N rows), M (mark event). See **Help → Keyboard shortcuts** in the app.
 - Arena: dropdown selects one arena MP4; L/R panels support raw display flip (display only) or annotated ellipse overlay.
 - OE trace: stream dropdown (HS / ADC / AUX), downsample factor for overview plot, playhead synced to `ms_axis`.
 
@@ -107,11 +110,49 @@ Saved under the output folder as `{animal}_{date}_block_{num}_annotations.json` 
 pytest tests/test_block_annotator.py -q
 ```
 
+## Event Explorer GUI
+
+Second-stage PyQt6 app for browsing Block Annotator `*_annotations.json` events, inspecting time-aligned eye and EP traces (±ms window around `timepoint_ms = 0`), multi-trial averages, and NPZ export. **No video playback in v1.**
+
+### Install and launch
+
+Same **`eye_annotator`** env as the Block Annotator:
+
+```powershell
+conda activate eye_annotator
+pip install -e . --no-deps
+python -m eye_tracking_system_tools.annotation.event_explorer --help
+```
+
+```powershell
+python -m eye_tracking_system_tools.annotation.event_explorer --json _annotator_out\PV_106_2025_09_04_block_015_annotations.json
+```
+
+Optional CLI: `--json PATH` (repeatable), `--json-list PATH`, `--scan-dir ROOT` (repeatable). With no args, the app opens and prompts **Add sources…** (JSON files, folders, recursive scan).
+
+### Session file (`*.explorer_session.json`)
+
+Manual **File → Save session**. Stores catalog sources, block path remap table, visible columns, ±window ms, stream toggles, OE HS channel list, normalization mode, and optional column overrides (`pupil_column`, `l_degrees_column`, `r_degrees_column`). On exit, if the session changed, you are prompted to save.
+
+### Export
+
+**File → Export selection** writes `explorer_export_{timestamp}.npz` and a sidecar `.json` (provenance, alignment, load-log excerpt) to a folder you choose.
+
+### Load log
+
+The **Load log** dock and an auto-written `explorer_load_{timestamp}.log` record eye CSV candidate lists, newest-file choice, frame vs `ms_axis` fallback, stale-sync decisions, and remap actions.
+
+### Tests
+
+```bash
+pytest tests/test_event_explorer.py -q
+```
+
 ## Project Structure
 
 ```
 src/eye_tracking_system_tools/
-├── annotation/          # Block Annotator GUI (block_annotator/)
+├── annotation/          # Block Annotator + Event Explorer GUIs
 ├── preprocessing/       # Data synchronization and preprocessing
 │   ├── block_synchronization.ipynb
 │   ├── data_verification.ipynb

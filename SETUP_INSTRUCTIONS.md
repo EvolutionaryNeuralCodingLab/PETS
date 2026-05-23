@@ -45,15 +45,71 @@
 
 ## Block Annotator (separate environment)
 
-The annotator uses **PyQt6** and **OpenCV** in one GUI process. On Windows, that conflicts with the **conda `opencv`** stack in `eye_repo`. Use a dedicated environment:
+The annotator uses **PyQt6** and **OpenCV** in one GUI process. On Windows, that conflicts with the **conda `opencv`** stack in `eye_repo`. Use a dedicated environment.
+
+### Windows — copy repo to another PC
+
+Copy the **full PETS repository** (not only a yml file). On the destination machine:
+
+```powershell
+cd D:\path\to\PETS
+conda env create -f environment_annotator_windows.yml
+conda activate eye_annotator
+pip install -e . --no-deps
+python -m eye_tracking_system_tools.annotation.block_annotator
+```
+
+Or: `powershell -ExecutionPolicy Bypass -File scripts\setup_annotator_windows.ps1`
+
+| File | Use |
+|------|-----|
+| `environment_annotator_windows.yml` | **Portable Windows** — pinned pip deps; then `pip install -e . --no-deps` |
+| `environment_annotator.yml` | **Dev on your machine** — minimal; `-e ".[annotator]"` pulls deps from `pyproject.toml` |
+| `eye_annotator.yml` | **Do not use** — `conda env export` snapshot; fails on other PCs |
+
+`eye_repo` is unchanged for notebooks and preprocessing; install it with `environment.yml` / `requirements.txt` as above (no PyQt6).
+
+### Ubuntu / Linux without sudo
+
+You do **not** need `apt` or root if conda (Miniforge/Miniconda) is installed in your home directory. Use **`environment_annotator_linux.yml`**, which installs PyQt, OpenCV, and X11/Qt libraries from **conda-forge** instead of system packages.
 
 ```bash
-conda env create -f environment_annotator.yml
+cd /path/to/PETS
+conda env create -f environment_annotator_linux.yml
 conda activate eye_annotator
 python -m eye_tracking_system_tools.annotation.block_annotator
 ```
 
-`eye_repo` is unchanged for notebooks and preprocessing; install it with `environment.yml` / `requirements.txt` as above (no PyQt6).
+Or: `bash scripts/setup_annotator_linux.sh`
+
+**What is portable via conda**
+
+| Component | Approach |
+|-----------|----------|
+| Python, NumPy, SciPy, pandas, h5py, matplotlib | conda-forge |
+| PyQt6 GUI | conda-forge `pyqt` (provides `PyQt6` imports) |
+| X11 / xcb / EGL / fonts | Pulled in by `pyqt` / `opencv` (e.g. `xcb-util-cursor`, `libgl`) |
+| OpenCV (`cv2`) | conda-forge `opencv` on Linux (Windows annotator env uses pip-only to avoid DLL conflicts) |
+| `open-ephys-python-tools`, `ellipse` | pip (no conda binary conflict on Linux) |
+| This repo | `pip install -e . --no-deps` after conda env create |
+
+**What is not copied from a Windows `conda env export`**
+
+- Windows-only conda packages (`vc`, `ucrt`, `vcomp`, …)
+- Windows-only pip packages (`pywinpty`, …)
+- A Windows `pip freeze` lock file — Linux needs its own solve (`environment_annotator_linux.yml`), not `requirements-annotator-pinned.txt` from Windows
+
+**What conda cannot install (runtime, not packages)**
+
+- A **display**: the GUI needs `DISPLAY` (SSH X11 forwarding, local desktop, or virtual framebuffer). On a headless node without `DISPLAY`, use conda’s Xvfb and run under it:
+
+  ```bash
+  conda activate eye_annotator
+  conda install -c conda-forge xorg-xvfb
+  xvfb-run -a python -m eye_tracking_system_tools.annotation.block_annotator
+  ```
+
+- **GPU drivers** — not required for the annotator (CPU Qt/OpenCV is enough).
 
 ## Troubleshooting
 

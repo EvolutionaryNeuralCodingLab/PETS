@@ -18,6 +18,7 @@ class PlaybackController(QObject):
         self._ms_axis: np.ndarray | None = None
         self._index = 0
         self._playing = False
+        self._forward = True
         self._speed = 1.0
         self._fps = 60.0
         self._step_rows = 1
@@ -53,6 +54,10 @@ class PlaybackController(QObject):
     def playing(self) -> bool:
         return self._playing
 
+    @property
+    def forward(self) -> bool:
+        return self._forward
+
     def set_index(self, index: int, *, emit: bool = True) -> None:
         if self._n <= 0:
             self._index = 0
@@ -61,15 +66,18 @@ class PlaybackController(QObject):
         if emit:
             self.index_changed.emit(self._index)
 
-    def toggle_play(self) -> None:
+    def toggle_play(self, *, forward: bool = True) -> None:
+        if self._playing and self._forward == forward:
+            self.pause()
+            return
         if self._playing:
             self.pause()
-        else:
-            self.play()
+        self.play(forward=forward)
 
-    def play(self) -> None:
+    def play(self, *, forward: bool = True) -> None:
         if self._n <= 0:
             return
+        self._forward = bool(forward)
         self._playing = True
         self._reset_play_anchor()
         self._update_interval()
@@ -97,15 +105,20 @@ class PlaybackController(QObject):
         if self._n <= 0 or self._ms_axis is None:
             return
 
+        step = 1 if self._forward else -1
+
         if self._speed <= 1.0:
-            nxt = self._index + 1
-            if nxt >= self._n:
-                nxt = self._n - 1
+            nxt = self._index + step
+            if nxt < 0:
+                self.set_index(0)
                 self.pause()
+                return
+            if nxt >= self._n:
+                self.set_index(self._n - 1)
+                self.pause()
+                return
             if nxt != self._index:
                 self.set_index(nxt)
-            elif self._index >= self._n - 1:
-                self.pause()
             return
 
         now = time.perf_counter()
@@ -115,14 +128,22 @@ class PlaybackController(QObject):
             self._play_start_ms = float(self._ms_axis[self._index])
 
         elapsed = (now - self._play_start_wall) * self._speed
-        target_ms = self._play_start_ms + elapsed * 1000.0
-        nxt = int(np.searchsorted(self._ms_axis, target_ms, side="right") - 1)
-        nxt = max(0, min(nxt, self._n - 1))
-
-        if nxt >= self._n - 1 and target_ms >= float(self._ms_axis[-1]):
-            self.set_index(self._n - 1)
-            self.pause()
-            return
+        if self._forward:
+            target_ms = self._play_start_ms + elapsed * 1000.0
+            nxt = int(np.searchsorted(self._ms_axis, target_ms, side="right") - 1)
+            nxt = max(0, min(nxt, self._n - 1))
+            if nxt >= self._n - 1 and target_ms >= float(self._ms_axis[-1]):
+                self.set_index(self._n - 1)
+                self.pause()
+                return
+        else:
+            target_ms = self._play_start_ms - elapsed * 1000.0
+            nxt = int(np.searchsorted(self._ms_axis, target_ms, side="left"))
+            nxt = max(0, min(nxt, self._n - 1))
+            if nxt <= 0 and target_ms <= float(self._ms_axis[0]):
+                self.set_index(0)
+                self.pause()
+                return
 
         if nxt != self._index:
             self.set_index(nxt)

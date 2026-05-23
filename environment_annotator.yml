@@ -1,5 +1,10 @@
-# Conda environment for the Block Annotator GUI only.
-# Keeps Qt/OpenCV on a single pip stack (no conda opencv) to avoid Windows DLL conflicts.
+# Block Annotator — Windows, minimal dev spec (run from repo root).
+# Resolves all third-party deps via pyproject.toml when you use -e ".[annotator]".
+#
+# Copying the env to another PC: use environment_annotator_windows.yml instead
+# (pinned pip deps + pip install -e . --no-deps). See SETUP_INSTRUCTIONS.md.
+#
+# Linux/Ubuntu without sudo: use environment_annotator_linux.yml (conda-forge pyqt + opencv).
 name: eye_annotator
 channels:
   - conda-forge

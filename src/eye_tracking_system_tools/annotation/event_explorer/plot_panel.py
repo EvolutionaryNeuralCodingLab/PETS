@@ -295,7 +295,9 @@ class PlotPanel(QtWidgets.QWidget):
         if not snippets:
             self._set_status_error("No trace data for selection")
             return
-        grid, stacked = resample_to_grid(snippets)
+        grid, stacked = resample_to_grid(
+            snippets, half_window_ms=self.half_window_ms()
+        )
         trials = [stacked[i] for i in range(stacked.shape[0])]
         times = [grid] * len(trials)
         trials = normalize_trials(trials, times, normalization)
@@ -362,7 +364,9 @@ class PlotPanel(QtWidgets.QWidget):
         snippets: list[EventSnippet],
         normalization: str,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        grid, stacked = resample_to_grid(snippets)
+        grid, stacked = resample_to_grid(
+            snippets, half_window_ms=self.half_window_ms()
+        )
         trials = [stacked[i] for i in range(stacked.shape[0])]
         times = [grid] * len(trials)
         trials_n = normalize_trials(trials, times, normalization)

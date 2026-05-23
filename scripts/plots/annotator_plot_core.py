@@ -381,10 +381,13 @@ def stack_stream_data(
     snippets: list[EventSnippet],
     stream_key: str,
     n_grid: int,
+    half_window_ms: float | None = None,
 ) -> StreamPlotData | None:
     if not snippets:
         return None
-    grid, stacked = resample_to_grid(snippets, n_points=n_grid)
+    grid, stacked = resample_to_grid(
+        snippets, n_points=n_grid, half_window_ms=half_window_ms
+    )
     n = stacked.shape[0]
     mean = np.nanmean(stacked, axis=0)
     sem = np.nanstd(stacked, axis=0, ddof=1) / np.sqrt(max(1, n))
@@ -436,13 +439,13 @@ def build_plot_data(request: PlotRequest, log: LoadLog) -> list[StreamPlotData]:
             for ch in request.ep_channels:
                 key = f"ep:{int(ch)}"
                 data = stack_stream_data(
-                    snippets_by_key.get(key, []), key, request.n_grid
+                    snippets_by_key.get(key, []), key, request.n_grid, request.half_window_ms
                 )
                 if data:
                     series.append(data)
         else:
             data = stack_stream_data(
-                snippets_by_key.get(stream_id, []), stream_id, request.n_grid
+                snippets_by_key.get(stream_id, []), stream_id, request.n_grid, request.half_window_ms
             )
             if data:
                 series.append(data)
@@ -545,6 +548,7 @@ def export_figures(
     for ax, data in zip(axes_flat, series):
         handles = render_stream_axis(ax, data, mode=mode, style=style)
         _style_axes(ax, style, ylabel)
+        ax.set_xlim(float(data.grid[0]), float(data.grid[-1]))
         if mode == "individual":
             legend_handles.append(handles[0])
             legend_labels.append(f"{data.label} (N={data.n_trials})")

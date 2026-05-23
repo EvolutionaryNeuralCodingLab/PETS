@@ -441,6 +441,11 @@ class AnnotatorPlotApp(tk.Tk):
                             ax, data, mode=request.mode, style=request.style
                         )
                         _style_axes(ax, request.style, ylabel)
+                        ax.set_xlim(float(data.grid[0]), float(data.grid[-1]))
+                        ax.set_title(
+                            f"{data.label}  (N={data.n_trials})",
+                            fontsize=request.style.tick_fontsize,
+                        )
                     fig.subplots_adjust(hspace=0.28 if n > 1 else 0.05)
                     self.after(0, lambda: plt.show())
                     self._gui_log.info("Preview window opened")

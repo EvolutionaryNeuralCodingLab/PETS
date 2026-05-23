@@ -74,17 +74,18 @@ def _relative_time_ms(
     df: pd.DataFrame,
     i0: int,
     i1: int,
-    event_timepoint_ms: float,
+    anchor_ms: float,
     ms_col: str | None,
-    sample_rate_hz: float,
+    half_window_ms: float,
 ) -> np.ndarray:
     if ms_col and ms_col in df.columns:
         t = df[ms_col].iloc[i0:i1].to_numpy(dtype=np.float64)
-        return t - event_timepoint_ms
-    # frame-index fallback: assume uniform spacing from block sync rate
+        return t - anchor_ms
     n = i1 - i0
-    dt = 1000.0 / sample_rate_hz
-    return (np.arange(n, dtype=np.float64) - (n // 2)) * dt
+    if n <= 1:
+        return np.zeros(1, dtype=np.float64)
+    # Eye CSV has no ms_axis: evenly space across requested half-window
+    return np.linspace(-half_window_ms, half_window_ms, n, dtype=np.float64)
 
 
 def extract_eye_snippet(
@@ -126,15 +127,17 @@ def extract_eye_snippet(
     ms_col = _ms_column(df)
     frame_col = frame_column_name(df)
     source = "frame"
-    i0, i1 = 0, len(df)
+    anchor_ms = float(record.timepoint_ms)
+    i0: int | None = None
+    i1: int | None = None
 
     if eye_frame is not None and frame_col:
         row_idx = _frame_to_row_index(df, int(eye_frame), frame_col)
         if row_idx is not None and ms_col:
-            center_ms = float(df[ms_col].iloc[row_idx])
-            i0, i1 = _row_window_from_ms(df, center_ms, half_window_ms, ms_col)
+            anchor_ms = float(df[ms_col].iloc[row_idx])
+            i0, i1 = _row_window_from_ms(df, anchor_ms, half_window_ms, ms_col)
         elif row_idx is not None:
-            half_frames = max(1, int(half_window_ms / 33.0))
+            half_frames = max(1, int(round(half_window_ms / 33.0)))
             i0 = max(0, row_idx - half_frames)
             i1 = min(len(df), row_idx + half_frames + 1)
         else:
@@ -145,17 +148,35 @@ def extract_eye_snippet(
             )
             if ms_col:
                 i0, i1 = _row_window_from_ms(
-                    df, record.timepoint_ms, half_window_ms, ms_col
+                    df, anchor_ms, half_window_ms, ms_col
                 )
     else:
         source = "ms_axis_fallback"
-        load_log.warn(
-            f"Missing eye_frame for event {record.event_id}; ms_axis fallback ({side})"
-        )
+        if eye_frame is None:
+            load_log.warn(
+                f"Missing eye_frame for event {record.event_id}; ms_axis fallback ({side})"
+            )
         if ms_col:
             i0, i1 = _row_window_from_ms(
-                df, record.timepoint_ms, half_window_ms, ms_col
+                df, anchor_ms, half_window_ms, ms_col
             )
+
+    if i0 is None or i1 is None or i1 <= i0:
+        load_log.warn(
+            f"Could not slice {stream_id} window for event {record.event_id} "
+            f"(ms_col={ms_col!r}, frame_col={frame_col!r})"
+        )
+        return None
+
+    if (i1 - i0) >= max(len(df) - 1, 1):
+        load_log.warn(
+            f"Eye snippet spans entire CSV ({i1 - i0} rows) for event {record.event_id}; "
+            f"retrying narrow window around anchor"
+        )
+        if ms_col:
+            i0, i1 = _row_window_from_ms(df, anchor_ms, half_window_ms, ms_col)
+        else:
+            return None
 
     if stream_id in (STREAM_L_PUPIL, STREAM_R_PUPIL):
         values = pupil_values(df, col_spec)
@@ -170,8 +191,24 @@ def extract_eye_snippet(
         y = df[col_spec].iloc[i0:i1].to_numpy(dtype=np.float64)
 
     t_rel = _relative_time_ms(
-        df, i0, i1, record.timepoint_ms, ms_col, cache.sample_rate_hz
+        df, i0, i1, anchor_ms, ms_col, half_window_ms
     )
+    span = float(t_rel[-1] - t_rel[0]) if len(t_rel) > 1 else 0.0
+    if span > 2.5 * half_window_ms:
+        load_log.warn(
+            f"Eye snippet span {span:.0f} ms > window for event {record.event_id}; "
+            f"clipping to ±{half_window_ms:.0f} ms"
+        )
+        if ms_col:
+            i0, i1 = _row_window_from_ms(df, anchor_ms, half_window_ms, ms_col)
+            if stream_id in (STREAM_L_PUPIL, STREAM_R_PUPIL):
+                y = values.iloc[i0:i1].to_numpy(dtype=np.float64)
+            else:
+                y = df[col_spec].iloc[i0:i1].to_numpy(dtype=np.float64)
+            t_rel = _relative_time_ms(df, i0, i1, anchor_ms, ms_col, half_window_ms)
+        else:
+            return None
+
     return EventSnippet(
         event_id=record.event_id,
         stream_id=stream_id,
@@ -250,16 +287,41 @@ def normalize_trials(
 def resample_to_grid(
     snippets: list[EventSnippet],
     n_points: int = 201,
+    half_window_ms: float | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Interpolate trials onto common relative-ms grid (linear)."""
-    t_min = max(s.time_rel_ms[0] for s in snippets)
-    t_max = min(s.time_rel_ms[-1] for s in snippets)
-    if t_max <= t_min:
-        t_min = min(s.time_rel_ms[0] for s in snippets)
-        t_max = max(s.time_rel_ms[-1] for s in snippets)
-    grid = np.linspace(t_min, t_max, n_points)
+    """Interpolate trials onto a common relative-ms grid (linear).
+
+    When ``half_window_ms`` is set, the grid is fixed to
+    ``[-half_window_ms, +half_window_ms]`` so mismatched trial spans cannot
+    inflate the plot axis. Values outside each trial's time support are NaN
+    (not flat-extrapolated).
+    """
+    if not snippets:
+        raise ValueError("resample_to_grid requires at least one snippet")
+
+    if half_window_ms is not None and half_window_ms > 0:
+        grid = np.linspace(-half_window_ms, half_window_ms, n_points)
+    else:
+        t_min = max(float(s.time_rel_ms[0]) for s in snippets)
+        t_max = min(float(s.time_rel_ms[-1]) for s in snippets)
+        if t_max <= t_min:
+            t_min = min(float(s.time_rel_ms.min()) for s in snippets)
+            t_max = max(float(s.time_rel_ms.max()) for s in snippets)
+        grid = np.linspace(t_min, t_max, n_points)
+
     stacked = []
     for s in snippets:
-        y = np.interp(grid, s.time_rel_ms, s.values)
-        stacked.append(y)
+        t = np.asarray(s.time_rel_ms, dtype=np.float64)
+        y = np.asarray(s.values, dtype=np.float64)
+        order = np.argsort(t)
+        t, y = t[order], y[order]
+        t_u, uniq_idx = np.unique(t, return_index=True)
+        y_u = y[uniq_idx]
+        if len(t_u) == 1:
+            y_grid = np.full(n_points, y_u[0], dtype=np.float64)
+        else:
+            y_grid = np.interp(
+                grid, t_u, y_u, left=np.nan, right=np.nan
+            ).astype(np.float64)
+        stacked.append(y_grid)
     return grid, np.vstack(stacked)

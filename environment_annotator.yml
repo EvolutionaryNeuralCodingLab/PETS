@@ -1,0 +1,10 @@
+# Conda environment for the Block Annotator GUI only.
+# Keeps Qt/OpenCV on a single pip stack (no conda opencv) to avoid Windows DLL conflicts.
+name: eye_annotator
+channels:
+  - conda-forge
+dependencies:
+  - python>=3.10,<3.11
+  - pip
+  - pip:
+      - -e ".[annotator]"

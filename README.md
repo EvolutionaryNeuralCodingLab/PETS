@@ -52,10 +52,66 @@ Run the smoke test to verify imports:
 python examples/smoke_preprocessing_imports.py
 ```
 
+## Block Annotator GUI
+
+Standalone PyQt6 app for synchronized review of arena + eye videos, Open Ephys traces, and event annotations on blocks with `analysis/final_sync_df.csv`.
+
+### Install and launch
+
+Use the **`eye_annotator`** conda env (see `environment_annotator.yml`). Do not run the GUI in `eye_repo` on Windows — conda OpenCV and PyQt6 DLLs conflict in one process.
+
+```powershell
+cd D:\Python_projects\PETS
+conda env create -f environment_annotator.yml
+conda activate eye_annotator
+python -m eye_tracking_system_tools.annotation.block_annotator --block "D:\path\to\block_015" --output "D:\path\to\annotator_output"
+```
+
+Add `--dialog` to show the setup dialog. Optional env vars: `PETS_ANNOTATOR_BLOCK`, `PETS_ANNOTATOR_OUTPUT`.
+
+Headless check (reads frames + builds QPixmap):
+
+```powershell
+python scripts/validate_block_annotator_load.py --block "D:\path\to\block_015" --output "D:\path\to\annotator_output"
+```
+
+On first run (dialog mode), pick an **output folder** (required). If `annotator_config.yaml` is missing there, a template is created with default event types: `saccade`, `blink`, `noise`, `pupil event`. Then select a **block folder** containing `analysis/final_sync_df.csv`.
+
+### Config (`annotator_config.yaml`)
+
+```yaml
+event_types:
+  - saccade
+  - blink
+  - noise
+  - pupil event
+default_range_half_width_ms: 100.0
+playback_fps: 60.0
+step_rows: 1
+```
+
+### Per-block output JSON
+
+Saved under the output folder as `{animal}_{date}_block_{num}_annotations.json` (date segment omitted when unknown). Schema version 1; each event has `timepoint_ms`, `start_ms`, `end_ms`, `range_half_width_ms`, frame IDs, and optional `note`. **Save replaces the full event list** (no merge-by-id in v1).
+
+### Controls
+
+- Transport: play/pause, slider, step buttons; speed 0.25×–4× (slow motion advances every row; fast-forward may skip rows).
+- Keyboard: Space (play/pause), Left/Right (step).
+- Arena: dropdown selects one arena MP4; L/R panels support raw display flip (display only) or annotated ellipse overlay.
+- OE trace: stream dropdown (HS / ADC / AUX), downsample factor for overview plot, playhead synced to `ms_axis`.
+
+### Tests
+
+```bash
+pytest tests/test_block_annotator.py -q
+```
+
 ## Project Structure
 
 ```
 src/eye_tracking_system_tools/
+├── annotation/          # Block Annotator GUI (block_annotator/)
 ├── preprocessing/       # Data synchronization and preprocessing
 │   ├── block_synchronization.ipynb
 │   ├── data_verification.ipynb

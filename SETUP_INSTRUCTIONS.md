@@ -43,6 +43,18 @@
    - Select the kernel: "Python (eye_repo)" or "eye_repo"
    - In VS Code: Press `Ctrl+Shift+P` → "Python: Select Interpreter" → Choose the `eye_repo` environment
 
+## Block Annotator (separate environment)
+
+The annotator uses **PyQt6** and **OpenCV** in one GUI process. On Windows, that conflicts with the **conda `opencv`** stack in `eye_repo`. Use a dedicated environment:
+
+```bash
+conda env create -f environment_annotator.yml
+conda activate eye_annotator
+python -m eye_tracking_system_tools.annotation.block_annotator
+```
+
+`eye_repo` is unchanged for notebooks and preprocessing; install it with `environment.yml` / `requirements.txt` as above (no PyQt6).
+
 ## Troubleshooting
 
 ### If pathlib import fails:

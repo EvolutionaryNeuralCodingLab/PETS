@@ -399,7 +399,7 @@ def plot_kde(ax, x, y, nbins, title, xlim=False, ylim=False, global_max=None, gl
     return sp
 
 
-def block_generator(block_numbers, experiment_path, animal, bad_blocks=[], regev=True):
+def block_generator(block_numbers, experiment_path, animal, bad_blocks=[]):
     """
     creates a block_collection to iterate over with multi-block functions
     :param block_numbers: list of block numbers to loop over
@@ -423,7 +423,7 @@ def block_generator(block_numbers, experiment_path, animal, bad_blocks=[], regev
                         # block definition
                         block = BlockSync(animal_call=animal,
                                           experiment_date=date, block_num=block_number,
-                                          path_to_animal_folder=str(experiment_path), regev=regev)
+                                          path_to_animal_folder=str(experiment_path))
                         block_collection.append(block)
                 except ValueError:
                     continue

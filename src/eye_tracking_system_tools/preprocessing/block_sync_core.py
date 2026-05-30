@@ -24,6 +24,48 @@ try:
 except ImportError:
     sns = None
 
+_PANDAS_INDEX_ARTIFACTS = frozenset({"level_0", "index", "Unnamed: 0"})
+_TRACKING_TABLE_MARKERS = frozenset(
+    {
+        "Arena_TTL",
+        "Arena_frame",
+        "L_eye_frame",
+        "R_eye_frame",
+        "L_values",
+        "R_values",
+        "center_x",
+        "center_y",
+        "frame_idx",
+        "brightness",
+        "oe_time_s",
+    }
+)
+
+
+def drop_pandas_index_artifact_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Drop duplicate index columns left over from repeated CSV round-trips."""
+    drop = [c for c in df.columns if c in _PANDAS_INDEX_ARTIFACTS]
+    if not drop:
+        return df
+    if _TRACKING_TABLE_MARKERS.intersection(df.columns):
+        return df.drop(columns=drop, errors="ignore")
+    return df
+
+
+def load_eye_tracking_df_csv(path: Path) -> pd.DataFrame:
+    """Load ``le_df.csv`` / ``re_df.csv`` without double-``reset_index`` failures."""
+    path = Path(path)
+    df = drop_pandas_index_artifact_columns(pd.read_csv(path))
+    if "Arena_TTL" in df.columns:
+        return df
+    df = drop_pandas_index_artifact_columns(pd.read_csv(path, index_col=0))
+    if "Arena_TTL" in df.columns:
+        return df
+    # Last resort: promote index to a column once.
+    out = df.reset_index()
+    return drop_pandas_index_artifact_columns(out)
+
+
 try:
     from tqdm import tqdm
 except ImportError:
@@ -302,7 +344,8 @@ def simple_sync_build(block, cov_warn: float = 0.05, export: bool = False):
     if export:
         outL = Path(block.analysis_path) / "eye_left_simple_sync.csv"
         outR = Path(block.analysis_path) / "eye_right_simple_sync.csv"
-        dfL.to_csv(outL); dfR.to_csv(outR)
+        dfL.to_csv(outL, index_label="oe_sample")
+        dfR.to_csv(outR, index_label="oe_sample")
         print(f"[OK] Saved: {outL}")
         print(f"[OK] Saved: {outR}")
     return dfL, dfR
@@ -1375,7 +1418,7 @@ def load_final_sync_df(block, filename=None, verbose=True):
     
     path = existing[0][0]
 
-    df = pd.read_csv(path)
+    df = drop_pandas_index_artifact_columns(pd.read_csv(path))
     required = ['Arena_TTL','Arena_frame','L_eye_frame','R_eye_frame','L_values','R_values']
     missing = [c for c in required if c not in df.columns]
     if missing:

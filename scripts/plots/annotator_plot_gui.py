@@ -17,22 +17,29 @@ _SCRIPT_DIR = Path(__file__).resolve().parent
 if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
+from matplotlib.figure import Figure
+
 from annotator_plot_core import (  # noqa: E402
     AnnotationSummary,
     Normalization,
     PlotMode,
     PlotRequest,
     PlotStyle,
+    StreamPlotData,
     STREAM_EP,
     STREAM_L_DEG,
     STREAM_L_PUPIL,
     STREAM_R_DEG,
     STREAM_R_PUPIL,
+    _style_axes,
     annotation_label,
     build_plot_data,
     event_types_from_summaries,
     export_figures,
+    render_stream_axis,
     scan_annotations,
+    ylabel_for_normalization,
 )
 
 
@@ -232,7 +239,9 @@ class AnnotatorPlotApp(tk.Tk):
         actions.pack(fill=tk.X, pady=8)
         self._gen_btn = ttk.Button(actions, text="Generate PDFs", command=self._generate)
         self._gen_btn.pack(side=tk.LEFT)
-        ttk.Button(actions, text="Preview", command=self._preview).pack(side=tk.LEFT, padx=8)
+        self._preview_btn = ttk.Button(actions, text="Preview", command=self._preview)
+        self._preview_btn.pack(side=tk.LEFT, padx=8)
+        self._preview_win: tk.Toplevel | None = None
 
         log_frame = ttk.LabelFrame(self, text="Log", padding=4)
         log_frame.pack(fill=tk.BOTH, expand=False, padx=8, pady=4)
@@ -389,6 +398,39 @@ class AnnotatorPlotApp(tk.Tk):
         self._busy = busy
         state = tk.DISABLED if busy else tk.NORMAL
         self._gen_btn.configure(state=state)
+        self._preview_btn.configure(state=state)
+
+    def _show_preview(self, series: list[StreamPlotData], request: PlotRequest) -> None:
+        """Render preview on the Tk main thread (matplotlib embedded in Toplevel)."""
+        if self._preview_win is not None and self._preview_win.winfo_exists():
+            self._preview_win.destroy()
+
+        win = tk.Toplevel(self)
+        self._preview_win = win
+        win.title("Annotator plot preview")
+
+        n = len(series)
+        fig_h = request.style.figsize[1] * n if n > 1 else request.style.figsize[1]
+        fig = Figure(figsize=(request.style.figsize[0], fig_h), dpi=request.style.dpi)
+        axes = fig.subplots(n, 1, sharex=True, squeeze=False)
+        ylabel = ylabel_for_normalization(request.normalization)
+
+        for ax, data in zip(axes.ravel(), series):
+            render_stream_axis(ax, data, mode=request.mode, style=request.style)
+            _style_axes(ax, request.style, ylabel)
+            ax.set_xlim(float(data.grid[0]), float(data.grid[-1]))
+            ax.set_title(
+                f"{data.label}  (N={data.n_trials})",
+                fontsize=request.style.tick_fontsize,
+            )
+
+        fig.subplots_adjust(hspace=0.28 if n > 1 else 0.05)
+
+        canvas = FigureCanvasTkAgg(fig, master=win)
+        canvas.draw()
+        canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        NavigationToolbar2Tk(canvas, win).pack(side=tk.BOTTOM, fill=tk.X)
+        self._gui_log.info("Preview window opened")
 
     def _run_plot_job(self, preview: bool) -> None:
         request = self._build_request()
@@ -413,42 +455,7 @@ class AnnotatorPlotApp(tk.Tk):
                     )
                     return
                 if preview:
-                    import matplotlib.pyplot as plt
-
-                    plt.rcParams["font.family"] = "sans-serif"
-                    plt.rcParams["font.sans-serif"] = [
-                        request.style.font_family,
-                        "DejaVu Sans",
-                    ]
-                    n = len(series)
-                    fig_h = request.style.figsize[1] * n if n > 1 else request.style.figsize[1]
-                    fig, axes = plt.subplots(
-                        n,
-                        1,
-                        figsize=(request.style.figsize[0], fig_h),
-                        sharex=True,
-                        squeeze=False,
-                    )
-                    from annotator_plot_core import (  # noqa: E402
-                        _style_axes,
-                        render_stream_axis,
-                        ylabel_for_normalization,
-                    )
-
-                    ylabel = ylabel_for_normalization(request.normalization)
-                    for ax, data in zip(axes.ravel(), series):
-                        render_stream_axis(
-                            ax, data, mode=request.mode, style=request.style
-                        )
-                        _style_axes(ax, request.style, ylabel)
-                        ax.set_xlim(float(data.grid[0]), float(data.grid[-1]))
-                        ax.set_title(
-                            f"{data.label}  (N={data.n_trials})",
-                            fontsize=request.style.tick_fontsize,
-                        )
-                    fig.subplots_adjust(hspace=0.28 if n > 1 else 0.05)
-                    self.after(0, lambda: plt.show())
-                    self._gui_log.info("Preview window opened")
+                    self.after(0, lambda s=series: self._show_preview(s, request))
                 else:
                     export_figures(
                         series,

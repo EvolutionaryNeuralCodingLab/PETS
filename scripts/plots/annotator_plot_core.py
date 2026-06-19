@@ -47,6 +47,7 @@ from eye_tracking_system_tools.annotation.event_explorer.snippet_extractor impor
     extract_eye_snippet,
     normalize_trials,
     resample_to_grid,
+    stack_mean_sem,
 )
 
 rcParams["pdf.fonttype"] = 42
@@ -389,8 +390,7 @@ def stack_stream_data(
         snippets, n_points=n_grid, half_window_ms=half_window_ms
     )
     n = stacked.shape[0]
-    mean = np.nanmean(stacked, axis=0)
-    sem = np.nanstd(stacked, axis=0, ddof=1) / np.sqrt(max(1, n))
+    mean, sem = stack_mean_sem(stacked)
     sid = snippets[0].stream_id
     if sid == STREAM_EP:
         ch = snippets[0].meta.get("channel", "")
@@ -502,15 +502,19 @@ def render_stream_axis(
         )
         handles.append(h_mean)
         sem_alpha = style.sem_alpha if mode == "average" else style.sem_alpha * 0.65
-        ax.fill_between(
-            data.grid,
-            data.mean - data.sem,
-            data.mean + data.sem,
-            color=data.color,
-            alpha=sem_alpha,
-            linewidth=0,
-            zorder=2,
-        )
+        lo = data.mean - data.sem
+        hi = data.mean + data.sem
+        band = np.isfinite(lo) & np.isfinite(hi)
+        if band.any():
+            ax.fill_between(
+                data.grid[band],
+                lo[band],
+                hi[band],
+                color=data.color,
+                alpha=sem_alpha,
+                linewidth=0,
+                zorder=2,
+            )
     return handles
 
 

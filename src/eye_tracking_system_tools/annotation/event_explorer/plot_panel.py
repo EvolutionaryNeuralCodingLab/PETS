@@ -16,6 +16,7 @@ from eye_tracking_system_tools.annotation.event_explorer.snippet_extractor impor
     STREAM_R_PUPIL,
     normalize_trials,
     resample_to_grid,
+    stack_mean_sem,
 )
 
 # Light plot theme (avoid IDE dark theme inheritance)
@@ -302,8 +303,7 @@ class PlotPanel(QtWidgets.QWidget):
         times = [grid] * len(trials)
         trials = normalize_trials(trials, times, normalization)
         stacked = np.vstack(trials)
-        mean = np.nanmean(stacked, axis=0)
-        sem = np.nanstd(stacked, axis=0, ddof=1) / np.sqrt(max(1, stacked.shape[0]))
+        mean, sem = stack_mean_sem(stacked)
 
         n = stacked.shape[0]
         for i in range(n):
@@ -371,6 +371,5 @@ class PlotPanel(QtWidgets.QWidget):
         times = [grid] * len(trials)
         trials_n = normalize_trials(trials, times, normalization)
         stacked = np.vstack(trials_n)
-        mean = np.nanmean(stacked, axis=0)
-        sem = np.nanstd(stacked, axis=0, ddof=1) / np.sqrt(max(1, stacked.shape[0]))
+        mean, sem = stack_mean_sem(stacked)
         return grid, stacked, mean, sem

@@ -2207,12 +2207,11 @@ class BlockSync:
         if ((self.analysis_path / 're_df.csv').exists()
                 and (self.analysis_path / 'le_df.csv').exists()
                 and overwrite is False):
-            self.re_df = pd.read_csv(self.analysis_path / 're_df.csv', index_col=0).reset_index()
-            if 'Unnamed: 0' in self.re_df.columns:
-                self.re_df = self.re_df.drop(axis=1, labels='Unnamed: 0')
-            self.le_df = pd.read_csv(self.analysis_path / 'le_df.csv', index_col=0).reset_index()
-            if 'Unnamed: 0' in self.le_df.columns:
-                self.le_df = self.le_df.drop(axis=1, labels='Unnamed: 0')
+            from eye_tracking_system_tools.preprocessing.block_sync_core import (
+                load_eye_tracking_df_csv,
+            )
+            self.re_df = load_eye_tracking_df_csv(self.analysis_path / 're_df.csv')
+            self.le_df = load_eye_tracking_df_csv(self.analysis_path / 'le_df.csv')
             # append ms_axis to df
             self.re_df['ms_axis'] = self.re_df['Arena_TTL'] / (self.sample_rate / 1000)
             self.le_df['ms_axis'] = self.le_df['Arena_TTL'] / (self.sample_rate / 1000)
@@ -2898,6 +2897,10 @@ class BlockSync:
         :return:
         """
 
+        if self.re_df is None or self.le_df is None:
+            raise RuntimeError(
+                "le_df/re_df are missing. Run read_dlc_data() before correct_jitter()."
+            )
         # first, check if this has already been done:
         if 'center_x_corrected' in self.re_df.columns:
             print('center_x_corrected already exists, no need to re-run jitter correction')

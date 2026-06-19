@@ -34,6 +34,7 @@ annotator = [
 ]
 dev = [
     "pytest",
+    "pytest-qt>=4.0",
     "black",
     "flake8",
 ]

@@ -1,0 +1,976 @@
+"""Stage 1 -- synchronization workflow (deterministic + DLC/jitter stages)."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+from PyQt6 import QtCore, QtWidgets
+
+from eye_tracking_system_tools.annotation.preprocessing_gui.bokeh_launcher import (
+    open_shift_plot,
+)
+from eye_tracking_system_tools.annotation.preprocessing_gui.models import BlockHandle
+from eye_tracking_system_tools.annotation.preprocessing_gui.pyqtgraph_helpers import (
+    FinalSyncSanityPlot,
+    JitterDriftPlot,
+)
+from eye_tracking_system_tools.annotation.preprocessing_gui.batch_runner import (
+    SequentialBatchWorker,
+)
+from eye_tracking_system_tools.annotation.preprocessing_gui.tabs.base import BaseTab
+from eye_tracking_system_tools.annotation.preprocessing_gui.workers import CallableWorker
+from eye_tracking_system_tools.preprocessing.BlockSync_class import BlockSync
+from eye_tracking_system_tools.preprocessing.block_sync_core import (
+    drop_pandas_index_artifact_columns,
+    load_eye_tracking_df_csv,
+)
+from eye_tracking_system_tools.preprocessing.notebook_helpers import (
+    build_arena_grid_df,
+    build_final_sync_df_merge_nearest,
+    describe_eye_tick,
+    export_eye_data_2d,
+    export_final_sync_df,
+    find_jittery_frames,
+    insert_dup_by_oe_sample,
+    insert_dup_by_pos,
+    load_final_sync_df,
+    shift_eye_df_by_index,
+    simple_sync_build,
+    verify_final_df_against_sources,
+)
+
+
+class SyncTab(BaseTab):
+    tab_id = "sync"
+    tab_label = "Sync"
+
+    def __init__(self, state, config, parent=None):
+        self._block: BlockHandle | None = None
+        self._blocksync: BlockSync | None = None
+        self._verify_result: dict | None = None
+        self._worker: CallableWorker | None = None
+        self._batch_worker: SequentialBatchWorker | None = None
+        self._vid_inds_left: np.ndarray | None = None
+        self._vid_inds_right: np.ndarray | None = None
+        super().__init__(state, config, parent)
+
+    def build_ui(self) -> None:
+        root = QtWidgets.QVBoxLayout(self)
+        split = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
+        root.addWidget(split, stretch=1)
+
+        self._steps = QtWidgets.QListWidget()
+        self._steps.addItems(
+            [
+                "1. Setup + Prepare",
+                "2. Arena grid + simple sync",
+                "3. Shift correction + insertion",
+                "4. Final merge + verify + export",
+                "5. DLC + jitter + finalize",
+            ]
+        )
+        self._steps.setMaximumWidth(260)
+        split.addWidget(self._steps)
+
+        self._stack = QtWidgets.QStackedWidget()
+        split.addWidget(self._stack)
+        split.setStretchFactor(1, 1)
+
+        self._stack.addWidget(self._build_prepare_panel())
+        self._stack.addWidget(self._build_simple_sync_panel())
+        self._stack.addWidget(self._build_shift_panel())
+        self._stack.addWidget(self._build_verify_panel())
+        self._stack.addWidget(self._build_dlc_jitter_panel())
+
+        self._steps.currentRowChanged.connect(self._stack.setCurrentIndex)
+        self._steps.setCurrentRow(0)
+
+        self._status_label = QtWidgets.QLabel("No block loaded.")
+        root.addWidget(self._status_label)
+        root.addWidget(self._build_batch_panel())
+
+    def _build_batch_panel(self) -> QtWidgets.QWidget:
+        box = QtWidgets.QGroupBox("Batch — all loaded blocks")
+        layout = QtWidgets.QVBoxLayout(box)
+
+        row = QtWidgets.QHBoxLayout()
+        self._batch_op = QtWidgets.QComboBox()
+        self._batch_op.addItems(
+            [
+                "Extract brightness",
+                "Read DLC + fit ellipses",
+                "Compute jitter report",
+                "Correct jitter & remove LED blinks",
+            ]
+        )
+        self._btn_batch_run = QtWidgets.QPushButton("Run for all blocks")
+        self._btn_batch_cancel = QtWidgets.QPushButton("Cancel batch")
+        self._btn_batch_cancel.setEnabled(False)
+        row.addWidget(self._batch_op, stretch=1)
+        row.addWidget(self._btn_batch_run)
+        row.addWidget(self._btn_batch_cancel)
+        layout.addLayout(row)
+
+        self._batch_log = QtWidgets.QPlainTextEdit()
+        self._batch_log.setReadOnly(True)
+        self._batch_log.setMaximumHeight(140)
+        self._batch_log.setPlaceholderText("Batch progress appears here…")
+        layout.addWidget(self._batch_log)
+
+        self._btn_batch_run.clicked.connect(self._run_batch)
+        self._btn_batch_cancel.clicked.connect(self._cancel_batch)
+        return box
+
+    def _build_prepare_panel(self) -> QtWidgets.QWidget:
+        w = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(w)
+        self._block_info = QtWidgets.QLabel("No block")
+        layout.addWidget(self._block_info)
+
+        btns = QtWidgets.QHBoxLayout()
+        self._btn_prepare = QtWidgets.QPushButton("Prepare data (eye + arena)")
+        self._btn_parse_oe = QtWidgets.QPushButton("Parse OE events")
+        self._btn_extract_brightness = QtWidgets.QPushButton("Extract brightness")
+        btns.addWidget(self._btn_prepare)
+        btns.addWidget(self._btn_parse_oe)
+        btns.addWidget(self._btn_extract_brightness)
+        layout.addLayout(btns)
+        layout.addStretch(1)
+
+        self._btn_prepare.clicked.connect(self._run_prepare_data)
+        self._btn_parse_oe.clicked.connect(self._run_parse_oe)
+        self._btn_extract_brightness.clicked.connect(self._run_extract_brightness)
+        return w
+
+    def _build_simple_sync_panel(self) -> QtWidgets.QWidget:
+        w = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(w)
+
+        p = QtWidgets.QFormLayout()
+        self._arena_target_fps = QtWidgets.QDoubleSpinBox()
+        self._arena_target_fps.setRange(1.0, 240.0)
+        self._arena_target_fps.setValue(float(self._config.arena_target_fps))
+        self._arena_tol_hz = QtWidgets.QDoubleSpinBox()
+        self._arena_tol_hz.setRange(0.1, 30.0)
+        self._arena_tol_hz.setValue(float(self._config.arena_fps_tol_hz))
+        p.addRow("Target fps:", self._arena_target_fps)
+        p.addRow("Arena fps tol (Hz):", self._arena_tol_hz)
+        layout.addLayout(p)
+
+        btns = QtWidgets.QHBoxLayout()
+        self._btn_build_arena_grid = QtWidgets.QPushButton("Build arena grid")
+        self._btn_build_simple_sync = QtWidgets.QPushButton("Build simple sync")
+        btns.addWidget(self._btn_build_arena_grid)
+        btns.addWidget(self._btn_build_simple_sync)
+        layout.addLayout(btns)
+
+        self._simple_sync_summary = QtWidgets.QPlainTextEdit()
+        self._simple_sync_summary.setReadOnly(True)
+        self._simple_sync_summary.setMaximumHeight(130)
+        layout.addWidget(self._simple_sync_summary)
+        layout.addStretch(1)
+
+        self._btn_build_arena_grid.clicked.connect(self._run_build_arena_grid)
+        self._btn_build_simple_sync.clicked.connect(self._run_simple_sync_build)
+        return w
+
+    def _build_shift_panel(self) -> QtWidgets.QWidget:
+        w = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(w)
+
+        info = QtWidgets.QLabel(
+            "Use browser Bokeh slider plot to discover shifts. "
+            "GUI shift values are the inverse of Bokeh slider values."
+        )
+        info.setWordWrap(True)
+        layout.addWidget(info)
+
+        row = QtWidgets.QHBoxLayout()
+        self._btn_open_shift = QtWidgets.QPushButton("Open shift plot in browser")
+        row.addWidget(self._btn_open_shift)
+        layout.addLayout(row)
+
+        form = QtWidgets.QFormLayout()
+        self._left_shift = QtWidgets.QSpinBox()
+        self._left_shift.setRange(-2000, 2000)
+        self._right_shift = QtWidgets.QSpinBox()
+        self._right_shift.setRange(-2000, 2000)
+        self._left_shift_ms = QtWidgets.QLabel("~0 ms")
+        self._right_shift_ms = QtWidgets.QLabel("~0 ms")
+        left_wrap = QtWidgets.QWidget()
+        lr = QtWidgets.QHBoxLayout(left_wrap)
+        lr.setContentsMargins(0, 0, 0, 0)
+        lr.addWidget(self._left_shift)
+        lr.addWidget(self._left_shift_ms)
+        right_wrap = QtWidgets.QWidget()
+        rr = QtWidgets.QHBoxLayout(right_wrap)
+        rr.setContentsMargins(0, 0, 0, 0)
+        rr.addWidget(self._right_shift)
+        rr.addWidget(self._right_shift_ms)
+        form.addRow("Left shift (ticks):", left_wrap)
+        form.addRow("Right shift (ticks):", right_wrap)
+        layout.addLayout(form)
+
+        row2 = QtWidgets.QHBoxLayout()
+        self._btn_apply_shifts = QtWidgets.QPushButton("Apply shifts")
+        self._btn_preview_applied = QtWidgets.QPushButton("Preview applied in browser")
+        row2.addWidget(self._btn_apply_shifts)
+        row2.addWidget(self._btn_preview_applied)
+        layout.addLayout(row2)
+
+        self._advanced_box = QtWidgets.QGroupBox("Frame insertion (advanced)")
+        self._advanced_box.setCheckable(True)
+        self._advanced_box.setChecked(False)
+        adv = QtWidgets.QFormLayout(self._advanced_box)
+        self._insert_eye = QtWidgets.QComboBox()
+        self._insert_eye.addItems(["left", "right"])
+        self._insert_mode = QtWidgets.QComboBox()
+        self._insert_mode.addItems(["pos", "oe_sample"])
+        self._insert_dup = QtWidgets.QComboBox()
+        self._insert_dup.addItems(["prev", "current"])
+        self._insert_positions = QtWidgets.QLineEdit()
+        self._insert_positions.setPlaceholderText("e.g. 100, 102, 104")
+        self._btn_apply_insertions = QtWidgets.QPushButton("Apply insertions")
+        adv.addRow("Eye:", self._insert_eye)
+        adv.addRow("Position mode:", self._insert_mode)
+        adv.addRow("Duplicate:", self._insert_dup)
+        adv.addRow("Positions:", self._insert_positions)
+        adv.addRow(self._btn_apply_insertions)
+        layout.addWidget(self._advanced_box)
+        layout.addStretch(1)
+
+        self._btn_open_shift.clicked.connect(self._run_open_shift_plot)
+        self._btn_apply_shifts.clicked.connect(self._run_apply_shifts)
+        self._btn_preview_applied.clicked.connect(self._run_preview_applied)
+        self._btn_apply_insertions.clicked.connect(self._run_apply_insertions)
+        self._left_shift.valueChanged.connect(self._refresh_shift_ms_labels)
+        self._right_shift.valueChanged.connect(self._refresh_shift_ms_labels)
+        return w
+
+    def _build_verify_panel(self) -> QtWidgets.QWidget:
+        w = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(w)
+
+        form = QtWidgets.QFormLayout()
+        self._final_tol_frac = QtWidgets.QDoubleSpinBox()
+        self._final_tol_frac.setRange(0.1, 2.0)
+        self._final_tol_frac.setSingleStep(0.05)
+        self._final_tol_frac.setValue(float(self._config.final_sync_tol_frac))
+        form.addRow("Final merge tol_frac:", self._final_tol_frac)
+        layout.addLayout(form)
+
+        row = QtWidgets.QHBoxLayout()
+        self._btn_build_final = QtWidgets.QPushButton("Build final sync df")
+        self._btn_verify_final = QtWidgets.QPushButton("Verify final df")
+        self._btn_export_final = QtWidgets.QPushButton("Export final_sync_df.csv")
+        self._btn_export_final.setEnabled(False)
+        row.addWidget(self._btn_build_final)
+        row.addWidget(self._btn_verify_final)
+        row.addWidget(self._btn_export_final)
+        layout.addLayout(row)
+
+        self._sanity_plot = FinalSyncSanityPlot()
+        self._sanity_plot.setMinimumHeight(240)
+        layout.addWidget(self._sanity_plot)
+
+        self._verify_text = QtWidgets.QPlainTextEdit()
+        self._verify_text.setReadOnly(True)
+        self._verify_text.setMaximumHeight(160)
+        layout.addWidget(self._verify_text)
+
+        self._btn_build_final.clicked.connect(self._run_build_final_df)
+        self._btn_verify_final.clicked.connect(self._run_verify_final_df)
+        self._btn_export_final.clicked.connect(self._run_export_final_df)
+        return w
+
+    def _build_dlc_jitter_panel(self) -> QtWidgets.QWidget:
+        w = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(w)
+
+        note = QtWidgets.QLabel(
+            "Requires exported final_sync_df.csv. Long steps run in the background; "
+            "the UI stays responsive."
+        )
+        note.setWordWrap(True)
+        layout.addWidget(note)
+
+        dlc_row = QtWidgets.QHBoxLayout()
+        self._dlc_threshold = QtWidgets.QDoubleSpinBox()
+        self._dlc_threshold.setRange(0.5, 1.0)
+        self._dlc_threshold.setSingleStep(0.01)
+        self._dlc_threshold.setValue(
+            float(getattr(self._config, "dlc_threshold_to_use", 0.95))
+        )
+        self._btn_read_dlc = QtWidgets.QPushButton("Read DLC + fit ellipses")
+        dlc_row.addWidget(QtWidgets.QLabel("DLC threshold:"))
+        dlc_row.addWidget(self._dlc_threshold)
+        dlc_row.addWidget(self._btn_read_dlc)
+        dlc_row.addStretch(1)
+        layout.addLayout(dlc_row)
+
+        jitter_row = QtWidgets.QHBoxLayout()
+        self._btn_jitter_report = QtWidgets.QPushButton("Compute jitter report")
+        self._btn_correct_jitter = QtWidgets.QPushButton("Correct jitter & remove LED blinks")
+        jitter_row.addWidget(self._btn_jitter_report)
+        jitter_row.addWidget(self._btn_correct_jitter)
+        layout.addLayout(jitter_row)
+
+        params = QtWidgets.QFormLayout()
+        self._jitter_max_distance = QtWidgets.QSpinBox()
+        self._jitter_max_distance.setRange(1, 500)
+        self._jitter_max_distance.setValue(
+            int(getattr(self._config, "jitter_max_distance", 60))
+        )
+        self._jitter_diff_threshold = QtWidgets.QSpinBox()
+        self._jitter_diff_threshold.setRange(1, 100)
+        self._jitter_diff_threshold.setValue(
+            int(getattr(self._config, "jitter_diff_threshold", 5))
+        )
+        self._jitter_gap = QtWidgets.QSpinBox()
+        self._jitter_gap.setRange(0, 200)
+        self._jitter_gap.setValue(int(getattr(self._config, "jitter_gap_to_bridge", 24)))
+        params.addRow("max_distance:", self._jitter_max_distance)
+        params.addRow("diff_threshold:", self._jitter_diff_threshold)
+        params.addRow("gap_to_bridge:", self._jitter_gap)
+        layout.addLayout(params)
+
+        preview_row = QtWidgets.QHBoxLayout()
+        self._btn_preview_jitter = QtWidgets.QPushButton("Preview outliers (both eyes)")
+        self._btn_apply_jitter = QtWidgets.QPushButton("Apply removal (both eyes)")
+        self._btn_apply_jitter.setEnabled(False)
+        preview_row.addWidget(self._btn_preview_jitter)
+        preview_row.addWidget(self._btn_apply_jitter)
+        layout.addLayout(preview_row)
+
+        plots = QtWidgets.QHBoxLayout()
+        left_box = QtWidgets.QGroupBox("Left eye drift")
+        left_lay = QtWidgets.QVBoxLayout(left_box)
+        self._jitter_plot_left = JitterDriftPlot()
+        self._jitter_plot_left.setMinimumHeight(180)
+        left_lay.addWidget(self._jitter_plot_left)
+        right_box = QtWidgets.QGroupBox("Right eye drift")
+        right_lay = QtWidgets.QVBoxLayout(right_box)
+        self._jitter_plot_right = JitterDriftPlot()
+        self._jitter_plot_right.setMinimumHeight(180)
+        right_lay.addWidget(self._jitter_plot_right)
+        plots.addWidget(left_box)
+        plots.addWidget(right_box)
+        layout.addLayout(plots)
+
+        self._btn_finalize_eye = QtWidgets.QPushButton("Finalize & export eye data (left/right_eye_data.csv)")
+        layout.addWidget(self._btn_finalize_eye)
+        layout.addStretch(1)
+
+        self._btn_read_dlc.clicked.connect(self._run_read_dlc)
+        self._btn_jitter_report.clicked.connect(self._run_jitter_report)
+        self._btn_correct_jitter.clicked.connect(self._run_correct_jitter)
+        self._btn_preview_jitter.clicked.connect(self._run_preview_jitter)
+        self._btn_apply_jitter.clicked.connect(self._run_apply_jitter_removal)
+        self._btn_finalize_eye.clicked.connect(self._run_finalize_eye_data)
+        return w
+
+    def set_block(self, block: BlockHandle | None) -> None:
+        self._block = block
+        self._blocksync = None
+        self._verify_result = None
+        self._vid_inds_left = None
+        self._vid_inds_right = None
+        self._btn_export_final.setEnabled(False)
+        self._btn_apply_jitter.setEnabled(False)
+        if block is None:
+            self._block_info.setText("No block loaded")
+            self._status("No block loaded.")
+            return
+        self._block_info.setText(f"Active block: {block.display_label}\n{block.block_path}")
+        self._status("Ready.")
+
+    def status_signature(self, block: BlockHandle) -> list[Path]:
+        ap = block.analysis_path
+        return [ap / "final_sync_df.csv", ap / "left_eye_data.csv", ap / "right_eye_data.csv"]
+
+    def _status(self, text: str) -> None:
+        self._status_label.setText(text)
+
+    def _blocksync_for_handle(self, handle: BlockHandle) -> BlockSync:
+        b = BlockSync(
+            handle.animal_call,
+            handle.experiment_date,
+            handle.block_num,
+            handle.path_to_animal_folder,
+            channeldict=handle.channeldict,
+        )
+        self._sanitize_blocksync_artifacts(b)
+        return b
+
+    def _require_blocksync(self) -> BlockSync:
+        if self._block is None:
+            raise RuntimeError("No block loaded.")
+        if self._blocksync is None:
+            self._blocksync = BlockSync(
+                self._block.animal_call,
+                self._block.experiment_date,
+                self._block.block_num,
+                self._block.path_to_animal_folder,
+                channeldict=self._block.channeldict,
+            )
+            self._sanitize_blocksync_artifacts(self._blocksync)
+        return self._blocksync
+
+    @staticmethod
+    def _sanitize_blocksync_artifacts(blocksync: BlockSync) -> None:
+        """Strip stale ``level_0`` / ``index`` columns from loaded analysis tables."""
+        if getattr(blocksync, "oe_events", None) is not None:
+            blocksync.oe_events = drop_pandas_index_artifact_columns(blocksync.oe_events)
+        if getattr(blocksync, "final_sync_df", None) is not None:
+            blocksync.final_sync_df = drop_pandas_index_artifact_columns(
+                blocksync.final_sync_df
+            )
+        if getattr(blocksync, "blocksync_df", None) is not None:
+            blocksync.blocksync_df = drop_pandas_index_artifact_columns(
+                blocksync.blocksync_df
+            )
+        if getattr(blocksync, "le_df", None) is not None:
+            blocksync.le_df = drop_pandas_index_artifact_columns(blocksync.le_df)
+        if getattr(blocksync, "re_df", None) is not None:
+            blocksync.re_df = drop_pandas_index_artifact_columns(blocksync.re_df)
+
+    def _ensure_eye_tracking_dfs(self, blocksync: BlockSync) -> None:
+        """DLC/jitter steps need le_df/re_df on the BlockSync object, not only on disk."""
+        self._require_final_sync_on_disk(blocksync)
+        if (
+            getattr(blocksync, "le_df", None) is not None
+            and getattr(blocksync, "re_df", None) is not None
+            and "center_x" in blocksync.le_df.columns
+            and "Arena_TTL" in blocksync.le_df.columns
+        ):
+            return
+        ap = Path(blocksync.analysis_path)
+        le_path = ap / "le_df.csv"
+        re_path = ap / "re_df.csv"
+        if le_path.exists() and re_path.exists():
+            blocksync.le_df = load_eye_tracking_df_csv(le_path)
+            blocksync.re_df = load_eye_tracking_df_csv(re_path)
+            return
+        raise RuntimeError(
+            "le_df.csv / re_df.csv are missing. Run 'Read DLC + fit ellipses' in step 5 first."
+        )
+
+    @staticmethod
+    def _ensure_jitter_dicts(blocksync: BlockSync) -> None:
+        if getattr(blocksync, "le_jitter_dict", None) is None or getattr(
+            blocksync, "re_jitter_dict", None
+        ) is None:
+            pkl = Path(blocksync.analysis_path) / "jitter_report_dict.pkl"
+            if pkl.exists():
+                blocksync.get_jitter_reports(
+                    export=False,
+                    overwrite=False,
+                    remove_led_blinks=False,
+                    sort_on_loading=True,
+                )
+        for eye, jd in (("left", getattr(blocksync, "le_jitter_dict", None)), (
+            "right",
+            getattr(blocksync, "re_jitter_dict", None),
+        )):
+            if jd is None:
+                raise RuntimeError(
+                    "Jitter report is not loaded. Click 'Compute jitter report' first."
+                )
+            if "x_displacement" not in jd or "top_correlation_dist" not in jd:
+                raise RuntimeError(
+                    f"The saved jitter report for the {eye} eye looks incomplete. "
+                    "Delete analysis/jitter_report_dict.pkl and recompute."
+                )
+
+    def _run_guarded(self, fn, ok_msg: str) -> None:
+        try:
+            fn()
+        except Exception as e:
+            self._status(f"Error: {e}")
+            QtWidgets.QMessageBox.warning(self, "Sync tab", str(e))
+            return
+        self._status(ok_msg)
+
+    def _run_prepare_data(self) -> None:
+        def _do():
+            b = self._require_blocksync()
+            b.handle_eye_videos()
+            b.handle_arena_files()
+        self._run_guarded(_do, "Prepared eye/arena video metadata.")
+
+    def _run_parse_oe(self) -> None:
+        def _do():
+            b = self._require_blocksync()
+            b.parse_open_ephys_events(overwrite=False)
+            self._sanitize_blocksync_artifacts(b)
+        self._run_guarded(_do, "Parsed Open Ephys events.")
+
+    def _run_extract_brightness(self) -> None:
+        def _do():
+            b = self._require_blocksync()
+            b.get_eye_brightness_vectors(use_auto_roi=True, create_if_missing=False)
+        self._run_guarded(_do, "Extracted brightness vectors.")
+
+    def _run_build_arena_grid(self) -> None:
+        def _do():
+            b = self._require_blocksync()
+            self._sanitize_blocksync_artifacts(b)
+            grid, info = build_arena_grid_df(
+                b,
+                target_fps=float(self._arena_target_fps.value()),
+                arena_fps_tol_hz=float(self._arena_tol_hz.value()),
+            )
+            self._state.arena_grid_df = grid
+            self._simple_sync_summary.setPlainText(
+                f"Arena grid rows: {len(grid)}\n"
+                f"Inferred fps: {info.inferred_arena_fps:.4f}\n"
+                f"Used pseudo 60Hz: {info.used_pseudo_60hz}"
+            )
+        self._run_guarded(_do, "Built arena grid.")
+
+    def _run_simple_sync_build(self) -> None:
+        def _do():
+            b = self._require_blocksync()
+            self._sanitize_blocksync_artifacts(b)
+            df_l, df_r = simple_sync_build(b, export=True)
+            self._state.df_left_simple_sync = df_l
+            self._state.df_right_simple_sync = df_r
+            left_tick = describe_eye_tick(df_l)
+            right_tick = describe_eye_tick(df_r)
+            self._simple_sync_summary.setPlainText(
+                f"Left rows: {len(df_l)} | tick_ms~ {left_tick:.4f}\n"
+                f"Right rows: {len(df_r)} | tick_ms~ {right_tick:.4f}\n"
+                f"Left fps_est~ {1000.0 / left_tick:.4f}\n"
+                f"Right fps_est~ {1000.0 / right_tick:.4f}"
+            )
+            self._refresh_shift_ms_labels()
+        self._run_guarded(_do, "Built simple sync dataframes.")
+
+    def _require_simple_sync(self) -> tuple:
+        if self._state.df_left_simple_sync is None or self._state.df_right_simple_sync is None:
+            raise RuntimeError("Build simple sync first.")
+        return self._state.df_left_simple_sync, self._state.df_right_simple_sync
+
+    def _run_open_shift_plot(self) -> None:
+        def _do():
+            b = self._require_blocksync()
+            df_l, df_r = self._require_simple_sync()
+            open_shift_plot(b, df_l, df_r, show_led=True)
+        self._run_guarded(_do, "Opened shift plot in browser.")
+
+    def _refresh_shift_ms_labels(self) -> None:
+        if self._state.df_left_simple_sync is None or self._state.df_right_simple_sync is None:
+            self._left_shift_ms.setText("~? ms")
+            self._right_shift_ms.setText("~? ms")
+            return
+        l_tick = describe_eye_tick(self._state.df_left_simple_sync)
+        r_tick = describe_eye_tick(self._state.df_right_simple_sync)
+        self._left_shift_ms.setText(f"~{self._left_shift.value() * l_tick:.3f} ms")
+        self._right_shift_ms.setText(f"~{self._right_shift.value() * r_tick:.3f} ms")
+
+    def _run_apply_shifts(self) -> None:
+        def _do():
+            df_l, df_r = self._require_simple_sync()
+            # Per notebook convention: GUI input is inverse to plot slider values.
+            self._state.df_left_simple_sync = shift_eye_df_by_index(df_l, -int(self._left_shift.value()))
+            self._state.df_right_simple_sync = shift_eye_df_by_index(df_r, -int(self._right_shift.value()))
+            self._refresh_shift_ms_labels()
+        self._run_guarded(_do, "Applied index shifts to simple-sync dataframes.")
+
+    def _run_preview_applied(self) -> None:
+        def _do():
+            b = self._require_blocksync()
+            df_l, df_r = self._require_simple_sync()
+            open_shift_plot(b, df_l, df_r, show_led=True)
+        self._run_guarded(_do, "Opened preview for shifted traces.")
+
+    def _run_apply_insertions(self) -> None:
+        def _do():
+            df_l, df_r = self._require_simple_sync()
+            raw = self._insert_positions.text().strip()
+            if not raw:
+                raise RuntimeError("Provide insertion positions.")
+            positions = [int(x.strip()) for x in raw.split(",") if x.strip()]
+            eye = self._insert_eye.currentText()
+            mode = self._insert_mode.currentText()
+            dup = self._insert_dup.currentText()
+            if eye == "left":
+                if mode == "pos":
+                    self._state.df_left_simple_sync = insert_dup_by_pos(df_l, positions, duplicate=dup)
+                else:
+                    self._state.df_left_simple_sync = insert_dup_by_oe_sample(df_l, positions, duplicate=dup)
+            else:
+                if mode == "pos":
+                    self._state.df_right_simple_sync = insert_dup_by_pos(df_r, positions, duplicate=dup)
+                else:
+                    self._state.df_right_simple_sync = insert_dup_by_oe_sample(df_r, positions, duplicate=dup)
+        self._run_guarded(_do, "Applied manual frame insertions.")
+
+    def _run_build_final_df(self) -> None:
+        def _do():
+            b = self._require_blocksync()
+            df_l, df_r = self._require_simple_sync()
+            final_df = build_final_sync_df_merge_nearest(
+                b,
+                df_l,
+                df_r,
+                target_fps=float(self._arena_target_fps.value()),
+                tol_frac=float(self._final_tol_frac.value()),
+                export_csv=False,
+            )
+            self._state.final_sync_df = final_df
+            self._sanity_plot.set_data(
+                final_df,
+                fs_hz=float(b.sample_rate),
+                led_samples=self._led_samples_from_blocksync(b),
+            )
+            self._btn_export_final.setEnabled(False)
+            self._verify_result = None
+            self._verify_text.clear()
+        self._run_guarded(_do, "Built final sync dataframe (in memory).")
+
+    def _run_verify_final_df(self) -> None:
+        def _do():
+            b = self._require_blocksync()
+            df_l, df_r = self._require_simple_sync()
+            if self._state.final_sync_df is None:
+                raise RuntimeError("Build final sync df first.")
+            res = verify_final_df_against_sources(
+                b,
+                self._state.final_sync_df,
+                df_l,
+                df_r,
+                target_fps=float(self._arena_target_fps.value()),
+                tol_frac=float(self._final_tol_frac.value()),
+            )
+            self._verify_result = res
+            lines = [f"{k}: {v}" for k, v in res.items()]
+            self._verify_text.setPlainText("\n".join(lines))
+            self._btn_export_final.setEnabled(True)
+            self._sanity_plot.set_data(
+                self._state.final_sync_df,
+                fs_hz=float(b.sample_rate),
+                led_samples=self._led_samples_from_blocksync(b),
+            )
+        self._run_guarded(_do, "Verified final sync mapping against sources.")
+
+    def _run_export_final_df(self) -> None:
+        def _do():
+            b = self._require_blocksync()
+            if self._state.final_sync_df is None:
+                raise RuntimeError("Build final sync df first.")
+            export_final_sync_df(b, self._state.final_sync_df, overwrite=True)
+        self._run_guarded(_do, "Exported final sync CSV files.")
+
+    def _phase2_action_buttons(self) -> list[QtWidgets.QPushButton]:
+        return [
+            self._btn_read_dlc,
+            self._btn_jitter_report,
+            self._btn_correct_jitter,
+            self._btn_preview_jitter,
+            self._btn_apply_jitter,
+            self._btn_finalize_eye,
+        ]
+
+    def _sync_action_buttons(self) -> list[QtWidgets.QPushButton]:
+        return [
+            self._btn_prepare,
+            self._btn_parse_oe,
+            self._btn_extract_brightness,
+            self._btn_build_arena_grid,
+            self._btn_build_simple_sync,
+            self._btn_open_shift,
+            self._btn_apply_shifts,
+            self._btn_preview_applied,
+            self._btn_apply_insertions,
+            self._btn_build_final,
+            self._btn_verify_final,
+            self._btn_export_final,
+            *self._phase2_action_buttons(),
+        ]
+
+    def _set_sync_actions_busy(self, busy: bool, label: str = "") -> None:
+        for btn in self._sync_action_buttons():
+            btn.setEnabled(not busy)
+        if busy and label:
+            self._status(label)
+
+    def _set_phase2_busy(self, busy: bool, label: str = "") -> None:
+        self._set_sync_actions_busy(busy, label)
+
+    def _require_final_sync_on_disk(self, blocksync: BlockSync) -> None:
+        path = Path(blocksync.analysis_path) / "final_sync_df.csv"
+        if not path.exists():
+            raise RuntimeError(
+                "final_sync_df.csv is missing. Complete step 4 and export first."
+            )
+        load_final_sync_df(blocksync, verbose=False)
+
+    def _run_async(self, work_fn, ok_msg: str, busy_label: str) -> None:
+        if self._worker is not None and self._worker.isRunning():
+            QtWidgets.QMessageBox.information(
+                self, "Sync tab", "A background job is already running."
+            )
+            return
+
+        self._set_phase2_busy(True, busy_label)
+        worker = CallableWorker(work_fn, self)
+
+        def on_ok(_result=None) -> None:
+            self._set_phase2_busy(False)
+            self._status(ok_msg)
+            self._worker = None
+            worker.deleteLater()
+
+        def on_fail(msg: str) -> None:
+            self._set_phase2_busy(False)
+            self._status(f"Error: {msg}")
+            QtWidgets.QMessageBox.warning(self, "Sync tab", msg)
+            self._worker = None
+            worker.deleteLater()
+
+        worker.finished_ok.connect(on_ok)
+        worker.failed.connect(on_fail)
+        self._worker = worker
+        worker.start()
+
+    def _run_read_dlc(self) -> None:
+        def work():
+            b = self._require_blocksync()
+            self._require_final_sync_on_disk(b)
+            b.read_dlc_data(
+                threshold_to_use=float(self._dlc_threshold.value()),
+                export=True,
+                overwrite=False,
+            )
+
+        self._run_async(work, "Read DLC and fitted ellipses.", "Running DLC + ellipse fitting…")
+
+    def _run_jitter_report(self) -> None:
+        def work():
+            b = self._require_blocksync()
+            self._require_final_sync_on_disk(b)
+            b.get_jitter_reports(
+                export=True,
+                overwrite=False,
+                remove_led_blinks=False,
+                sort_on_loading=True,
+            )
+
+        self._run_async(work, "Computed jitter reports.", "Computing jitter report…")
+
+    def _run_correct_jitter(self) -> None:
+        def work():
+            b = self._require_blocksync()
+            self._ensure_jitter_dicts(b)
+            self._ensure_eye_tracking_dfs(b)
+            b.correct_jitter()
+            b.find_led_blink_frames(plot=False)
+            b.remove_led_blinks_from_eye_df(export=True)
+
+        self._run_async(
+            work,
+            "Corrected jitter and removed LED blinks.",
+            "Correcting jitter and removing LED blinks…",
+        )
+
+    def _run_preview_jitter(self) -> None:
+        try:
+            b = self._require_blocksync()
+            self._ensure_jitter_dicts(b)
+            self._ensure_eye_tracking_dfs(b)
+            md = int(self._jitter_max_distance.value())
+            dt = int(self._jitter_diff_threshold.value())
+            gap = int(self._jitter_gap.value())
+            _, vid_l = find_jittery_frames(b, "left", md, dt, gap_to_bridge=gap)
+            _, vid_r = find_jittery_frames(b, "right", md, dt, gap_to_bridge=gap)
+            self._vid_inds_left = np.asarray(vid_l, dtype=int)
+            self._vid_inds_right = np.asarray(vid_r, dtype=int)
+            ldf = pd.DataFrame.from_dict(b.le_jitter_dict)
+            rdf = pd.DataFrame.from_dict(b.re_jitter_dict)
+            self._jitter_plot_left.set_drift(
+                ldf["top_correlation_dist"].to_numpy(),
+                self._vid_inds_left,
+            )
+            self._jitter_plot_right.set_drift(
+                rdf["top_correlation_dist"].to_numpy(),
+                self._vid_inds_right,
+            )
+            self._btn_apply_jitter.setEnabled(True)
+            self._status(
+                f"Preview ready: left peaks={len(self._vid_inds_left)}, "
+                f"right peaks={len(self._vid_inds_right)}."
+            )
+        except Exception as e:
+            self._status(f"Error: {e}")
+            QtWidgets.QMessageBox.warning(self, "Sync tab", str(e))
+
+    def _run_apply_jitter_removal(self) -> None:
+        if self._vid_inds_left is None or self._vid_inds_right is None:
+            QtWidgets.QMessageBox.warning(
+                self, "Sync tab", "Preview outliers before applying removal."
+            )
+            return
+
+        def work():
+            b = self._require_blocksync()
+            self._ensure_eye_tracking_dfs(b)
+            b.remove_eye_datapoints_based_on_video_frames(
+                "left", indices_to_nan=self._vid_inds_left
+            )
+            b.remove_eye_datapoints_based_on_video_frames(
+                "right", indices_to_nan=self._vid_inds_right
+            )
+
+        self._run_async(work, "Applied jitter outlier removal for both eyes.", "Applying outlier removal…")
+
+    def _run_finalize_eye_data(self) -> None:
+        def work():
+            b = self._require_blocksync()
+            self._ensure_eye_tracking_dfs(b)
+            b.create_eye_data()
+            export_eye_data_2d(b)
+
+        self._run_async(
+            work,
+            "Created and exported left/right_eye_data.csv.",
+            "Finalizing eye data export…",
+        )
+
+    def _append_batch_log(self, line: str) -> None:
+        self._batch_log.appendPlainText(line)
+
+    def _batch_blocks(self) -> list[BlockHandle]:
+        blocks = list(self._state.blocks)
+        if len(blocks) < 2:
+            raise RuntimeError(
+                "Load at least two blocks at startup (comma-separated block list) "
+                "to use batch mode."
+            )
+        return blocks
+
+    def _run_batch(self) -> None:
+        if self._worker is not None and self._worker.isRunning():
+            QtWidgets.QMessageBox.information(
+                self, "Sync tab", "Wait for the current background job to finish."
+            )
+            return
+        if self._batch_worker is not None and self._batch_worker.isRunning():
+            return
+        try:
+            blocks = self._batch_blocks()
+        except RuntimeError as e:
+            QtWidgets.QMessageBox.warning(self, "Sync tab", str(e))
+            return
+
+        op = self._batch_op.currentText()
+        self._batch_log.clear()
+        self._append_batch_log(f"Starting batch: {op} ({len(blocks)} blocks)")
+        self._btn_batch_run.setEnabled(False)
+        self._btn_batch_cancel.setEnabled(True)
+        self._set_sync_actions_busy(True)
+
+        if op == "Extract brightness":
+            run_one = self._batch_extract_brightness
+        elif op == "Read DLC + fit ellipses":
+            run_one = self._batch_read_dlc
+        elif op == "Compute jitter report":
+            run_one = self._batch_jitter_report
+        else:
+            run_one = self._batch_correct_jitter
+
+        self._batch_worker = SequentialBatchWorker(blocks, run_one, self)
+        self._batch_worker.progress.connect(self._append_batch_log)
+        self._batch_worker.block_done.connect(self._on_batch_block_done)
+        self._batch_worker.finished_all.connect(self._on_batch_finished)
+        self._batch_worker.cancelled.connect(self._on_batch_cancelled)
+        self._batch_worker.start()
+
+    def _cancel_batch(self) -> None:
+        if self._batch_worker is not None and self._batch_worker.isRunning():
+            self._append_batch_log("Cancel requested…")
+            self._batch_worker.request_cancel()
+
+    def _on_batch_block_done(self, label: str, ok: bool, detail: str) -> None:
+        prefix = "OK" if ok else "FAIL"
+        self._append_batch_log(f"  {prefix} {label}: {detail}")
+
+    def _on_batch_finished(self) -> None:
+        self._append_batch_log("Batch finished.")
+        self._finish_batch_ui()
+
+    def _on_batch_cancelled(self) -> None:
+        self._append_batch_log("Batch cancelled.")
+        self._finish_batch_ui()
+
+    def _finish_batch_ui(self) -> None:
+        self._btn_batch_run.setEnabled(True)
+        self._btn_batch_cancel.setEnabled(False)
+        self._set_sync_actions_busy(False)
+        if self._batch_worker is not None:
+            self._batch_worker.deleteLater()
+            self._batch_worker = None
+        self._status("Batch complete.")
+
+    def _batch_extract_brightness(self, handle: BlockHandle) -> str:
+        b = self._blocksync_for_handle(handle)
+        b.get_eye_brightness_vectors(use_auto_roi=True, create_if_missing=False)
+        return "brightness vectors ready"
+
+    def _batch_read_dlc(self, handle: BlockHandle) -> str:
+        b = self._blocksync_for_handle(handle)
+        path = Path(b.analysis_path) / "final_sync_df.csv"
+        if not path.exists():
+            raise RuntimeError("final_sync_df.csv missing — run sync through step 4 first")
+        load_final_sync_df(b, verbose=False)
+        b.read_dlc_data(
+            threshold_to_use=float(self._dlc_threshold.value()),
+            export=True,
+            overwrite=False,
+        )
+        return "le_df.csv / re_df.csv written"
+
+    def _batch_jitter_report(self, handle: BlockHandle) -> str:
+        b = self._blocksync_for_handle(handle)
+        path = Path(b.analysis_path) / "final_sync_df.csv"
+        if not path.exists():
+            raise RuntimeError("final_sync_df.csv missing")
+        load_final_sync_df(b, verbose=False)
+        b.get_jitter_reports(
+            export=True,
+            overwrite=False,
+            remove_led_blinks=False,
+            sort_on_loading=True,
+        )
+        return "jitter_report_dict.pkl written"
+
+    def _batch_correct_jitter(self, handle: BlockHandle) -> str:
+        b = self._blocksync_for_handle(handle)
+        load_final_sync_df(b, verbose=False)
+        le_path = Path(b.analysis_path) / "le_df.csv"
+        re_path = Path(b.analysis_path) / "re_df.csv"
+        if not le_path.exists() or not re_path.exists():
+            raise RuntimeError("le_df/re_df missing — run Read DLC first")
+        b.le_df = load_eye_tracking_df_csv(le_path)
+        b.re_df = load_eye_tracking_df_csv(re_path)
+        b.get_jitter_reports(
+            export=False,
+            overwrite=False,
+            remove_led_blinks=False,
+            sort_on_loading=True,
+        )
+        if b.le_jitter_dict is None or b.re_jitter_dict is None:
+            raise RuntimeError("jitter report missing — run Compute jitter report first")
+        b.correct_jitter()
+        b.find_led_blink_frames(plot=False)
+        b.remove_led_blinks_from_eye_df(export=True)
+        return "jitter corrected, LED blinks removed"
+
+    @staticmethod
+    def _led_samples_from_blocksync(blocksync: BlockSync):
+        oe = getattr(blocksync, "oe_events", None)
+        if oe is None or "LED_driver" not in oe.columns:
+            return None
+        return oe["LED_driver"].dropna().to_numpy(dtype=float)

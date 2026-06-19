@@ -45,5 +45,8 @@ dependencies:
       - opencv-python==4.13.0.92
       - opencv-python-headless==4.13.0.92
       - PyYAML==6.0.3
+      # --- dev / test (needed for the Preprocessing GUI pytest suite) ---
+      - pytest>=8.0
+      - pytest-qt>=4.0
       # eye-tracking-system-tools: install from repo after env create:
       #   pip install -e . --no-deps

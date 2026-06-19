@@ -12,3 +12,17 @@ __pycache__/
 # OS junk
 .DS_Store
 Thumbs.db
+
+# Preprocessing GUI Phase 0 notebook re-run sandbox (hardlinked / copied
+# sample block, do not commit).
+/_phase0_sample_copy/
+
+# Local GUI / annotator scratch outputs (do not commit).
+/_annotator_out/
+/_out/
+
+# Machine-local conda export snapshot (use environment_annotator_*.yml instead).
+/eye_annotator.yml
+
+# Editable-install metadata
+*.egg-info/

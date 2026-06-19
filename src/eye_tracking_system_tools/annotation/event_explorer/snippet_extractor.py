@@ -325,3 +325,18 @@ def resample_to_grid(
             ).astype(np.float64)
         stacked.append(y_grid)
     return grid, np.vstack(stacked)
+
+
+def stack_mean_sem(stacked: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Per-timepoint mean and SEM across trials (ignores NaN from grid padding)."""
+    with np.errstate(invalid="ignore", divide="ignore"):
+        mean = np.nanmean(stacked, axis=0)
+        n_valid = np.sum(np.isfinite(stacked), axis=0)
+        std = np.nanstd(stacked, axis=0, ddof=1)
+    sem = np.full_like(mean, np.nan, dtype=np.float64)
+    two_plus = n_valid >= 2
+    if np.any(two_plus):
+        sem[two_plus] = std[two_plus] / np.sqrt(n_valid[two_plus])
+    sem[n_valid == 1] = 0.0
+    mean = np.where(n_valid > 0, mean, np.nan)
+    return mean, sem

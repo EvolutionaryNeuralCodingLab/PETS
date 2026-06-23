@@ -21,9 +21,16 @@ Use this when you want **one row per video frame** (ellipse + Kerr degrees) save
 
 **Invariant:** `eye_frame` in the sync-free tables must use the **same** frame numbering as `L_eye_frame` / `R_eye_frame` in `final_sync_df` (OpenCV frame index convention used by the verification UI).
 
-**Outputs:** CSV + JSON next to each eye `.mp4`; optional join writes `analysis/{left|right}_eye_degrees_from_syncfree_{tag}.csv`.
+**Outputs (after Finalize in Preprocessing GUI or notebook):**
 
-**Staleness guard:** If `final_sync_df.csv` is newer than those mapped outputs, rerun the mapping step in the notebook.
+- `{left|right}_syncfree_{tag}_kerr_refs.csv` — Kerr reference pixel
+- `{left|right}_syncfree_{tag}_eye_data.csv` — one row per frame (ellipse + Kerr)
+- `{left|right}_syncfree_{tag}_meta.json` — provenance
+- Optional: `analysis/{left|right}_eye_syncfree_{tag}_timeline.csv` — joined onto `final_sync_df` timeline
+
+Working `*_draft.csv` files exist only between ellipse fit and Finalize.
+
+**Staleness guard:** If `final_sync_df.csv` is newer than timeline CSVs, re-run Finalize with timeline mapping enabled.
 
 ## Workflow Steps
 

@@ -1,4 +1,5 @@
-# Block Annotator — Windows, minimal dev spec (run from repo root).
+# DEPRECATED — use environment.yml (eye_repo) on Windows or environment_linux.yml on Linux.
+#
 # Resolves all third-party deps via pyproject.toml when you use -e ".[annotator]".
 #
 # Copying the env to another PC: use environment_annotator_windows.yml instead

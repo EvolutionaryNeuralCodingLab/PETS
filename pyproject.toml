@@ -18,16 +18,19 @@ dependencies = [
     "pandas>=2.3.3",
     "scipy>=1.10.0,<1.16.0",
     "tqdm>=4.67.1",
-    "opencv-python",
+    "opencv-python-headless>=4.10",
     "open-ephys-python-tools",
     "jupyter",
     "ipykernel",
+    "PyQt6>=6.6.0",
+    "pyqtgraph>=0.13",
+    "PyYAML>=6.0",
 ]
 
 [project.optional-dependencies]
 annotator = [
-    "PyQt6==6.6.0",
-    "PyQt6-Qt6==6.6.0",
+    # Kept for pip install -e ".[annotator]" — same as base deps since v0.2 unified env.
+    "PyQt6>=6.6.0",
     "pyqtgraph>=0.13",
     "opencv-python-headless>=4.10",
     "PyYAML>=6.0",

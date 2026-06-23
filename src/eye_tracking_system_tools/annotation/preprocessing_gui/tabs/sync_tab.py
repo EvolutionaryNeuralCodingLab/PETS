@@ -11,6 +11,14 @@ from PyQt6 import QtCore, QtWidgets
 from eye_tracking_system_tools.annotation.preprocessing_gui.bokeh_launcher import (
     open_shift_plot,
 )
+from eye_tracking_system_tools.annotation.preprocessing_gui.manual_ttl_dialog import (
+    ManualTtlDialog,
+    parse_open_ephys_with_manual_override,
+)
+from eye_tracking_system_tools.annotation.preprocessing_gui.qt_roi_picker import (
+    extract_brightness_with_roi_fallback,
+    show_eye_brightness_preview,
+)
 from eye_tracking_system_tools.annotation.preprocessing_gui.models import BlockHandle
 from eye_tracking_system_tools.annotation.preprocessing_gui.pyqtgraph_helpers import (
     FinalSyncSanityPlot,
@@ -132,16 +140,31 @@ class SyncTab(BaseTab):
         btns = QtWidgets.QHBoxLayout()
         self._btn_prepare = QtWidgets.QPushButton("Prepare data (eye + arena)")
         self._btn_parse_oe = QtWidgets.QPushButton("Parse OE events")
+        self._btn_manual_ttl = QtWidgets.QPushButton("Manual TTL mapping…")
         self._btn_extract_brightness = QtWidgets.QPushButton("Extract brightness")
+        self._btn_preview_brightness = QtWidgets.QPushButton("Preview eye brightness traces")
+        self._btn_manual_roi = QtWidgets.QPushButton(
+            "Re-run eye brightness with manual ROIs"
+        )
         btns.addWidget(self._btn_prepare)
         btns.addWidget(self._btn_parse_oe)
+        btns.addWidget(self._btn_manual_ttl)
         btns.addWidget(self._btn_extract_brightness)
         layout.addLayout(btns)
+
+        btns2 = QtWidgets.QHBoxLayout()
+        btns2.addWidget(self._btn_preview_brightness)
+        btns2.addWidget(self._btn_manual_roi)
+        btns2.addStretch(1)
+        layout.addLayout(btns2)
         layout.addStretch(1)
 
         self._btn_prepare.clicked.connect(self._run_prepare_data)
         self._btn_parse_oe.clicked.connect(self._run_parse_oe)
+        self._btn_manual_ttl.clicked.connect(self._run_manual_ttl_override)
         self._btn_extract_brightness.clicked.connect(self._run_extract_brightness)
+        self._btn_preview_brightness.clicked.connect(self._run_preview_brightness)
+        self._btn_manual_roi.clicked.connect(self._run_manual_roi_override)
         return w
 
     def _build_simple_sync_panel(self) -> QtWidgets.QWidget:
@@ -503,15 +526,115 @@ class SyncTab(BaseTab):
     def _run_parse_oe(self) -> None:
         def _do():
             b = self._require_blocksync()
-            b.parse_open_ephys_events(overwrite=False)
+            try:
+                b.parse_open_ephys_events(overwrite=False, interactive_on_fail=False)
+            except Exception as auto_err:
+                reply = QtWidgets.QMessageBox.question(
+                    self,
+                    "Parse OE events",
+                    f"Automatic parse failed:\n{auto_err}\n\n"
+                    "Open manual TTL mapping dialog?",
+                    QtWidgets.QMessageBox.StandardButton.Yes
+                    | QtWidgets.QMessageBox.StandardButton.No,
+                )
+                if reply != QtWidgets.QMessageBox.StandardButton.Yes:
+                    raise auto_err
+                if not self._open_manual_ttl_dialog(b, overwrite=True):
+                    raise RuntimeError("Manual TTL mapping cancelled.")
             self._sanitize_blocksync_artifacts(b)
+
         self._run_guarded(_do, "Parsed Open Ephys events.")
+
+    def _events_csv_path(self, blocksync: BlockSync) -> Path:
+        return (
+            blocksync.block_path
+            / "oe_files"
+            / blocksync.oe_dirname
+            / "events.csv"
+        )
+
+    def _open_manual_ttl_dialog(
+        self, blocksync: BlockSync, *, overwrite: bool
+    ) -> bool:
+        events_csv = self._events_csv_path(blocksync)
+        if not events_csv.is_file():
+            blocksync.oe_events_to_csv(align_to_zero=True)
+        dlg = ManualTtlDialog(blocksync, events_csv, parent=self)
+        if dlg.exec() != QtWidgets.QDialog.DialogCode.Accepted:
+            return False
+        manual_line_map, arena_window = dlg.payload()
+        if manual_line_map is None or arena_window is None:
+            return False
+        parse_open_ephys_with_manual_override(
+            blocksync,
+            manual_line_map,
+            arena_window,
+            overwrite=overwrite,
+        )
+        return True
+
+    def _run_manual_ttl_override(self) -> None:
+        def _do():
+            b = self._require_blocksync()
+            if not self._open_manual_ttl_dialog(b, overwrite=True):
+                raise RuntimeError("Manual TTL mapping cancelled.")
+            self._sanitize_blocksync_artifacts(b)
+
+        self._run_guarded(_do, "Applied manual TTL mapping and re-parsed events.")
 
     def _run_extract_brightness(self) -> None:
         def _do():
             b = self._require_blocksync()
-            b.get_eye_brightness_vectors(use_auto_roi=True, create_if_missing=False)
+            pkl = Path(b.analysis_path) / "eye_brightness_values_dict.pkl"
+            if pkl.is_file():
+                b.get_eye_brightness_vectors(use_auto_roi=True, create_if_missing=False)
+                return
+            extract_brightness_with_roi_fallback(
+                b,
+                use_auto_roi=True,
+                parent=self,
+            )
+
         self._run_guarded(_do, "Extracted brightness vectors.")
+
+    def _run_preview_brightness(self) -> None:
+        try:
+            b = self._require_blocksync()
+            show_eye_brightness_preview(b, parent=self)
+            self._status("Displayed eye brightness preview.")
+        except Exception as e:
+            self._status(f"Error: {e}")
+            QtWidgets.QMessageBox.warning(self, "Eye brightness preview", str(e))
+
+    def _run_manual_roi_override(self) -> None:
+        b = self._require_blocksync()
+        pkl = Path(b.analysis_path) / "eye_brightness_values_dict.pkl"
+        if pkl.is_file():
+            reply = QtWidgets.QMessageBox.warning(
+                self,
+                "Overwrite eye brightness file?",
+                "This will re-run eye brightness generation with manual ROIs and "
+                f"overwrite:\n{pkl}\n\n"
+                "Only continue if the current ROI/traces look wrong.",
+                QtWidgets.QMessageBox.StandardButton.Ok
+                | QtWidgets.QMessageBox.StandardButton.Cancel,
+            )
+            if reply != QtWidgets.QMessageBox.StandardButton.Ok:
+                self._status("Manual ROI re-run cancelled.")
+                return
+
+        def _do():
+            extract_brightness_with_roi_fallback(
+                b,
+                use_auto_roi=False,
+                force=True,
+                parent=self,
+            )
+
+        self._run_guarded(
+            _do,
+            "Re-ran eye brightness generation with manual ROIs.",
+        )
 
     def _run_build_arena_grid(self) -> None:
         def _do():
@@ -525,8 +648,7 @@ class SyncTab(BaseTab):
             self._state.arena_grid_df = grid
             self._simple_sync_summary.setPlainText(
                 f"Arena grid rows: {len(grid)}\n"
-                f"Inferred fps: {info.inferred_arena_fps:.4f}\n"
-                f"Used pseudo 60Hz: {info.used_pseudo_60hz}"
+                f"Inferred fps: {info.inferred_arena_fps:.4f}"
             )
         self._run_guarded(_do, "Built arena grid.")
 
@@ -678,7 +800,10 @@ class SyncTab(BaseTab):
         return [
             self._btn_prepare,
             self._btn_parse_oe,
+            self._btn_manual_ttl,
             self._btn_extract_brightness,
+            self._btn_preview_brightness,
+            self._btn_manual_roi,
             self._btn_build_arena_grid,
             self._btn_build_simple_sync,
             self._btn_open_shift,
@@ -916,7 +1041,15 @@ class SyncTab(BaseTab):
 
     def _batch_extract_brightness(self, handle: BlockHandle) -> str:
         b = self._blocksync_for_handle(handle)
-        b.get_eye_brightness_vectors(use_auto_roi=True, create_if_missing=False)
+        pkl = Path(b.analysis_path) / "eye_brightness_values_dict.pkl"
+        if pkl.is_file():
+            b.get_eye_brightness_vectors(use_auto_roi=True, create_if_missing=False)
+        else:
+            extract_brightness_with_roi_fallback(
+                b,
+                use_auto_roi=True,
+                parent=self,
+            )
         return "brightness vectors ready"
 
     def _batch_read_dlc(self, handle: BlockHandle) -> str:

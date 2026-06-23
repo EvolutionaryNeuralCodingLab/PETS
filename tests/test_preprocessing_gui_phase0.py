@@ -316,8 +316,9 @@ def test_behavior_tab_disables_when_lizmov_missing(
 
     tab = BehaviorTab(state, cfg)
     tab.set_block(block)
-    assert not tab.isEnabled()
+    assert not tab._btn_load.isEnabled()
     assert "lizMov" in tab.toolTip()
+    assert "lizMov" in tab._lizmov_banner.text()
 
 
 def test_simple_sync_build_matches_notebook(sample_block):

@@ -43,41 +43,40 @@
    - Select the kernel: "Python (eye_repo)" or "eye_repo"
    - In VS Code: Press `Ctrl+Shift+P` → "Python: Select Interpreter" → Choose the `eye_repo` environment
 
-## Block Annotator (separate environment)
+## Block Annotator (same environment)
 
-The annotator uses **PyQt6** and **OpenCV** in one GUI process. On Windows, that conflicts with the **conda `opencv`** stack in `eye_repo`. Use a dedicated environment.
+The annotator uses **PyQt6** and **OpenCV** in one GUI process. Use the unified **`eye_repo`**
+environment (`environment.yml` on Windows/macOS, `environment_linux.yml` on Linux).
 
-### Windows — copy repo to another PC
-
-Copy the **full PETS repository** (not only a yml file). On the destination machine:
+### Windows
 
 ```powershell
 cd D:\path\to\PETS
-conda env create -f environment_annotator_windows.yml
-conda activate eye_annotator
-pip install -e . --no-deps
+conda env create -f environment.yml
+conda activate eye_repo
+pip install -e .
 python -m eye_tracking_system_tools.annotation.block_annotator
 ```
 
-Or: `powershell -ExecutionPolicy Bypass -File scripts\setup_annotator_windows.ps1`
+Or: `powershell -ExecutionPolicy Bypass -File scripts\setup_annotator_windows.ps1` (script updated for `eye_repo`).
 
 | File | Use |
 |------|-----|
-| `environment_annotator_windows.yml` | **Portable Windows** — pinned pip deps; then `pip install -e . --no-deps` |
-| `environment_annotator.yml` | **Dev on your machine** — minimal; `-e ".[annotator]"` pulls deps from `pyproject.toml` |
-| `eye_annotator.yml` | **Do not use** — `conda env export` snapshot; fails on other PCs |
-
-`eye_repo` is unchanged for notebooks and preprocessing; install it with `environment.yml` / `requirements.txt` as above (no PyQt6).
+| `environment.yml` | **Canonical** unified env (`eye_repo`) |
+| `environment_linux.yml` | Linux with conda-forge PyQt/OpenCV |
+| `environment_unified.yml` | Same as `environment.yml` (transitional alias) |
+| `environment_annotator*.yml` | **Deprecated** — use `environment.yml` |
 
 ### Ubuntu / Linux without sudo
 
-You do **not** need `apt` or root if conda (Miniforge/Miniconda) is installed in your home directory. Use **`environment_annotator_linux.yml`**, which installs PyQt, OpenCV, and X11/Qt libraries from **conda-forge** instead of system packages.
+You do **not** need `apt` or root if conda (Miniforge/Miniconda) is installed in your home directory. Use **`environment_linux.yml`**:
 
 ```bash
 cd /path/to/PETS
-conda env create -f environment_annotator_linux.yml
-conda activate eye_annotator
+conda env create -f environment_linux.yml
+conda activate eye_repo
 python -m eye_tracking_system_tools.annotation.block_annotator
+```
 ```
 
 Or: `bash scripts/setup_annotator_linux.sh`

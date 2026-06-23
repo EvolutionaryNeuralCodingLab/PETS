@@ -1,4 +1,5 @@
-# Portable Windows conda env for the Block Annotator GUI.
+# DEPRECATED — use environment.yml (eye_repo) instead.
+# Kept for one release cycle so existing scripts keep working.
 #
 # You must copy the full PETS repo to the destination PC (this file alone is not enough —
 # the annotator code lives in this repository and is not on PyPI).

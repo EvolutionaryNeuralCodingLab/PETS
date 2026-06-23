@@ -22,6 +22,10 @@ import pytest
 
 SAMPLE_BLOCK_PATH = Path(r"D:\sample_data_for_eye_repo\PV_106\2025_09_04\block_015")
 
+BEHAVIOR_SAMPLE_BLOCK_PATH = Path(
+    r"D:\sample_data_for_eye_repo\PV_126\2024_07_18\block_006"
+)
+
 
 def _sample_block_available() -> bool:
     return (SAMPLE_BLOCK_PATH / "analysis" / "final_sync_df.csv").exists()
@@ -52,6 +56,54 @@ def sample_block(sample_block_path: Path):
         path_to_animal_folder=str(sample_block_path.parents[2]),
     )
     load_final_sync_df(block, verbose=False)
+    return block
+
+
+def _behavior_sample_block_available() -> bool:
+    try:
+        from eye_tracking_system_tools.annotation.preprocessing_gui.tabs.behavior_tab import (
+            has_liz_mov,
+        )
+        from eye_tracking_system_tools.annotation.preprocessing_gui.models import (
+            BlockHandle,
+        )
+
+        if not BEHAVIOR_SAMPLE_BLOCK_PATH.is_dir():
+            return False
+        handle = BlockHandle(
+            animal_call="PV_126",
+            experiment_date="2024_07_18",
+            block_num="006",
+            block_path=BEHAVIOR_SAMPLE_BLOCK_PATH,
+            path_to_animal_folder=BEHAVIOR_SAMPLE_BLOCK_PATH.parents[2],
+        )
+        return has_liz_mov(handle)
+    except Exception:
+        return False
+
+
+@pytest.fixture(scope="session")
+def behavior_sample_block_path() -> Path:
+    if not _behavior_sample_block_available():
+        pytest.skip(
+            f"Behavior sample block (PV_126 block 006) or lizMov.mat not found at "
+            f"{BEHAVIOR_SAMPLE_BLOCK_PATH}; skipping behavior integration tests."
+        )
+    return BEHAVIOR_SAMPLE_BLOCK_PATH
+
+
+@pytest.fixture(scope="session")
+def behavior_sample_block(behavior_sample_block_path: Path):
+    """BlockSync for PV_126 / 2024_07_18 / block_006 (has lizMov.mat)."""
+    from eye_tracking_system_tools.preprocessing.BlockSync_class import BlockSync
+
+    block = BlockSync(
+        animal_call="PV_126",
+        experiment_date="2024_07_18",
+        block_num="006",
+        path_to_animal_folder=str(behavior_sample_block_path.parents[2]),
+    )
+    block.block_get_lizard_movement()
     return block
 
 

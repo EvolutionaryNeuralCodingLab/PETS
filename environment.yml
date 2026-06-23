@@ -1,20 +1,34 @@
+# PETS unified environment (eye_repo)
+#
+# See environment_unified.yml for the full comment block.
+# This file is the canonical env name users should create.
+
 name: eye_repo
 channels:
   - conda-forge
 dependencies:
   - python>=3.10,<3.11
   - pip
-  - numpy>=2.0.0,<2.3.0
-  - pandas>=2.3.3
-  - scipy>=1.10.0,<1.16.0
-  - matplotlib>=3.10.8
-  - h5py>=3.15.1
-  - lxml>=6.0.2
-  - tqdm>=4.67.1
-  - bokeh>=3.8.2
-  - opencv
+  - setuptools
+  - wheel
   - jupyter
   - ipykernel
   - pip:
-      - ellipse>=0.6.0
-      - open-ephys-python-tools
+      - numpy==2.2.6
+      - scipy==1.15.3
+      - pandas==2.3.3
+      - matplotlib==3.10.9
+      - h5py==3.16.0
+      - lxml==6.1.1
+      - tqdm==4.67.3
+      - bokeh==3.9.0
+      - ellipse==0.6.0
+      - open-ephys-python-tools==1.0.1
+      - PyQt6==6.6.0
+      - PyQt6-Qt6==6.6.0
+      - PyQt6_sip==13.11.1
+      - pyqtgraph==0.14.0
+      - opencv-python-headless==4.13.0.92
+      - PyYAML==6.0.3
+      - pytest>=8.0
+      - pytest-qt>=4.0

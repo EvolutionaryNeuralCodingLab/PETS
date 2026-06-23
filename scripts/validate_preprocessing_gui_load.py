@@ -124,7 +124,10 @@ def main() -> int:
             "_stack",
             "_btn_prepare",
             "_btn_parse_oe",
+            "_btn_manual_ttl",
             "_btn_extract_brightness",
+            "_btn_preview_brightness",
+            "_btn_manual_roi",
             "_btn_build_arena_grid",
             "_btn_build_simple_sync",
             "_btn_open_shift",
@@ -166,6 +169,170 @@ def main() -> int:
                 ok = False
             else:
                 print("[OK] Sync tab batch panel instantiated.")
+
+        phase3_attrs = ["_btn_manual_ttl", "_btn_preview_brightness", "_btn_manual_roi"]
+        missing_p3 = [name for name in phase3_attrs if not hasattr(sync_tab, name)]
+        if missing_p3:
+            print(f"[FAIL] Sync tab missing expected Phase 3 widgets: {missing_p3}")
+            ok = False
+        else:
+            print("[OK] Sync tab Phase 3 manual-fallback widgets instantiated.")
+            try:
+                from eye_tracking_system_tools.annotation.preprocessing_gui.manual_ttl_dialog import (
+                    ManualTtlDialog,
+                )
+                from eye_tracking_system_tools.annotation.preprocessing_gui.qt_roi_picker import (
+                    QtRoiPickerDialog,
+                )
+            except ImportError as e:
+                print(f"[FAIL] Phase 3 modules import error: {e}")
+                ok = False
+            else:
+                print("[OK] Phase 3 fallback modules import cleanly.")
+
+    verify_tab = win._tabs.get("verify")
+    if verify_tab is None:
+        print("[FAIL] Verify tab missing from tab registry.")
+        ok = False
+    else:
+        verify_attrs = ["_stale_banner", "_btn_save", "_verifier_host"]
+        missing_v = [n for n in verify_attrs if not hasattr(verify_tab, n)]
+        if missing_v:
+            print(f"[FAIL] Verify tab missing expected Phase 4 attrs: {missing_v}")
+            ok = False
+        else:
+            print("[OK] Verify tab Phase 4 shell instantiated.")
+            try:
+                from eye_tracking_system_tools.annotation.preprocessing_gui.ellipse_verifier import (
+                    EllipseVerifierWidget,
+                )
+            except ImportError as e:
+                print(f"[FAIL] ellipse_verifier import error: {e}")
+                ok = False
+            else:
+                print("[OK] EllipseVerifierWidget imports cleanly.")
+        if blocks:
+            try:
+                verify_tab.set_block(blocks[0])
+                if verify_tab._left_verifier is None or verify_tab._right_verifier is None:
+                    print(
+                        "[WARN] Verify tab verifiers not loaded (missing eye CSVs/videos on sample block)."
+                    )
+                else:
+                    print("[OK] Verify tab loaded dual EllipseVerifierWidget instances.")
+                    for verifier in (
+                        verify_tab._left_verifier,
+                        verify_tab._right_verifier,
+                    ):
+                        for attr in ("_btn_save", "_btn_quit"):
+                            if hasattr(verifier, attr):
+                                print(
+                                    f"[FAIL] EllipseVerifierWidget should not expose {attr} "
+                                    "(single tab-level Save only)."
+                                )
+                                ok = False
+            except Exception as e:
+                print(f"[WARN] Verify tab set_block: {e}")
+
+    kerr_tab = win._tabs.get("kerr")
+    if kerr_tab is None:
+        print("[FAIL] Kerr tab missing from tab registry.")
+        ok = False
+    else:
+        kerr_attrs = [
+            "_name_tag",
+            "_btn_calculate",
+            "_btn_export",
+            "_btn_batch",
+            "_refs_banner",
+        ]
+        missing_k = [n for n in kerr_attrs if not hasattr(kerr_tab, n)]
+        if missing_k:
+            print(f"[FAIL] Kerr tab missing expected Phase 5 widgets: {missing_k}")
+            ok = False
+        else:
+            print("[OK] Kerr tab Phase 5 widgets instantiated.")
+        if blocks:
+            try:
+                kerr_tab.set_block(blocks[0])
+                print("[OK] Kerr tab set_block completed.")
+            except Exception as e:
+                print(f"[WARN] Kerr tab set_block: {e}")
+
+    behavior_tab = win._tabs.get("behavior")
+    if behavior_tab is None:
+        print("[FAIL] Behavior tab missing from tab registry.")
+        ok = False
+    else:
+        behavior_attrs = [
+            "_movement_plot",
+            "_btn_load",
+            "_btn_rolling",
+            "_btn_export",
+            "_threshold",
+            "_lizmov_banner",
+        ]
+        missing_b = [n for n in behavior_attrs if not hasattr(behavior_tab, n)]
+        if missing_b:
+            print(f"[FAIL] Behavior tab missing expected Phase 6 widgets: {missing_b}")
+            ok = False
+        else:
+            print("[OK] Behavior tab Phase 6 widgets instantiated.")
+        if blocks:
+            try:
+                behavior_tab.set_block(blocks[0])
+                print("[OK] Behavior tab set_block completed (PV_106 — expect disabled workflow).")
+            except Exception as e:
+                print(f"[WARN] Behavior tab set_block: {e}")
+
+    # Optional: smoke Behavior tab with lizMov-bearing block when present.
+    behavior_blocks = discover_blocks(args.experiment_path, "PV_126", ["006"])
+    if behavior_blocks:
+        try:
+            behavior_tab.set_block(behavior_blocks[0])
+            if behavior_tab._btn_load.isEnabled():
+                n_items = len(
+                    behavior_tab._movement_plot.plot_widget.listDataItems()
+                )
+                if behavior_tab._rolling_df is not None and n_items >= 1:
+                    print(
+                        "[OK] Behavior tab enabled for PV_126 / block_006 "
+                        f"(lizMov present, {len(behavior_tab._rolling_df)} windows plotted)."
+                    )
+                else:
+                    print(
+                        "[FAIL] PV_126 block_006 loaded but movement trace not plotted."
+                    )
+                    ok = False
+            else:
+                print("[WARN] PV_126 block_006 found but lizMov workflow disabled.")
+        except Exception as e:
+            print(f"[WARN] Behavior tab PV_126 set_block: {e}")
+
+    syncfree_tab = win._tabs.get("syncfree")
+    if syncfree_tab is None:
+        print("[FAIL] Sync-free tab missing from tab registry.")
+        ok = False
+    else:
+        syncfree_attrs = [
+            "_artifact_tag",
+            "_btn_ellipses",
+            "_btn_finalize",
+            "_btn_save_draft",
+            "_stale_banner",
+        ]
+        missing_s = [n for n in syncfree_attrs if not hasattr(syncfree_tab, n)]
+        if missing_s:
+            print(f"[FAIL] Sync-free tab missing expected Phase 7 widgets: {missing_s}")
+            ok = False
+        else:
+            print("[OK] Sync-free tab Phase 7 widgets instantiated.")
+        if blocks:
+            try:
+                syncfree_tab.set_block(blocks[0])
+                print("[OK] Sync-free tab set_block completed.")
+            except Exception as e:
+                print(f"[WARN] Sync-free tab set_block: {e}")
 
     # Touch the close path so persistence runs without crashing.
     try:

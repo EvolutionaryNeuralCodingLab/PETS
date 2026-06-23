@@ -231,16 +231,235 @@ def write_self_kerr_refs_csv(
     return p
 
 
+def video_path_for_eye(block, eye: Literal["left", "right"]) -> Path:
+    """Return the primary eye video path, calling ``handle_eye_videos`` if needed."""
+    if not getattr(block, "le_videos", None) or not getattr(block, "re_videos", None):
+        block.handle_eye_videos()
+    if eye.lower() == "left":
+        if not block.le_videos:
+            raise FileNotFoundError("Left eye video not found.")
+        return Path(block.le_videos[0])
+    if not block.re_videos:
+        raise FileNotFoundError("Right eye video not found.")
+    return Path(block.re_videos[0])
+
+
+def merge_self_kerr_refs(
+    block,
+    eye: Literal["left", "right"],
+    rx: int,
+    ry: int,
+) -> Path:
+    """Merge one eye's Kerr ref into ``analysis/self_kerr_refs.csv`` (notebook helper)."""
+    ap = Path(block.analysis_path)
+    p = ap / "self_kerr_refs.csv"
+    row = {
+        "kerr_ref_l_x": getattr(block, "kerr_ref_l_x", None),
+        "kerr_ref_l_y": getattr(block, "kerr_ref_l_y", None),
+        "kerr_ref_r_x": getattr(block, "kerr_ref_r_x", None),
+        "kerr_ref_r_y": getattr(block, "kerr_ref_r_y", None),
+    }
+    if p.is_file():
+        prev = pd.read_csv(p).iloc[0].to_dict()
+        for key in row:
+            if key in prev and pd.notna(prev[key]):
+                row[key] = prev[key]
+    eye_lc = eye.lower()
+    if eye_lc == "left":
+        row["kerr_ref_l_x"], row["kerr_ref_l_y"] = rx, ry
+        block.kerr_ref_l_x, block.kerr_ref_l_y = rx, ry
+    else:
+        row["kerr_ref_r_x"], row["kerr_ref_r_y"] = rx, ry
+        block.kerr_ref_r_x, block.kerr_ref_r_y = rx, ry
+    return write_self_kerr_refs_csv(
+        block,
+        kerr_ref_l_x=row["kerr_ref_l_x"],
+        kerr_ref_l_y=row["kerr_ref_l_y"],
+        kerr_ref_r_x=row["kerr_ref_r_x"],
+        kerr_ref_r_y=row["kerr_ref_r_y"],
+    )
+
+
+def maybe_load_kerr_refs(
+    block,
+    eye: Literal["left", "right"],
+) -> tuple[int, int]:
+    """Load Kerr reference pixels for one eye from the block or ``self_kerr_refs.csv``."""
+    eye_lc = eye.lower()
+    if eye_lc == "left":
+        if getattr(block, "kerr_ref_l_x", None) is not None and getattr(
+            block, "kerr_ref_l_y", None
+        ) is not None:
+            return int(block.kerr_ref_l_x), int(block.kerr_ref_l_y)
+    elif getattr(block, "kerr_ref_r_x", None) is not None and getattr(
+        block, "kerr_ref_r_y", None
+    ) is not None:
+        return int(block.kerr_ref_r_x), int(block.kerr_ref_r_y)
+
+    p = Path(block.analysis_path) / "self_kerr_refs.csv"
+    if p.is_file():
+        row = pd.read_csv(p).iloc[0]
+        if eye_lc == "left" and pd.notna(row.get("kerr_ref_l_x")):
+            return int(row["kerr_ref_l_x"]), int(row["kerr_ref_l_y"])
+        if eye_lc == "right" and pd.notna(row.get("kerr_ref_r_x")):
+            return int(row["kerr_ref_r_x"]), int(row["kerr_ref_r_y"])
+    raise FileNotFoundError(
+        f"No Kerr ref for {eye}. Run verification first or create {p}"
+    )
+
+
+def syncfree_mapped_is_stale(
+    block,
+    eye: Literal["left", "right"],
+    tag: str,
+) -> bool:
+    """True when ``final_sync_df.csv`` is newer than the mapped timeline CSV."""
+    ap = Path(block.analysis_path)
+    final_sync = ap / "final_sync_df.csv"
+    mapped = analysis_syncfree_timeline_path(block, eye, tag)
+    if not final_sync.is_file() or not mapped.is_file():
+        return False
+    return final_sync.stat().st_mtime > mapped.stat().st_mtime
+
+
+def analysis_syncfree_timeline_path(
+    block,
+    eye: Literal["left", "right"],
+    tag: str,
+) -> Path:
+    """OE-timeline mapping of finalized sync-free eye data (optional post-finalize)."""
+    return Path(block.analysis_path) / f"{eye.lower()}_eye_syncfree_{tag}_timeline.csv"
+
+
 def default_syncfree_paths(video_path: Path, eye: str, tag: str = "v1") -> dict[str, Path]:
-    """Standard artifact names next to the video file."""
+    """Canonical sync-free artifacts next to the eye ``.mp4``.
+
+    Final outputs (after **Finalize**):
+
+    - ``{side}_syncfree_{tag}_kerr_refs.csv`` — Kerr reference pixel for this eye
+    - ``{side}_syncfree_{tag}_eye_data.csv`` — one row per video frame with ellipse
+      geometry and Kerr angles
+    - ``{side}_syncfree_{tag}_meta.json`` — provenance and pipeline metadata
+
+    Working file (removed on finalize):
+
+    - ``{side}_syncfree_{tag}_draft.csv`` — ellipse fit awaiting verification
+    """
+    d = video_path.parent
+    side = "left" if eye.lower() == "left" else "right"
+    base = f"{side}_syncfree_{tag}"
+    return {
+        "draft": d / f"{base}_draft.csv",
+        "eye_data": d / f"{base}_eye_data.csv",
+        "kerr_refs": d / f"{base}_kerr_refs.csv",
+        "meta": d / f"{base}_meta.json",
+    }
+
+
+def legacy_syncfree_paths(video_path: Path, eye: str, tag: str = "v1") -> dict[str, Path]:
+    """Pre-unification artifact names (read-only migration)."""
     d = video_path.parent
     side = "left" if eye.lower() == "left" else "right"
     base = f"{side}_syncfree_{tag}"
     return {
         "ellipses": d / f"{base}_ellipses.csv",
         "verified": d / f"{base}_verified.csv",
-        "meta": d / f"{base}_meta.json",
-        "kerr_refs_sidecar": d / f"{base}_kerr_refs.csv",
         "kerr_raw": d / f"{base}_kerr_angles.csv",
         "degrees": d / f"{base}_degrees.csv",
+        "kerr_refs_sidecar": d / f"{base}_kerr_refs.csv",
+        "timeline_legacy": Path("unused"),
     }
+
+
+def resolve_syncfree_working_csv(video_path: Path, eye: str, tag: str) -> Path | None:
+    """Return the best on-disk kinematic CSV for verification (draft or legacy)."""
+    paths = default_syncfree_paths(video_path, eye, tag)
+    for key in ("draft", "eye_data"):
+        if paths[key].is_file():
+            return paths[key]
+    legacy = legacy_syncfree_paths(video_path, eye, tag)
+    for key in ("verified", "ellipses"):
+        if legacy[key].is_file():
+            return legacy[key]
+    return None
+
+
+def write_syncfree_draft(
+    df: pd.DataFrame,
+    meta: dict[str, Any],
+    video_path: Path,
+    eye: str,
+    tag: str,
+) -> dict[str, Path]:
+    """Persist ellipse fit as a draft awaiting interactive verification."""
+    paths = default_syncfree_paths(video_path, eye, tag)
+    df.to_csv(paths["draft"], index=False)
+    meta = dict(meta)
+    meta["stage"] = "draft"
+    meta["artifact_paths"] = {k: str(v) for k, v in paths.items()}
+    write_meta_json(meta, paths["meta"])
+    return paths
+
+
+def finalize_syncfree_eye(
+    block,
+    eye: Literal["left", "right"],
+    kinematic_df: pd.DataFrame,
+    kerr_ref_xy: tuple[int, int],
+    *,
+    tag: str,
+    map_to_timeline: bool = False,
+    meta_patch: dict[str, Any] | None = None,
+) -> dict[str, Path]:
+    """Write finalized per-frame eye data + Kerr refs; optionally map to OE timeline.
+
+    This is the clean exit point for the sync-free pipeline: one CSV per eye with
+    all frame-level ellipse and Kerr columns, plus sidecar Kerr refs and meta.
+    """
+    video = video_path_for_eye(block, eye)
+    paths = default_syncfree_paths(video, eye, tag)
+    kx, ky = int(kerr_ref_xy[0]), int(kerr_ref_xy[1])
+
+    pd.DataFrame(
+        [{"eye": eye.lower(), "kerr_ref_x": kx, "kerr_ref_y": ky}]
+    ).to_csv(paths["kerr_refs"], index=False)
+    merge_self_kerr_refs(block, eye, kx, ky)
+
+    merged_deg, angles, fz = append_kerr_columns_syncfree(kinematic_df, kx, ky)
+    unified = kinematic_df.merge(angles, on="eye_frame", how="left")
+    for col in ("major_ax", "minor_ax", "ratio2", "phi_ellipse"):
+        if col in merged_deg.columns and col not in unified.columns:
+            unified[col] = merged_deg[col]
+    unified.to_csv(paths["eye_data"], index=False)
+    if paths["draft"].is_file():
+        paths["draft"].unlink()
+
+    meta: dict[str, Any] = {}
+    if paths["meta"].is_file():
+        try:
+            with open(paths["meta"], encoding="utf-8") as f:
+                meta = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            meta = {}
+    if meta_patch:
+        meta.update(meta_patch)
+    meta.update(
+        {
+            "stage": "finalized",
+            "finalized": True,
+            "finalized_utc": datetime.now(timezone.utc).isoformat(),
+            "kerr_f_z": float(fz),
+            "artifact_paths": {k: str(v) for k, v in paths.items()},
+            "eye_data_columns": list(unified.columns),
+        }
+    )
+    write_meta_json(meta, paths["meta"])
+
+    written = dict(paths)
+    if map_to_timeline:
+        timeline = analysis_syncfree_timeline_path(block, eye, tag)
+        mapped = map_syncfree_degrees_to_final_sync(block, unified, eye)
+        timeline.parent.mkdir(parents=True, exist_ok=True)
+        mapped.to_csv(timeline, index=False)
+        written["timeline"] = timeline
+    return written

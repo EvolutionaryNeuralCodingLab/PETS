@@ -274,3 +274,19 @@ def export_corrected_eye_data(block, include_rotation_pickle=False):
         with open(analysis_path / "rotate_eye_data_params.pkl", "wb") as f:
             pickle.dump(rot_dict, f)
     print(f"Exported corrected eye data to {analysis_path}")
+
+
+def export_current_kerr_refs(block, filename: str = "self_kerr_refs.csv") -> Path:
+    """Save Kerr reference coordinates from ``block`` to analysis folder CSV."""
+    analysis_path = Path(block.analysis_path)
+    analysis_path.mkdir(parents=True, exist_ok=True)
+    vals = {
+        "kerr_ref_r_x": getattr(block, "kerr_ref_r_x", np.nan),
+        "kerr_ref_r_y": getattr(block, "kerr_ref_r_y", np.nan),
+        "kerr_ref_l_x": getattr(block, "kerr_ref_l_x", np.nan),
+        "kerr_ref_l_y": getattr(block, "kerr_ref_l_y", np.nan),
+    }
+    out_path = analysis_path / filename
+    pd.DataFrame([vals]).to_csv(out_path, index=False)
+    print(f"Kerr refs exported to: {out_path}")
+    return out_path

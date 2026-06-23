@@ -1,0 +1,39 @@
+# Linux variant of the unified eye_repo environment.
+#
+# Uses conda-forge PyQt + OpenCV (works well on Linux). After create:
+#   conda activate eye_repo
+#   pip install -e .
+
+name: eye_repo
+channels:
+  - conda-forge
+dependencies:
+  - python>=3.10,<3.11
+  - pip
+  - setuptools
+  - wheel
+  - jupyter
+  - ipykernel
+  - pyqt>=6.6,<6.8
+  - pyqtgraph>=0.13
+  - opencv>=4.10
+  - numpy>=2.0,<2.3
+  - scipy>=1.10,<1.16
+  - pandas>=2.3
+  - matplotlib>=3.10
+  - h5py>=3.15
+  - lxml>=6.0
+  - tqdm>=4.67
+  - bokeh>=3.8
+  - pyyaml>=6.0
+  - pytest>=8.0
+  - pytest-qt>=4.0
+  - xcb-util-cursor
+  - libgl
+  - libegl
+  - fontconfig
+  - dbus
+  - pip:
+      - ellipse>=0.6.0
+      - open-ephys-python-tools
+      - -e .

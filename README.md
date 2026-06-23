@@ -15,34 +15,24 @@ The synchronization pipeline is designed to work with various recording formats,
 - Python 3.10 or higher
 - Conda (recommended) or pip
 
-### Installation Options
-You have three options for setting up the environment:
+### Installation (recommended)
 
-#### Option 1: Using Conda Environment (recommanded)
+One conda environment **`eye_repo`** covers notebooks, preprocessing, the Preprocessing GUI,
+Block Annotator, and Event Explorer. GUI dependencies use **pip** PyQt6 and headless OpenCV
+to avoid Windows DLL conflicts.
 
 ```bash
-# Create environment from environment.yml
 conda env create -f environment.yml
 conda activate eye_repo
-
-# Install package in development mode
 pip install -e .
 ```
 
-#### Option 2: Using pyproject.toml
+**Linux:** prefer `environment_linux.yml` (conda-forge PyQt + OpenCV).
 
-```bash
-pip install -e .
-```
+**Legacy:** `environment_annotator*.yml` and `eye_annotator` are deprecated; use `eye_repo`.
 
-This will install the package and all dependencies in development mode.
-
-#### Option 3: Using requirements.txt
-
-```bash
-pip install -r requirements.txt
-pip install -e .
-```
+Alternative installs (`pip install -e .` only, or `requirements.txt`) still work if you manage
+compatible versions yourself.
 
 ### Verification
 
@@ -58,15 +48,10 @@ Standalone PyQt6 app for synchronized review of arena + eye videos, Open Ephys t
 
 ### Install and launch
 
-Use the **`eye_annotator`** conda env. Do not run the GUI in `eye_repo` on Windows — conda OpenCV and PyQt6 DLLs conflict in one process.
-
-**Another Windows PC:** copy the repo, then `environment_annotator_windows.yml` + `pip install -e . --no-deps` (see `SETUP_INSTRUCTIONS.md`).
+Use the unified **`eye_repo`** environment (see Setup above).
 
 ```powershell
-cd D:\Python_projects\PETS
-conda env create -f environment_annotator_windows.yml
-conda activate eye_annotator
-pip install -e . --no-deps
+conda activate eye_repo
 python -m eye_tracking_system_tools.annotation.block_annotator --block "D:\path\to\block_015" --output "D:\path\to\annotator_output"
 ```
 
@@ -116,11 +101,10 @@ Second-stage PyQt6 app for browsing Block Annotator `*_annotations.json` events,
 
 ### Install and launch
 
-Same **`eye_annotator`** env as the Block Annotator:
+Same **`eye_repo`** env as the Block Annotator:
 
 ```powershell
-conda activate eye_annotator
-pip install -e . --no-deps
+conda activate eye_repo
 python -m eye_tracking_system_tools.annotation.event_explorer --help
 ```
 
@@ -147,6 +131,58 @@ The **Load log** dock and an auto-written `explorer_load_{timestamp}.log` record
 ```bash
 pytest tests/test_event_explorer.py -q
 ```
+
+## Preprocessing GUI
+
+Tabbed PyQt6 app that runs the five preprocessing notebooks (sync, verify, Kerr, behavior,
+optional sync-free) on a `block_xxx/` folder. Replaces interactive notebook cells with native
+widgets (pyqtgraph plots, ellipse verifier, manual TTL dialog).
+
+### Launch
+
+```powershell
+conda activate eye_repo
+python -m eye_tracking_system_tools.annotation.preprocessing_gui `
+  --experiment-path D:\path\to\experiment --animal PV_106 --block 015
+```
+
+Add `--dialog` to pick experiment/animal/blocks interactively. Config persists as
+`preproc_gui_config.yaml` in your chosen output folder.
+
+### Tutorial — full block preprocessing for downstream analysis
+
+**Prerequisites:** a `block_xxx/` folder with arena + eye videos, `oe_files/` (or
+`parsed_events.csv`), and DeepLabCut CSVs in each eye folder (`eye_videos/LE/...`,
+`eye_videos/RE/...`). See [Required Data Structure](#required-data-structure) below.
+
+| Step | Tab | Action | You get |
+|------|-----|--------|---------|
+| 1 | **Sync** | Prepare data → parse OE events → extract brightness → build arena grid → simple sync → (optional Bokeh shift plot) apply shifts → build final sync → verify → export | `final_sync_df.csv` |
+| 2 | **Sync** | Read DLC + fit ellipses → jitter report → correct jitter & LED blinks → preview/remove outliers → finalize eye data | `left_eye_data.csv`, `right_eye_data.csv` |
+| 3 | **Verify** | Review ellipses on both videos, click Kerr refs, **Save & export (both eyes)** | `self_kerr_refs.csv`, corrected eye CSVs |
+| 4 | **Kerr** | Set `name_tag` (e.g. `raw_verified`) → Calculate → Export merged | `left/right_kerr_angle_<tag>.csv`, `left/right_eye_data_<tag>.csv` |
+| 5 | **Behavior** *(optional)* | Requires `lizMov.mat` from MATLAB `getLizMovement` | `block_<NNN>_behavior_state.csv` |
+| 6 | **Sync-free** *(optional alternate path)* | Run ellipses → verify → **Finalize** | Per eye: `*_eye_data.csv`, `*_kerr_refs.csv`, `*_meta.json`; optional `analysis/*_timeline.csv` |
+
+After step 4 you typically have everything needed for **Block Annotator** and **Event Explorer**
+(`final_sync_df.csv` + Kerr-annotated eye data). Behavior adds movement state segments.
+Sync-free is an alternate ellipse/Kerr path tied to raw eye videos.
+
+**Reference sample blocks:**
+
+- Sync / verify / Kerr: `PV_106 / 2025_09_04 / block_015`
+- Behavior (`lizMov.mat`): `PV_126 / 2024_07_18 / block_006`
+
+### Tests
+
+```powershell
+$env:QT_QPA_PLATFORM = "offscreen"
+pytest tests/test_preprocessing_gui_*.py -q
+python scripts/validate_preprocessing_gui_load.py `
+  --experiment-path D:\sample_data_for_eye_repo --animal PV_106 --block 015
+```
+
+See `development/PREPROCESSING_GUI_ACCEPTANCE.md` for scope and known gaps.
 
 ## Project Structure
 

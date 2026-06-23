@@ -26,7 +26,7 @@ The GUI **calls the existing `BlockSync` / helper functions verbatim** wherever 
 
 | # | Decision | Locked answer |
 |---|----------|---------------|
-| 1 | GUI framework / env | **PyQt6**, runs in the existing **`eye_annotator`** conda env. `cv2` is used **only headlessly** (`cv2.VideoCapture`, `cv2.warpAffine`, etc.). **No** `cv2.imshow` / `cv2.selectROI` / `cv2.namedWindow` anywhere in the GUI code path — they conflict with PyQt6 on Windows (see `SETUP_INSTRUCTIONS.md`). |
+| 1 | GUI framework / env | **PyQt6**, runs in **`eye_repo_win`** (Windows) or **`eye_repo_linux`**. `cv2` is used **only headlessly** (`cv2.VideoCapture`, `cv2.warpAffine`, etc.). **No** `cv2.imshow` / `cv2.selectROI` / `cv2.namedWindow` anywhere in the GUI code path — they conflict with PyQt6 on Windows (see `SETUP_INSTRUCTIONS.md`). |
 | 2 | Overall layout | **Tabbed dashboard**: one tab per stage, free navigation, status icons per tab show whether the corresponding outputs exist on disk for the current block. |
 | 3 | Block scope | **Single block at a time** is the primary interactive mode. The long automatic steps (`get_eye_brightness_vectors`, `read_dlc_data`, `get_jitter_reports`, `calculate_kerr_angles`) also expose a **"Run for all selected blocks"** batch button. |
 | 4 | Bokeh plots | **Hybrid.** The slider-based shift-correction plot stays as the existing Bokeh-in-browser figure (its JS slider semantics are exactly what we want and re-implementing them is error-prone). The simpler sanity / jitter plots are re-implemented natively with **pyqtgraph** inside the GUI. |
@@ -377,7 +377,7 @@ Update `scripts/validate_preprocessing_gui_load.py` to additionally instantiate 
 1. Hook the `QFileSystemWatcher` into the status bus so tab icons update live.
 2. Add menu items: File → Open block, File → Reload, File → Quit; Help → Keyboard shortcuts; Help → About.
 3. Write a short README section in the main `README.md` mirroring the "Block Annotator GUI" section.
-4. Ensure `pip install -e .` and the existing `eye_annotator` env still work (no new heavy deps without explicit user approval — pyqtgraph is already implicitly available via the block_annotator's env, but confirm).
+4. Ensure `pip install -e .` works in `eye_repo_win` / `eye_repo_linux` (no new heavy deps without explicit user approval).
 
 **Self-check 8:** Run the full pytest suite and `scripts/validate_preprocessing_gui_load.py` one last time.
 
@@ -454,8 +454,8 @@ Each item must have an explicit **Expected** clause so a third party can run the
 - LFP / electrophysiology validation (`lfp_led_validation.ipynb`).
 - Editing or annotating events (that is the Block Annotator's job).
 - Writing a new synchronization algorithm or replacing `BlockSync`.
-- Cross-platform GUI testing on Linux/macOS (Windows + `eye_annotator` env only for v1; the headless validation script and pytest should still run on Linux/macOS where Qt offscreen is available).
-- New heavy dependencies. Allowed: anything already in the `eye_annotator` env, plus `pyqtgraph` (confirm with the user if not already installed).
+- Cross-platform GUI testing on Linux/macOS/Windows (`eye_repo_win` / `eye_repo_linux`; headless validation via offscreen QPA).
+- New heavy dependencies. Allowed: packages already in `environment_win.yml` / `environment_linux.yml`.
 
 ---
 
@@ -463,7 +463,7 @@ Each item must have an explicit **Expected** clause so a third party can run the
 
 Even with the locked decisions in §1, the following still need a one-line user confirmation:
 
-1. **`pyqtgraph` availability.** Confirm `pyqtgraph` is acceptable to add to the `eye_annotator` env if it is not already present. (Native plots in the GUI depend on it.)
+1. **`pyqtgraph` availability.** Included in both platform env files. Native plots in the GUI depend on it.
 2. **`pytest-qt` availability.** Confirm it is acceptable to add `pytest-qt` for headless widget testing.
 3. **Notebook re-execution as a self-check.** Confirm running notebooks via `jupyter nbconvert --execute` on the sample block as part of Phase 0's exit criterion is acceptable (it will write into the sample block's `analysis/` folder — the agent should work on a copy).
 4. **Where the GUI's defaults live.** A `~/.pets_preproc_gui_config.yaml` for last-used experiment path / animal / batch selection, or per-output-folder like the Block Annotator's `annotator_config.yaml`? Pick one and confirm.

@@ -35,7 +35,7 @@
 
 ## Product vision (user intent — not yet locked)
 
-Build a **second-stage analysis GUI** (same **`eye_annotator`** conda env / PyQt6 stack as Block Annotator) for **exploring annotated events** across blocks:
+Build a **second-stage analysis GUI** (same **`eye_repo_win` / `eye_repo_linux`** conda env / PyQt6 stack as Block Annotator) for **exploring annotated events** across blocks:
 
 - **No video playback** in v1 (data / plots only).
 - **Interactive table** of all annotated events (possibly across many blocks / animals / sessions).
@@ -62,7 +62,7 @@ This tool complements **`block_annotator`** (mark events) — it consumes its ou
 | Item | Location / detail |
 |------|-------------------|
 | Launch | `python -m eye_tracking_system_tools.annotation.block_annotator` |
-| Env | `environment_annotator.yml` → conda env `eye_annotator`; extras `[annotator]` in `pyproject.toml` |
+| Env | `environment_win.yml` / `environment_linux.yml` → `eye_repo_win` / `eye_repo_linux` |
 | Annotation output | `{output_folder}/{animal}_{date}_block_{num}_annotations.json` |
 | JSON schema | `schema_version: 1`; fields: `animal_call`, `experiment_date`, `block_num`, `block_path`, `sample_rate_hz`, `events[]` |
 | Each event | `id`, `event_type`, `timepoint_ms`, `start_ms`, `end_ms`, `range_half_width_ms`, `row_index`, `arena_frame`, `l_eye_frame`, `r_eye_frame`, `note` |
@@ -208,7 +208,7 @@ Ask the user these topics. Skip none. Offer defaults only as options, not decisi
 
 ### H — Config & environment
 
-32. **Same conda env** (`eye_annotator`) or new env file?
+32. **Same conda env** (`eye_repo_win` / `eye_repo_linux`) or new env file?
 33. **CLI launch** like annotator (`--catalog`, `--output`) or dialog-only?
 34. **Shared config** with `annotator_config.yaml` or separate `explorer_config.yaml`?
 
@@ -233,7 +233,7 @@ Ask the user these topics. Skip none. Offer defaults only as options, not decisi
 | `src/eye_tracking_system_tools/preprocessing/OERecording.py` | `get_data` API |
 | `src/eye_tracking_system_tools/preprocessing/block_sync_core.py` | `load_final_sync_df` |
 | `src/eye_tracking_system_tools/preprocessing/README.md` | Eye CSV conventions |
-| `environment_annotator.yml` | Target environment |
+| `environment_win.yml` / `environment_linux.yml` | Target environment |
 | Example `*_annotations.json` from user’s output folder (if available) | Real event list |
 
 ---
@@ -295,7 +295,7 @@ Do not start implementation. Do not skip clarification questions even if you thi
 You are implementing the PETS Event Explorer GUI. Read and follow EVENT_EXPLORER_IMPLEMENTATION_PLAN.md in the repo root completely.
 
 Constraints:
-- PyQt6 + pyqtgraph (same eye_annotator env as Block Annotator); no video playback in v1.
+- PyQt6 + pyqtgraph (same `eye_repo_win` / `eye_repo_linux` env as Block Annotator); no video playback in v1.
 - Consume Block Annotator JSON outputs; load block analysis CSVs + OE via existing preprocessing modules.
 - Interactive event table; single-trial and averaged plots; export as specified in the plan.
 - New module under src/eye_tracking_system_tools/annotation/event_explorer/

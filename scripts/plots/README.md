@@ -2,7 +2,7 @@
 
 CLI and GUI tools that read Block Annotator `*_annotations.json` files and pull waveforms from each event's `block_path`.
 
-Requires: `conda activate eye_annotator` and `pip install -e . --no-deps` from the repo root.
+Requires: `conda activate eye_repo_win` (or `eye_repo_linux`) and `pip install -e .` from the repo root.
 
 ## GUI (recommended)
 

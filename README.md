@@ -17,22 +17,35 @@ The synchronization pipeline is designed to work with various recording formats,
 
 ### Installation (recommended)
 
-One conda environment **`eye_repo`** covers notebooks, preprocessing, the Preprocessing GUI,
-Block Annotator, and Event Explorer. GUI dependencies use **pip** PyQt6 and headless OpenCV
-to avoid Windows DLL conflicts.
+Two conda environments cover the full repository (notebooks, preprocessing, all GUIs):
 
-```bash
-conda env create -f environment.yml
-conda activate eye_repo
+| Platform | File | Env name |
+|----------|------|----------|
+| **Windows** | `environment_win.yml` | `eye_repo_win` |
+| **Linux** (and macOS to try first) | `environment_linux.yml` | `eye_repo_linux` |
+
+**Windows:**
+
+```powershell
+conda env create -f environment_win.yml
+conda activate eye_repo_win
 pip install -e .
 ```
 
-**Linux:** prefer `environment_linux.yml` (conda-forge PyQt + OpenCV).
+Or: `powershell -ExecutionPolicy Bypass -File scripts\setup_eye_repo_windows.ps1`
 
-**Legacy:** `environment_annotator*.yml` and `eye_annotator` are deprecated; use `eye_repo`.
+**Linux / macOS:**
 
-Alternative installs (`pip install -e .` only, or `requirements.txt`) still work if you manage
-compatible versions yourself.
+```bash
+conda env create -f environment_linux.yml
+conda activate eye_repo_linux
+```
+
+(`environment_linux.yml` installs the package editable via pip; no separate `pip install` needed.)
+
+Or: `bash scripts/setup_eye_repo_linux.sh`
+
+GUI dependencies use **pip** PyQt6 + headless OpenCV on Windows (avoids conda/pip OpenCV DLL clashes). Linux uses conda-forge PyQt and OpenCV.
 
 ### Verification
 
@@ -48,10 +61,10 @@ Standalone PyQt6 app for synchronized review of arena + eye videos, Open Ephys t
 
 ### Install and launch
 
-Use the unified **`eye_repo`** environment (see Setup above).
+Use **`eye_repo_win`** (Windows) or **`eye_repo_linux`** (Linux/macOS) — see [Setup](#installation-recommended).
 
 ```powershell
-conda activate eye_repo
+conda activate eye_repo_win
 python -m eye_tracking_system_tools.annotation.block_annotator --block "D:\path\to\block_015" --output "D:\path\to\annotator_output"
 ```
 
@@ -101,10 +114,10 @@ Second-stage PyQt6 app for browsing Block Annotator `*_annotations.json` events,
 
 ### Install and launch
 
-Same **`eye_repo`** env as the Block Annotator:
+Same env as the Block Annotator (`eye_repo_win` / `eye_repo_linux`):
 
 ```powershell
-conda activate eye_repo
+conda activate eye_repo_win
 python -m eye_tracking_system_tools.annotation.event_explorer --help
 ```
 
@@ -141,7 +154,7 @@ widgets (pyqtgraph plots, ellipse verifier, manual TTL dialog).
 ### Launch
 
 ```powershell
-conda activate eye_repo
+conda activate eye_repo_win
 python -m eye_tracking_system_tools.annotation.preprocessing_gui `
   --experiment-path D:\path\to\experiment --animal PV_106 --block 015
 ```

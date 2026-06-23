@@ -22,7 +22,7 @@ Build `eye_tracking_system_tools.annotation.preprocessing_gui` — PyQt6 tabbed 
 python -m eye_tracking_system_tools.annotation.preprocessing_gui
 ```
 
-**Environment:** unified **`eye_repo`** (`environment.yml` + `pip install -e .`).
+**Environment:** `environment_win.yml` → `eye_repo_win` (Windows) or `environment_linux.yml` → `eye_repo_linux`.
 
 **Reference blocks:** PV_106 block_015 (sync); PV_126 block_006 (behavior / lizMov).
 
@@ -55,6 +55,6 @@ python scripts/validate_preprocessing_gui_load.py `
 
 | Date | Branch | Notes |
 |------|--------|-------|
-| 2026-06-20 | `preprocessing-gui-implementation` | Phase 8: unified eye_repo env, README tutorial, sync-free finalize artifacts, QFileSystemWatcher |
+| 2026-06-20 | `preprocessing-gui-implementation` | Env cleanup: `eye_repo_win` + `eye_repo_linux`; deprecated annotator envs removed |
 | 2026-06-20 | `preprocessing-gui-implementation` | Phase 7 Sync-free tab |
 | 2026-06-20 | `preprocessing-gui-implementation` | Phase 6 Behavior tab |

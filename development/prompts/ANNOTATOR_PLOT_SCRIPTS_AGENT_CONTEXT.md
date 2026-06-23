@@ -100,7 +100,7 @@ block_path/
 | Catalog many JSONs | `event_explorer/catalog.py` → `build_catalog`, `discover_annotation_files` |
 | Explorer NPZ sidecar | `event_explorer/export_io.py` |
 
-**Environment:** `conda activate eye_annotator` then `pip install -e . --no-deps` (see `README.md`).
+**Environment:** `conda activate eye_repo_win` (or `eye_repo_linux`) then `pip install -e .` (see `README.md`).
 
 ---
 

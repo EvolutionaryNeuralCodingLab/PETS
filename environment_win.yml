@@ -1,9 +1,16 @@
-# PETS unified environment (eye_repo)
+# PETS conda environment — Windows (and macOS until a dedicated mac file exists).
 #
-# See environment_unified.yml for the full comment block.
-# This file is the canonical env name users should create.
+# GUI/video uses pip PyQt6 + opencv-python-headless (not conda opencv) to avoid
+# DLL conflicts on Windows.
+#
+# Setup:
+#   conda env create -f environment_win.yml
+#   conda activate eye_repo_win
+#   pip install -e .
+#
+# Or: powershell -ExecutionPolicy Bypass -File scripts\setup_eye_repo_windows.ps1
 
-name: eye_repo
+name: eye_repo_win
 channels:
   - conda-forge
 dependencies:

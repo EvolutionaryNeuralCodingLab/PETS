@@ -21,7 +21,7 @@ Thumbs.db
 /_annotator_out/
 /_out/
 
-# Machine-local conda export snapshot (use environment_annotator_*.yml instead).
+# Machine-local conda export snapshots (use environment_win.yml / environment_linux.yml).
 /eye_annotator.yml
 
 # Editable-install metadata

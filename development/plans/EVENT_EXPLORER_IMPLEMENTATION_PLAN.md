@@ -29,7 +29,7 @@ This document is the single source of truth for building the **Event Explorer**:
 | Session | **JSON** session file; **manual save**; on exit if dirty → “Save session?” → if yes, pick location |
 | Load audit | **GUI log panel** + **auto-written log file** per run (retraceable file-resolution chain) |
 | Config file (v1) | **None** — defaults in code; **event types inferred** from loaded annotation files; stream/column overrides via session JSON only |
-| Tech | **PyQt6** + **pyqtgraph** (interactive; match annotator) ± **matplotlib** for export if needed; same conda env **`eye_annotator`** |
+| Tech | **PyQt6** + **pyqtgraph** (interactive; match annotator) ± **matplotlib** for export if needed; same conda env **`eye_repo_win` / `eye_repo_linux`** |
 | Scale target | ~10² events, ~1–5 blocks per session; on-demand snippet load; **memory cache only** (no disk snippet cache v1) |
 | Sample QA block | `D:\sample_data_for_eye_repo\PV_106\2025_09_04\block_015` + `_annotator_out/PV_106_2025_09_04_block_015_annotations.json` |
 
@@ -120,7 +120,7 @@ This document is the single source of truth for building the **Event Explorer**:
 
 ### 2.9 Environment & dependencies
 
-38. Reuse conda env **`eye_annotator`** (`environment_annotator.yml`); extend `[annotator]` extra in `pyproject.toml` only if new deps required (likely none beyond existing PyQt6/pyqtgraph/PyYAML/numpy/pandas).
+38. Reuse conda env **`eye_repo_win` / `eye_repo_linux`** (`environment_win.yml` / `environment_linux.yml`).
 39. No new conda env file in v1.
 
 ---
@@ -285,7 +285,7 @@ Each phase ends with **acceptance checks**; builder must not proceed until check
 - [ ] CLI: `--json`, `--json-list`, `--scan-dir` (document in module `--help`)
 - [ ] Empty state UI: “Add sources…” button
 
-**Acceptance:** App launches in `eye_annotator` env; CLI `--help` lists args; no import errors.
+**Acceptance:** App launches in `eye_repo_win` / `eye_repo_linux`; CLI `--help` lists args; no import errors.
 
 ### Phase 1 — Catalog & event table
 
@@ -354,7 +354,7 @@ Each phase ends with **acceptance checks**; builder must not proceed until check
 
 Manual script on lab machine:
 
-1. `conda activate eye_annotator`
+1. `conda activate eye_repo_win` (or `eye_repo_linux`)
 2. `python -m eye_tracking_system_tools.annotation.event_explorer --json _annotator_out/PV_106_2025_09_04_block_015_annotations.json`
 3. Table shows 2 events; load log lists block + eye CSV decisions
 4. Select **one** row → centered plot (t=0 line), ±100 ms, toggle pupil / L / R degrees / EP
@@ -428,7 +428,7 @@ Manual script on lab machine:
 | G2 | Export path | User dialog each time | decided |
 | G3 | Provenance | Sidecar JSON + load log excerpt | decided |
 | G4 | Session | JSON; manual save; exit prompt | decided |
-| H1 | Env | Same `eye_annotator` | decided |
+| H1 | Env | `eye_repo_win` / `eye_repo_linux` | decided |
 | H2 | CLI | Args + dialog | decided |
 | H3 | Config file | None v1; event types from annotations | decided |
 | I1 | Sample data | `D:\sample_data_for_eye_repo\...\block_015` + `_annotator_out` | decided |
@@ -449,7 +449,7 @@ Manual script on lab machine:
 You are implementing the PETS Event Explorer GUI. Read and follow EVENT_EXPLORER_IMPLEMENTATION_PLAN.md in the repo root completely.
 
 Constraints:
-- PyQt6 + pyqtgraph (same eye_annotator env as Block Annotator); no video playback in v1.
+- PyQt6 + pyqtgraph (same `eye_repo_win` / `eye_repo_linux` env as Block Annotator); no video playback in v1.
 - Consume Block Annotator *_annotations.json (schema v1) only.
 - Flexible catalog: CLI (--json, --json-list, --scan-dir) + Add sources dialog (files/folders/recursive).
 - Reuse block_annotator / OERecording / oe_streams / block_loader patterns; do not duplicate ms_axis ↔ OE alignment.

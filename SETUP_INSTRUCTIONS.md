@@ -1,123 +1,71 @@
-# Setup Instructions for eye_repo Environment
+# Setup Instructions for PETS
 
-## Quick Setup
-
-1. **Activate your existing conda environment:**
-   ```bash
-   conda activate eye_repo
-   ```
-
-2. **Verify Python version:**
-   ```bash
-   python --version
-   # Should show: Python 3.10.19
-   ```
-
-3. **Install/update dependencies:**
-   ```bash
-   pip install -r requirements.txt
-   pip install -e .
-   ```
-
-4. **Verify pathlib is available:**
-   ```bash
-   python -c "import pathlib; print('OK')"
-   ```
-
-## Jupyter Notebook Setup
-
-**Important**: Make sure your Jupyter notebook is using the `eye_repo` kernel:
-
-1. **Install ipykernel in the eye_repo environment:**
-   ```bash
-   conda activate eye_repo
-   pip install ipykernel
-   ```
-
-2. **Register the environment as a Jupyter kernel:**
-   ```bash
-   python -m ipykernel install --user --name eye_repo --display-name "Python (eye_repo)"
-   ```
-
-3. **In Jupyter/VS Code:**
-   - Select the kernel: "Python (eye_repo)" or "eye_repo"
-   - In VS Code: Press `Ctrl+Shift+P` → "Python: Select Interpreter" → Choose the `eye_repo` environment
-
-## Block Annotator (same environment)
-
-The annotator uses **PyQt6** and **OpenCV** in one GUI process. Use the unified **`eye_repo`**
-environment (`environment.yml` on Windows/macOS, `environment_linux.yml` on Linux).
+## Quick setup
 
 ### Windows
 
 ```powershell
 cd D:\path\to\PETS
-conda env create -f environment.yml
-conda activate eye_repo
+conda env create -f environment_win.yml
+conda activate eye_repo_win
 pip install -e .
-python -m eye_tracking_system_tools.annotation.block_annotator
 ```
 
-Or: `powershell -ExecutionPolicy Bypass -File scripts\setup_annotator_windows.ps1` (script updated for `eye_repo`).
+Or: `powershell -ExecutionPolicy Bypass -File scripts\setup_eye_repo_windows.ps1`
 
-| File | Use |
-|------|-----|
-| `environment.yml` | **Canonical** unified env (`eye_repo`) |
-| `environment_linux.yml` | Linux with conda-forge PyQt/OpenCV |
-| `environment_unified.yml` | Same as `environment.yml` (transitional alias) |
-| `environment_annotator*.yml` | **Deprecated** — use `environment.yml` |
-
-### Ubuntu / Linux without sudo
-
-You do **not** need `apt` or root if conda (Miniforge/Miniconda) is installed in your home directory. Use **`environment_linux.yml`**:
+### Linux
 
 ```bash
 cd /path/to/PETS
 conda env create -f environment_linux.yml
-conda activate eye_repo
-python -m eye_tracking_system_tools.annotation.block_annotator
-```
+conda activate eye_repo_linux
 ```
 
-Or: `bash scripts/setup_annotator_linux.sh`
+Or: `bash scripts/setup_eye_repo_linux.sh`
 
-**What is portable via conda**
+### macOS
 
-| Component | Approach |
-|-----------|----------|
-| Python, NumPy, SciPy, pandas, h5py, matplotlib | conda-forge |
-| PyQt6 GUI | conda-forge `pyqt` (provides `PyQt6` imports) |
-| X11 / xcb / EGL / fonts | Pulled in by `pyqt` / `opencv` (e.g. `xcb-util-cursor`, `libgl`) |
-| OpenCV (`cv2`) | conda-forge `opencv` on Linux (Windows annotator env uses pip-only to avoid DLL conflicts) |
-| `open-ephys-python-tools`, `ellipse` | pip (no conda binary conflict on Linux) |
-| This repo | `pip install -e . --no-deps` after conda env create |
+Use **`environment_linux.yml`** (`eye_repo_linux`) first — conda-forge PyQt/OpenCV. Report issues if a dedicated macOS file is needed.
 
-**What is not copied from a Windows `conda env export`**
+## Environment files
 
-- Windows-only conda packages (`vc`, `ucrt`, `vcomp`, …)
-- Windows-only pip packages (`pywinpty`, …)
-- A Windows `pip freeze` lock file — Linux needs its own solve (`environment_annotator_linux.yml`), not `requirements-annotator-pinned.txt` from Windows
+| File | Env name | Platform |
+|------|----------|----------|
+| `environment_win.yml` | `eye_repo_win` | Windows (pip PyQt6 + opencv-python-headless) |
+| `environment_linux.yml` | `eye_repo_linux` | Linux; try on macOS |
 
-**What conda cannot install (runtime, not packages)**
+Both environments support: Jupyter notebooks, `BlockSync` preprocessing, Block Annotator, Preprocessing GUI, and Event Explorer.
 
-- A **display**: the GUI needs `DISPLAY` (SSH X11 forwarding, local desktop, or virtual framebuffer). On a headless node without `DISPLAY`, use conda’s Xvfb and run under it:
+## Jupyter kernel
 
-  ```bash
-  conda activate eye_annotator
-  conda install -c conda-forge xorg-xvfb
-  xvfb-run -a python -m eye_tracking_system_tools.annotation.block_annotator
-  ```
+```bash
+conda activate eye_repo_win   # or eye_repo_linux
+python -m ipykernel install --user --name eye_repo --display-name "Python (PETS)"
+```
 
-- **GPU drivers** — not required for the annotator (CPU Qt/OpenCV is enough).
+In VS Code / Jupyter, select kernel **Python (PETS)**.
+
+## Verify installation
+
+```bash
+python examples/smoke_preprocessing_imports.py
+```
+
+Headless GUI smoke (optional):
+
+```powershell
+$env:QT_QPA_PLATFORM = "offscreen"
+pytest tests/test_preprocessing_gui_phase0.py -q
+```
 
 ## Troubleshooting
 
-### If pathlib import fails:
-- Make sure you're using Python 3.4+ (pathlib is standard library)
-- Check that you're in the correct conda environment: `conda activate eye_repo`
-- Verify the interpreter: `which python` (Linux/Mac) or `where python` (Windows)
+- **Wrong Python in Jupyter:** `conda activate eye_repo_win` (or `_linux`) before starting Jupyter.
+- **Windows DLL errors with OpenCV + Qt:** use `eye_repo_win` only — do not mix conda `opencv` with pip PyQt6.
+- **Linux headless / SSH:** run GUIs with a display, or use `QT_QPA_PLATFORM=offscreen` for pytest only.
 
-### If imports fail:
-- Reinstall the package: `pip install -e .`
-- Check Python path: `python -c "import sys; print(sys.path)"`
-- Verify the package is installed: `pip list | grep eye-tracking`
+## Copying to another machine
+
+Copy the **full repository** (not yml files alone). On the destination PC, run the platform setup script or `conda env create` + `pip install -e .` as above.
+
+Do **not** use `conda env export` snapshots from another machine as the primary env definition.

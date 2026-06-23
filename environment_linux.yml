@@ -1,10 +1,14 @@
-# Linux variant of the unified eye_repo environment.
+# PETS conda environment — Linux (also try on macOS).
 #
-# Uses conda-forge PyQt + OpenCV (works well on Linux). After create:
-#   conda activate eye_repo
-#   pip install -e .
+# Uses conda-forge PyQt, OpenCV, and X11/Qt runtime libraries.
+#
+# Setup:
+#   conda env create -f environment_linux.yml
+#   conda activate eye_repo_linux
+#
+# Or: bash scripts/setup_eye_repo_linux.sh
 
-name: eye_repo
+name: eye_repo_linux
 channels:
   - conda-forge
 dependencies:

@@ -34,7 +34,7 @@ For each requested block:
 Install the package from the repo root:
 
 ```bash
-conda activate eye_annotator   # or your env with PETS installed
+conda activate eye_repo_win   # or your env with PETS installed
 pip install -e . --no-deps
 ```
 

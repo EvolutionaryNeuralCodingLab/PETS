@@ -32,7 +32,7 @@ per-video ellipse/Kerr artifacts without repeating the main sync ellipse export.
 | `manual_outlier_annotation.ipynb` | Not in v1 GUI |
 | MATLAB `getLizMovement` | Required once per block to create `lizMov.mat` for Behavior tab |
 | Pupil DLC model training | User supplies DLC exports |
-| Block Annotator / Event Explorer | Separate downstream annotation tools (same `eye_repo` env) |
+| Block Annotator / Event Explorer | Separate downstream annotation tools (same `eye_repo_win` / `eye_repo_linux` env) |
 
 ## Known GUI gaps vs original plan
 
@@ -63,7 +63,7 @@ python scripts/validate_preprocessing_gui_load.py `
 Launch:
 
 ```powershell
-conda activate eye_repo
+conda activate eye_repo_win
 python -m eye_tracking_system_tools.annotation.preprocessing_gui `
   --experiment-path D:\sample_data_for_eye_repo --animal PV_106 --block 015
 ```

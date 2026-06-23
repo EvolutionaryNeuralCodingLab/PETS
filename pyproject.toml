@@ -28,15 +28,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-annotator = [
-    # Kept for pip install -e ".[annotator]" — same as base deps since v0.2 unified env.
-    "PyQt6>=6.6.0",
-    "pyqtgraph>=0.13",
-    "opencv-python-headless>=4.10",
-    "PyYAML>=6.0",
-]
 dev = [
-    "pytest",
+    "pytest>=8.0",
     "pytest-qt>=4.0",
     "black",
     "flake8",

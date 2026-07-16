@@ -1,9 +1,4 @@
-"""Block discovery + selection widgets for the Preprocessing GUI.
-
-This module is intentionally Qt-free where possible so the discovery logic
-can be unit-tested headlessly. The ``BlockPicker`` QWidget at the bottom is
-a thin shell that lists discovered blocks for selection.
-"""
+"""Block discovery + selection widgets for the Preprocessing GUI."""
 
 from __future__ import annotations
 
@@ -23,12 +18,7 @@ def discover_blocks(
     animal: str | None = None,
     block_filter: list[str] | None = None,
 ) -> list[BlockHandle]:
-    """Walk an experiment folder and return every block that looks valid.
-
-    Supports both ``<exp>/<animal>/<yyyy_mm_dd>/block_NNN`` and
-    ``<exp>/<animal>/block_NNN`` layouts (matching ``BlockSync``).
-    """
-
+    """Walk an experiment folder and return every block that looks valid."""
     experiment_path = Path(experiment_path)
     if not experiment_path.is_dir():
         return []
@@ -107,14 +97,33 @@ def _matches_filter(block_num: str, block_filter: list[str]) -> bool:
     return (block_num in raw_strs) or (bn_int is not None and bn_int in nums_int)
 
 
-class BlockPicker(QtWidgets.QWidget):
-    """Top-of-window strip showing the currently active block.
+def infer_fields_from_block_folder(
+    block_folder: Path,
+) -> tuple[Path, str, str] | None:
+    """Infer (experiment_path, animal, block_num) from a block folder path."""
+    p = Path(block_folder)
+    if not p.name.lower().startswith("block_"):
+        return None
+    block_num = p.name.split("_", 1)[1].strip()
+    if not block_num:
+        return None
+    if p.parent.name.count("_") == 2 and len(p.parent.name) == 10:
+        animal = p.parent.parent.name
+        experiment_path = p.parent.parent.parent
+    else:
+        animal = p.parent.name
+        experiment_path = p.parent.parent
+    if not animal or not experiment_path.exists():
+        return None
+    return (experiment_path, animal, block_num)
 
-    Phase 0 keeps this minimal (label + dropdown + reload). Phase 1 will add
-    multi-block selection for batch-mode buttons.
-    """
+
+class BlockPicker(QtWidgets.QWidget):
+    """Top-of-window strip showing loaded blocks and session controls."""
 
     block_changed = QtCore.pyqtSignal(int)
+    add_blocks_requested = QtCore.pyqtSignal()
+    release_block_requested = QtCore.pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -125,16 +134,22 @@ class BlockPicker(QtWidgets.QWidget):
         self._label = QtWidgets.QLabel("No block loaded")
         self._combo = QtWidgets.QComboBox()
         self._combo.setMinimumWidth(320)
+        self._btn_add = QtWidgets.QPushButton("Add block(s)…")
+        self._btn_release = QtWidgets.QPushButton("Release block")
+        self._btn_release.setEnabled(False)
         self._reload_btn = QtWidgets.QPushButton("Reload")
-        self._reload_btn.setEnabled(False)
 
         layout.addWidget(QtWidgets.QLabel("Active block:"))
         layout.addWidget(self._combo, stretch=1)
+        layout.addWidget(self._btn_add)
+        layout.addWidget(self._btn_release)
         layout.addWidget(self._reload_btn)
         layout.addStretch(1)
         layout.addWidget(self._label)
 
         self._combo.currentIndexChanged.connect(self.block_changed.emit)
+        self._btn_add.clicked.connect(self.add_blocks_requested.emit)
+        self._btn_release.clicked.connect(self.release_block_requested.emit)
 
     def set_blocks(self, blocks: list[BlockHandle], current_index: int = 0) -> None:
         self._blocks = list(blocks)
@@ -142,13 +157,17 @@ class BlockPicker(QtWidgets.QWidget):
         self._combo.clear()
         for b in self._blocks:
             self._combo.addItem(b.display_label, b)
-        self._combo.setCurrentIndex(
-            max(0, min(current_index, len(self._blocks) - 1)) if self._blocks else -1
-        )
+        if self._blocks:
+            idx = max(0, min(current_index, len(self._blocks) - 1))
+            self._combo.setCurrentIndex(idx)
+        else:
+            self._combo.setCurrentIndex(-1)
         self._combo.blockSignals(False)
         self._reload_btn.setEnabled(bool(self._blocks))
+        self._btn_release.setEnabled(bool(self._blocks))
         self._refresh_label()
-        self.block_changed.emit(self._combo.currentIndex())
+        if self._blocks:
+            self.block_changed.emit(self._combo.currentIndex())
 
     def reload_button(self) -> QtWidgets.QPushButton:
         return self._reload_btn
@@ -161,6 +180,10 @@ class BlockPicker(QtWidgets.QWidget):
         if 0 <= i < len(self._blocks):
             return self._blocks[i]
         return None
+
+    def set_session_busy(self, busy: bool) -> None:
+        self._btn_add.setEnabled(not busy)
+        self._btn_release.setEnabled(not busy and bool(self._blocks))
 
     def _refresh_label(self) -> None:
         b = self.current_block()

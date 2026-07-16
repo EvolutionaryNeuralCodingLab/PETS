@@ -8,6 +8,9 @@ import numpy as np
 import pandas as pd
 from PyQt6 import QtCore, QtWidgets
 
+from eye_tracking_system_tools.annotation.preprocessing_gui.analysis_artifacts import (
+    SYNC_ARTIFACT_PROFILE,
+)
 from eye_tracking_system_tools.annotation.preprocessing_gui.bokeh_launcher import (
     open_shift_plot,
 )
@@ -15,8 +18,15 @@ from eye_tracking_system_tools.annotation.preprocessing_gui.manual_ttl_dialog im
     ManualTtlDialog,
     parse_open_ephys_with_manual_override,
 )
+from eye_tracking_system_tools.annotation.preprocessing_gui.ttl_mapping import (
+    effective_channeldict,
+    list_mapping_sources,
+    load_ttl_sidecar,
+)
 from eye_tracking_system_tools.annotation.preprocessing_gui.qt_roi_picker import (
     extract_brightness_with_roi_fallback,
+    jitter_report_needs_computation,
+    pick_jitter_rois_for_block,
     show_eye_brightness_preview,
 )
 from eye_tracking_system_tools.annotation.preprocessing_gui.models import BlockHandle
@@ -30,6 +40,10 @@ from eye_tracking_system_tools.annotation.preprocessing_gui.batch_runner import 
 from eye_tracking_system_tools.annotation.preprocessing_gui.tabs.base import BaseTab
 from eye_tracking_system_tools.annotation.preprocessing_gui.workers import CallableWorker
 from eye_tracking_system_tools.preprocessing.BlockSync_class import BlockSync
+from eye_tracking_system_tools.preprocessing.dlc_csv_io import (
+    default_dlc_csv,
+    list_dlc_csvs,
+)
 from eye_tracking_system_tools.preprocessing.block_sync_core import (
     drop_pandas_index_artifact_columns,
     load_eye_tracking_df_csv,
@@ -55,8 +69,6 @@ class SyncTab(BaseTab):
     tab_label = "Sync"
 
     def __init__(self, state, config, parent=None):
-        self._block: BlockHandle | None = None
-        self._blocksync: BlockSync | None = None
         self._verify_result: dict | None = None
         self._worker: CallableWorker | None = None
         self._batch_worker: SequentialBatchWorker | None = None
@@ -64,8 +76,12 @@ class SyncTab(BaseTab):
         self._vid_inds_right: np.ndarray | None = None
         super().__init__(state, config, parent)
 
+    def artifact_profile(self):
+        return SYNC_ARTIFACT_PROFILE
+
     def build_ui(self) -> None:
         root = QtWidgets.QVBoxLayout(self)
+        root.addWidget(self._build_artifact_panel())
         split = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
         root.addWidget(split, stretch=1)
 
@@ -327,8 +343,16 @@ class SyncTab(BaseTab):
             float(getattr(self._config, "dlc_threshold_to_use", 0.95))
         )
         self._btn_read_dlc = QtWidgets.QPushButton("Read DLC + fit ellipses")
+        self._dlc_le_combo = QtWidgets.QComboBox()
+        self._dlc_le_combo.setMinimumWidth(180)
+        self._dlc_re_combo = QtWidgets.QComboBox()
+        self._dlc_re_combo.setMinimumWidth(180)
         dlc_row.addWidget(QtWidgets.QLabel("DLC threshold:"))
         dlc_row.addWidget(self._dlc_threshold)
+        dlc_row.addWidget(QtWidgets.QLabel("LE DLC:"))
+        dlc_row.addWidget(self._dlc_le_combo)
+        dlc_row.addWidget(QtWidgets.QLabel("RE DLC:"))
+        dlc_row.addWidget(self._dlc_re_combo)
         dlc_row.addWidget(self._btn_read_dlc)
         dlc_row.addStretch(1)
         layout.addLayout(dlc_row)
@@ -395,8 +419,6 @@ class SyncTab(BaseTab):
         return w
 
     def set_block(self, block: BlockHandle | None) -> None:
-        self._block = block
-        self._blocksync = None
         self._verify_result = None
         self._vid_inds_left = None
         self._vid_inds_right = None
@@ -405,9 +427,12 @@ class SyncTab(BaseTab):
         if block is None:
             self._block_info.setText("No block loaded")
             self._status("No block loaded.")
-            return
-        self._block_info.setText(f"Active block: {block.display_label}\n{block.block_path}")
-        self._status("Ready.")
+            self._refresh_dlc_combos(None)
+        else:
+            self._block_info.setText(f"Active block: {block.display_label}\n{block.block_path}")
+            self._status("Ready.")
+            self._refresh_dlc_combos(block)
+        super().set_block(block)
 
     def status_signature(self, block: BlockHandle) -> list[Path]:
         ap = block.analysis_path
@@ -416,48 +441,65 @@ class SyncTab(BaseTab):
     def _status(self, text: str) -> None:
         self._status_label.setText(text)
 
-    def _blocksync_for_handle(self, handle: BlockHandle) -> BlockSync:
-        b = BlockSync(
-            handle.animal_call,
-            handle.experiment_date,
-            handle.block_num,
-            handle.path_to_animal_folder,
-            channeldict=handle.channeldict,
-        )
-        self._sanitize_blocksync_artifacts(b)
-        return b
+    def _populate_dlc_combo(self, combo: QtWidgets.QComboBox, eye_path: Path) -> bool:
+        combo.clear()
+        candidates = list_dlc_csvs(eye_path)
+        if not candidates:
+            combo.addItem("(no DLC csv)", None)
+            combo.setEnabled(False)
+            return False
+        for path in candidates:
+            combo.addItem(path.name, str(path))
+        default_path = default_dlc_csv(candidates)
+        default_index = combo.findData(str(default_path))
+        if default_index >= 0:
+            combo.setCurrentIndex(default_index)
+        combo.setEnabled(True)
+        return True
 
-    def _require_blocksync(self) -> BlockSync:
-        if self._block is None:
-            raise RuntimeError("No block loaded.")
-        if self._blocksync is None:
-            self._blocksync = BlockSync(
-                self._block.animal_call,
-                self._block.experiment_date,
-                self._block.block_num,
-                self._block.path_to_animal_folder,
-                channeldict=self._block.channeldict,
+    def _refresh_dlc_combos(self, block: BlockHandle | None) -> None:
+        if block is None:
+            self._dlc_le_combo.clear()
+            self._dlc_re_combo.clear()
+            self._dlc_le_combo.setEnabled(False)
+            self._dlc_re_combo.setEnabled(False)
+            self._btn_read_dlc.setEnabled(False)
+            return
+        b = self._session.get(block)
+        le_ok = self._populate_dlc_combo(self._dlc_le_combo, Path(b.l_e_path))
+        re_ok = self._populate_dlc_combo(self._dlc_re_combo, Path(b.r_e_path))
+        self._btn_read_dlc.setEnabled(le_ok and re_ok)
+
+    @staticmethod
+    def _format_dlc_fit_report(report: dict) -> str:
+        lines = ["DLC ellipse fit summary:"]
+        for eye_key, label in (("left", "Left eye"), ("right", "Right eye")):
+            stats = report.get(eye_key, {})
+            dlc_name = Path(stats.get("dlc_csv", "")).name or "?"
+            lines.append(
+                f"{label} ({dlc_name}): "
+                f"yield {stats.get('yield_pct', float('nan')):.1f}% "
+                f"({stats.get('n_fitted', 0)}/{stats.get('n_frames', 0)} frames), "
+                f"mean likelihood all={stats.get('mean_likelihood_all', float('nan')):.3f}, "
+                f"used={stats.get('mean_likelihood_used', float('nan')):.3f}, "
+                f"fit_failed={stats.get('n_fit_failed', 0)}"
             )
-            self._sanitize_blocksync_artifacts(self._blocksync)
-        return self._blocksync
+        return "\n".join(lines)
+
+    def _show_dlc_fit_report(self, report: dict | None) -> None:
+        if not report:
+            return
+        summary = self._format_dlc_fit_report(report)
+        self._status(summary.splitlines()[0])
+        QtWidgets.QMessageBox.information(self, "DLC ellipse fit", summary)
 
     @staticmethod
     def _sanitize_blocksync_artifacts(blocksync: BlockSync) -> None:
-        """Strip stale ``level_0`` / ``index`` columns from loaded analysis tables."""
-        if getattr(blocksync, "oe_events", None) is not None:
-            blocksync.oe_events = drop_pandas_index_artifact_columns(blocksync.oe_events)
-        if getattr(blocksync, "final_sync_df", None) is not None:
-            blocksync.final_sync_df = drop_pandas_index_artifact_columns(
-                blocksync.final_sync_df
-            )
-        if getattr(blocksync, "blocksync_df", None) is not None:
-            blocksync.blocksync_df = drop_pandas_index_artifact_columns(
-                blocksync.blocksync_df
-            )
-        if getattr(blocksync, "le_df", None) is not None:
-            blocksync.le_df = drop_pandas_index_artifact_columns(blocksync.le_df)
-        if getattr(blocksync, "re_df", None) is not None:
-            blocksync.re_df = drop_pandas_index_artifact_columns(blocksync.re_df)
+        from eye_tracking_system_tools.annotation.preprocessing_gui.block_session import (
+            BlockSyncSession,
+        )
+
+        BlockSyncSession.sanitize(blocksync)
 
     def _ensure_eye_tracking_dfs(self, blocksync: BlockSync) -> None:
         """DLC/jitter steps need le_df/re_df on the BlockSync object, not only on disk."""
@@ -526,22 +568,32 @@ class SyncTab(BaseTab):
     def _run_parse_oe(self) -> None:
         def _do():
             b = self._require_blocksync()
-            try:
-                b.parse_open_ephys_events(overwrite=False, interactive_on_fail=False)
-            except Exception as auto_err:
-                reply = QtWidgets.QMessageBox.question(
-                    self,
-                    "Parse OE events",
-                    f"Automatic parse failed:\n{auto_err}\n\n"
-                    "Open manual TTL mapping dialog?",
-                    QtWidgets.QMessageBox.StandardButton.Yes
-                    | QtWidgets.QMessageBox.StandardButton.No,
+            sidecar = load_ttl_sidecar(b.block_path, b.oe_dirname)
+            if sidecar is not None:
+                parse_open_ephys_with_manual_override(
+                    b,
+                    sidecar["manual_line_map"],
+                    sidecar["arena_window"],
+                    overwrite=True,
                 )
-                if reply != QtWidgets.QMessageBox.StandardButton.Yes:
-                    raise auto_err
-                if not self._open_manual_ttl_dialog(b, overwrite=True):
-                    raise RuntimeError("Manual TTL mapping cancelled.")
+            else:
+                try:
+                    b.parse_open_ephys_events(overwrite=False, interactive_on_fail=False)
+                except Exception as auto_err:
+                    reply = QtWidgets.QMessageBox.question(
+                        self,
+                        "Parse OE events",
+                        f"Automatic parse failed:\n{auto_err}\n\n"
+                        "Open manual TTL mapping dialog?",
+                        QtWidgets.QMessageBox.StandardButton.Yes
+                        | QtWidgets.QMessageBox.StandardButton.No,
+                    )
+                    if reply != QtWidgets.QMessageBox.StandardButton.Yes:
+                        raise auto_err
+                    if not self._open_manual_ttl_dialog(b, overwrite=True):
+                        raise RuntimeError("Manual TTL mapping cancelled.")
             self._sanitize_blocksync_artifacts(b)
+            self._session.remember_channeldict(effective_channeldict(b))
 
         self._run_guarded(_do, "Parsed Open Ephys events.")
 
@@ -559,7 +611,19 @@ class SyncTab(BaseTab):
         events_csv = self._events_csv_path(blocksync)
         if not events_csv.is_file():
             blocksync.oe_events_to_csv(align_to_zero=True)
-        dlg = ManualTtlDialog(blocksync, events_csv, parent=self)
+        mapping_sources: list[tuple[str, dict[str, int]]] = []
+        if self._block is not None:
+            mapping_sources = list_mapping_sources(
+                self._session,
+                self._state.blocks,
+                self._block,
+            )
+        dlg = ManualTtlDialog(
+            blocksync,
+            events_csv,
+            mapping_sources=mapping_sources,
+            parent=self,
+        )
         if dlg.exec() != QtWidgets.QDialog.DialogCode.Accepted:
             return False
         manual_line_map, arena_window = dlg.payload()
@@ -571,6 +635,7 @@ class SyncTab(BaseTab):
             arena_window,
             overwrite=overwrite,
         )
+        self._session.remember_channeldict(effective_channeldict(blocksync))
         return True
 
     def _run_manual_ttl_override(self) -> None:
@@ -862,6 +927,20 @@ class SyncTab(BaseTab):
         worker.start()
 
     def _run_read_dlc(self) -> None:
+        if self._worker is not None and self._worker.isRunning():
+            QtWidgets.QMessageBox.information(
+                self, "Sync tab", "A background job is already running."
+            )
+            return
+
+        le_path = self._dlc_le_combo.currentData()
+        re_path = self._dlc_re_combo.currentData()
+        if not le_path or not re_path:
+            QtWidgets.QMessageBox.warning(
+                self, "Sync tab", "Select DLC CSV files for both eyes."
+            )
+            return
+
         def work():
             b = self._require_blocksync()
             self._require_final_sync_on_disk(b)
@@ -869,19 +948,59 @@ class SyncTab(BaseTab):
                 threshold_to_use=float(self._dlc_threshold.value()),
                 export=True,
                 overwrite=False,
+                le_dlc_path=le_path,
+                re_dlc_path=re_path,
             )
+            return b.dlc_ellipse_fit_report
 
-        self._run_async(work, "Read DLC and fitted ellipses.", "Running DLC + ellipse fitting…")
+        self._set_phase2_busy(True, "Running DLC + ellipse fitting…")
+        worker = CallableWorker(work, self)
+
+        def on_ok(report) -> None:
+            self._set_phase2_busy(False)
+            self._status("Read DLC and fitted ellipses.")
+            self._show_dlc_fit_report(report)
+            self._worker = None
+            worker.deleteLater()
+
+        def on_fail(msg: str) -> None:
+            self._set_phase2_busy(False)
+            self._status(f"Error: {msg}")
+            QtWidgets.QMessageBox.warning(self, "Sync tab", msg)
+            self._worker = None
+            worker.deleteLater()
+
+        worker.finished_ok.connect(on_ok)
+        worker.failed.connect(on_fail)
+        self._worker = worker
+        worker.start()
 
     def _run_jitter_report(self) -> None:
-        def work():
+        try:
             b = self._require_blocksync()
             self._require_final_sync_on_disk(b)
-            b.get_jitter_reports(
+            roi_dict = None
+            if jitter_report_needs_computation(b, overwrite=False):
+                roi_dict = pick_jitter_rois_for_block(b, parent=self)
+                if roi_dict is None:
+                    self._status("Jitter ROI selection cancelled.")
+                    return
+        except Exception as e:
+            self._status(f"Error: {e}")
+            QtWidgets.QMessageBox.warning(self, "Sync tab", str(e))
+            return
+
+        captured_roi = roi_dict
+
+        def work():
+            blk = self._require_blocksync()
+            self._require_final_sync_on_disk(blk)
+            blk.get_jitter_reports(
                 export=True,
                 overwrite=False,
                 remove_led_blinks=False,
                 sort_on_loading=True,
+                roi_dict=captured_roi,
             )
 
         self._run_async(work, "Computed jitter reports.", "Computing jitter report…")
@@ -1040,7 +1159,7 @@ class SyncTab(BaseTab):
         self._status("Batch complete.")
 
     def _batch_extract_brightness(self, handle: BlockHandle) -> str:
-        b = self._blocksync_for_handle(handle)
+        b = self._session.get(handle)
         pkl = Path(b.analysis_path) / "eye_brightness_values_dict.pkl"
         if pkl.is_file():
             b.get_eye_brightness_vectors(use_auto_roi=True, create_if_missing=False)
@@ -1053,7 +1172,7 @@ class SyncTab(BaseTab):
         return "brightness vectors ready"
 
     def _batch_read_dlc(self, handle: BlockHandle) -> str:
-        b = self._blocksync_for_handle(handle)
+        b = self._session.get(handle)
         path = Path(b.analysis_path) / "final_sync_df.csv"
         if not path.exists():
             raise RuntimeError("final_sync_df.csv missing — run sync through step 4 first")
@@ -1066,21 +1185,27 @@ class SyncTab(BaseTab):
         return "le_df.csv / re_df.csv written"
 
     def _batch_jitter_report(self, handle: BlockHandle) -> str:
-        b = self._blocksync_for_handle(handle)
+        b = self._session.get(handle)
         path = Path(b.analysis_path) / "final_sync_df.csv"
         if not path.exists():
             raise RuntimeError("final_sync_df.csv missing")
         load_final_sync_df(b, verbose=False)
+        roi_dict = None
+        if jitter_report_needs_computation(b, overwrite=False):
+            roi_dict = pick_jitter_rois_for_block(b, parent=self)
+            if roi_dict is None:
+                raise RuntimeError("Jitter ROI selection cancelled.")
         b.get_jitter_reports(
             export=True,
             overwrite=False,
             remove_led_blinks=False,
             sort_on_loading=True,
+            roi_dict=roi_dict,
         )
         return "jitter_report_dict.pkl written"
 
     def _batch_correct_jitter(self, handle: BlockHandle) -> str:
-        b = self._blocksync_for_handle(handle)
+        b = self._session.get(handle)
         load_final_sync_df(b, verbose=False)
         le_path = Path(b.analysis_path) / "le_df.csv"
         re_path = Path(b.analysis_path) / "re_df.csv"

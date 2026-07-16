@@ -1,4 +1,4 @@
-"""Qt rubber-band ROI picker for eye-video brightness extraction."""
+"""Qt rubber-band ROI picker for eye-video brightness and jitter workflows."""
 
 from __future__ import annotations
 
@@ -102,6 +102,16 @@ class RoiGraphicsView(QtWidgets.QGraphicsView):
         super().mouseReleaseEvent(event)
 
 
+_DEFAULT_ROI_INSTRUCTION = (
+    "Drag a rectangle over the LED region. Minimum size is 1×1 pixel."
+)
+
+_JITTER_ROI_INSTRUCTION = (
+    "Drag a rectangle over a stable patch (e.g. pupil or LED surround) for "
+    "frame-to-frame drift tracking. Minimum size is 1×1 pixel."
+)
+
+
 class QtRoiPickerDialog(QtWidgets.QDialog):
     """Modal dialog: drag a rectangle on the first video frame; returns ``(x, y, w, h)``."""
 
@@ -110,6 +120,7 @@ class QtRoiPickerDialog(QtWidgets.QDialog):
         frame_bgr: np.ndarray,
         *,
         title: str = "Select ROI",
+        instruction: str | None = None,
         parent: QtWidgets.QWidget | None = None,
     ):
         super().__init__(parent)
@@ -122,9 +133,7 @@ class QtRoiPickerDialog(QtWidgets.QDialog):
 
         layout = QtWidgets.QVBoxLayout(self)
         layout.addWidget(
-            QtWidgets.QLabel(
-                "Drag a rectangle over the LED region. Minimum size is 1×1 pixel."
-            )
+            QtWidgets.QLabel(instruction or _DEFAULT_ROI_INSTRUCTION)
         )
         self._view = RoiGraphicsView(pix)
         self._view.setMinimumHeight(360)
@@ -169,14 +178,65 @@ def pick_roi_for_video(
     video_path: Path | str,
     *,
     title: str = "Select ROI",
+    instruction: str | None = None,
     parent: QtWidgets.QWidget | None = None,
 ) -> tuple[int, int, int, int] | None:
     """Open the picker on the first frame; return ROI or ``None`` if cancelled."""
     frame = load_first_video_frame_bgr(video_path)
-    dlg = QtRoiPickerDialog(frame, title=title, parent=parent)
+    dlg = QtRoiPickerDialog(
+        frame,
+        title=title,
+        instruction=instruction,
+        parent=parent,
+    )
     if dlg.exec() != QtWidgets.QDialog.DialogCode.Accepted:
         return None
     return dlg.selected_roi()
+
+
+def normalize_correlation_roi(roi: tuple[int, int, int, int]) -> list[int]:
+    """Match ``BlockSync.get_roi_for_correlation`` odd width/height adjustment."""
+    x, y, w, h = (int(roi[0]), int(roi[1]), int(roi[2]), int(roi[3]))
+    if w % 2 == 0:
+        w += 1
+    if h % 2 == 0:
+        h += 1
+    return [x, y, w, h]
+
+
+def jitter_report_needs_computation(blocksync, *, overwrite: bool = False) -> bool:
+    """Return True when jitter must be computed (no saved report on disk)."""
+    pkl = Path(blocksync.analysis_path) / "jitter_report_dict.pkl"
+    return overwrite or not pkl.is_file()
+
+
+def pick_jitter_rois_for_block(
+    blocksync,
+    *,
+    parent: QtWidgets.QWidget | None = None,
+) -> dict[str, list[int]] | None:
+    """Pick left/right eye ROIs for jitter cross-correlation (main thread only)."""
+    le_videos = getattr(blocksync, "le_videos", None) or []
+    re_videos = getattr(blocksync, "re_videos", None) or []
+    if not le_videos or not re_videos:
+        raise RuntimeError("Eye videos not found on BlockSync.")
+
+    rois: dict[str, list[int]] = {}
+    specs = [
+        ("left_roi", le_videos[0], "Left eye — jitter ROI"),
+        ("right_roi", re_videos[0], "Right eye — jitter ROI"),
+    ]
+    for key, video_path, title in specs:
+        picked = pick_roi_for_video(
+            video_path,
+            title=title,
+            instruction=_JITTER_ROI_INSTRUCTION,
+            parent=parent,
+        )
+        if picked is None:
+            return None
+        rois[key] = normalize_correlation_roi(picked)
+    return rois
 
 
 def extract_brightness_with_roi_fallback(

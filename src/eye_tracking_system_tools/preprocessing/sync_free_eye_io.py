@@ -8,7 +8,6 @@ after an explicit join to ``final_sync_df``.
 from __future__ import annotations
 
 import json
-import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal, Optional
@@ -18,19 +17,12 @@ import numpy as np
 import pandas as pd
 
 from eye_tracking_system_tools.preprocessing.BlockSync_class import BlockSync
+from eye_tracking_system_tools.preprocessing.dlc_csv_io import default_dlc_csv, list_dlc_csvs
 
 
 def find_dlc_csv(eye_folder: Path) -> Path:
     """Pick DeepLabCut CSV in ``eye_folder`` (same rules as ``BlockSync.read_dlc_data``)."""
-    pl = [eye_folder / i for i in os.listdir(eye_folder) if "DLC" in i and ".csv" in i]
-    if not pl:
-        raise FileNotFoundError(f"No DLC csv under {eye_folder}")
-    if len(pl) > 1:
-        filtered = [p for p in pl if "filtered" in p.name.lower()]
-        if not filtered:
-            raise FileNotFoundError(f"Multiple DLC csv files, none marked filtered: {pl}")
-        return filtered[0]
-    return pl[0]
+    return default_dlc_csv(list_dlc_csvs(eye_folder))
 
 
 def read_dlc_for_ellipse(eye_folder: Path) -> pd.DataFrame:
@@ -46,6 +38,22 @@ def video_frame_count(video_path: Path) -> int:
     n = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     cap.release()
     return n
+
+
+def discover_eye_video_paths(block) -> dict[str, Path]:
+    """Find primary left/right eye ``.mp4`` paths without constructing BlockSync."""
+    block_path = Path(getattr(block, "block_path", block))
+    out: dict[str, Path] = {}
+    for side, key in (("LE", "left"), ("RE", "right")):
+        eye_dir = block_path / "eye_videos" / side
+        if not eye_dir.is_dir():
+            continue
+        videos = sorted(
+            p for p in eye_dir.rglob("*.mp4") if "DLC" not in str(p)
+        )
+        if videos:
+            out[key] = videos[0]
+    return out
 
 
 def build_data_for_eye_tracking(le_csv: pd.DataFrame) -> pd.DataFrame:

@@ -1,16 +1,15 @@
-# PETS conda environment — Windows.
+# PETS conda environment — macOS (Apple Silicon and Intel).
 #
-# GUI/video uses pip PyQt6 + opencv-python-headless (not conda opencv) to avoid
-# DLL conflicts on Windows.
+# GUI/video uses pip PyQt6 + opencv-python-headless (same approach as Windows)
+# to avoid Linux-only conda packages (libegl, xcb-util-cursor, etc.).
 #
 # Setup:
-#   conda env create -f environment_win.yml
-#   conda activate eye_repo_win
-#   pip install -e .
+#   conda env create -f environment_mac.yml
+#   conda activate eye_repo_mac
 #
-# Or: powershell -ExecutionPolicy Bypass -File scripts\setup_eye_repo_windows.ps1
+# Or: bash scripts/setup_eye_repo_mac.sh
 
-name: eye_repo_win
+name: eye_repo_mac
 channels:
   - conda-forge
 dependencies:
@@ -39,3 +38,4 @@ dependencies:
       - PyYAML==6.0.3
       - pytest>=8.0
       - pytest-qt>=4.0
+      - -e .

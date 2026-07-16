@@ -7,6 +7,9 @@ from pathlib import Path
 import pandas as pd
 from PyQt6 import QtWidgets
 
+from eye_tracking_system_tools.annotation.preprocessing_gui.analysis_artifacts import (
+    kerr_artifact_profile,
+)
 from eye_tracking_system_tools.annotation.preprocessing_gui.batch_runner import (
     SequentialBatchWorker,
 )
@@ -27,14 +30,21 @@ class KerrTab(BaseTab):
     tab_label = "Kerr"
 
     def __init__(self, state, config, parent=None):
-        self._block: BlockHandle | None = None
-        self._blocksync: BlockSync | None = None
         self._worker: CallableWorker | None = None
         self._batch_worker: SequentialBatchWorker | None = None
         super().__init__(state, config, parent)
 
+    def artifact_profile(self):
+        return kerr_artifact_profile(self._name_tag_value_safe())
+
+    def _name_tag_value_safe(self) -> str:
+        if hasattr(self, "_name_tag"):
+            return self._name_tag.text().strip() or self._config.kerr_name_tag
+        return self._config.kerr_name_tag
+
     def build_ui(self) -> None:
         layout = QtWidgets.QVBoxLayout(self)
+        layout.addWidget(self._build_artifact_panel())
 
         self._refs_banner = QtWidgets.QLabel()
         self._refs_banner.setWordWrap(True)
@@ -51,6 +61,7 @@ class KerrTab(BaseTab):
         form = QtWidgets.QFormLayout()
         self._name_tag = QtWidgets.QLineEdit(str(self._config.kerr_name_tag))
         self._name_tag.setPlaceholderText("e.g. raw_verified")
+        self._name_tag.textChanged.connect(lambda _: self._refresh_artifact_ui())
         form.addRow("name_tag:", self._name_tag)
         layout.addLayout(form)
 
@@ -95,51 +106,43 @@ class KerrTab(BaseTab):
         ]
 
     def set_block(self, block: BlockHandle | None) -> None:
-        self._block = block
-        self._blocksync = None
         self._btn_export.setEnabled(False)
         if block is None:
             self._info.setText("No block loaded.")
             self._refs_banner.hide()
             self._status.setText("")
-            return
-
-        self._info.setText(f"Active block: {block.display_label}")
-        try:
-            blocksync = self._blocksync_for_handle(block)
-            load_eye_data(blocksync)
-            self._blocksync = blocksync
-            if load_self_kerr_refs(blocksync):
-                self._refs_banner.hide()
-                self._status.setText("Eye data and Kerr refs loaded.")
-            else:
+        else:
+            self._info.setText(f"Active block: {block.display_label}")
+            left = block.analysis_path / "left_eye_data.csv"
+            if not left.is_file():
+                self._refs_banner.setText(
+                    "left_eye_data.csv is missing. Complete Sync tab step 5 first."
+                )
+                self._refs_banner.show()
+            elif not (block.analysis_path / "self_kerr_refs.csv").is_file():
                 self._refs_banner.setText(
                     "Pick Kerr refs in the Verify tab first (self_kerr_refs.csv is missing)."
                 )
                 self._refs_banner.show()
-                self._status.setText("")
+            else:
+                self._refs_banner.hide()
+            self._status.setText(
+                "Use 'Load prev analysis' to hydrate eye data and Kerr outputs from disk."
+            )
+        super().set_block(block)
+
+    def _after_load_artifacts(self, report) -> None:
+        if self._block is None:
+            return
+        try:
+            b = self._require_blocksync()
+            if load_self_kerr_refs(b):
+                self._refs_banner.hide()
+                self._btn_export.setEnabled(True)
+                self._status.setText("Eye data and Kerr refs loaded from disk.")
         except FileNotFoundError as e:
             self._refs_banner.setText(str(e))
             self._refs_banner.show()
-            self._status.setText("")
-
-    def _blocksync_for_handle(self, handle: BlockHandle) -> BlockSync:
-        b = BlockSync(
-            handle.animal_call,
-            handle.experiment_date,
-            handle.block_num,
-            handle.path_to_animal_folder,
-            channeldict=handle.channeldict,
-        )
-        return b
-
-    def _require_blocksync(self) -> BlockSync:
-        if self._block is None:
-            raise RuntimeError("No block loaded.")
-        if self._blocksync is None:
-            self._blocksync = self._blocksync_for_handle(self._block)
-            load_eye_data(self._blocksync)
-        return self._blocksync
 
     def _name_tag_value(self) -> str:
         tag = self._name_tag.text().strip()
@@ -250,7 +253,7 @@ class KerrTab(BaseTab):
         self._batch_worker.start()
 
     def _batch_one_block(self, handle: BlockHandle) -> str:
-        b = self._blocksync_for_handle(handle)
+        b = self._session.get(handle)
         load_eye_data(b)
         self._ensure_kerr_refs(b)
         tag = self._name_tag_value()

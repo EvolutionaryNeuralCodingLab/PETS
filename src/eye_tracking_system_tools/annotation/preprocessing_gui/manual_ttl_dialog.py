@@ -13,6 +13,7 @@ from PyQt6 import QtCore, QtWidgets
 from eye_tracking_system_tools.preprocessing.BlockSync_class import BlockSync
 
 REQUIRED_TTL_ROLES = frozenset({"Arena_TTL", "LED_driver", "L_eye_TTL", "R_eye_TTL"})
+MappingSources = list[tuple[str, dict[str, int]]]
 
 
 def _events_csv_path_for_block(blocksync: BlockSync) -> Path:
@@ -284,12 +285,14 @@ class ManualTtlDialog(QtWidgets.QDialog):
         events_csv_path: Path | None = None,
         *,
         arena_channel_name: str = "Arena_TTL",
+        mapping_sources: MappingSources | None = None,
         parent: QtWidgets.QWidget | None = None,
     ):
         super().__init__(parent)
         self._blocksync = blocksync
         self._events_csv_path = Path(events_csv_path or _events_csv_path_for_block(blocksync))
         self._arena_channel_name = arena_channel_name
+        self._mapping_sources = list(mapping_sources or [])
         self._manual_line_map: dict[str, int] | None = None
         self._arena_window: dict[str, int] | None = None
 
@@ -316,6 +319,18 @@ class ManualTtlDialog(QtWidgets.QDialog):
         self._btn_browser_raster = QtWidgets.QPushButton("Open raster\nin browser")
         raster_row.addWidget(self._btn_browser_raster)
         root.addLayout(raster_row)
+
+        if self._mapping_sources:
+            leech_row = QtWidgets.QHBoxLayout()
+            leech_row.addWidget(QtWidgets.QLabel("Copy mapping from block:"))
+            self._leech_block = QtWidgets.QComboBox()
+            self._leech_block.addItem("(select block)", None)
+            for label, line_map in self._mapping_sources:
+                self._leech_block.addItem(label, line_map)
+            self._btn_leech_apply = QtWidgets.QPushButton("Apply")
+            leech_row.addWidget(self._leech_block, stretch=1)
+            leech_row.addWidget(self._btn_leech_apply)
+            root.addLayout(leech_row)
 
         map_box = QtWidgets.QGroupBox("Role → line mapping")
         form = QtWidgets.QFormLayout(map_box)
@@ -407,6 +422,8 @@ class ManualTtlDialog(QtWidgets.QDialog):
 
         self._btn_auto_eye.clicked.connect(self._on_auto_assign_eyes)
         self._btn_browser_raster.clicked.connect(self._on_open_browser_raster)
+        if self._mapping_sources:
+            self._btn_leech_apply.clicked.connect(self._on_apply_leech_mapping)
         self._btn_add_extra.clicked.connect(self._add_extra_channel_row)
         self._btn_remove_extra.clicked.connect(self._remove_selected_extra_channels)
         self._btn_ok.clicked.connect(self._on_accept)
@@ -536,6 +553,35 @@ class ManualTtlDialog(QtWidgets.QDialog):
                 self._eye_a.setValue(unused[0])
                 self._eye_b.setValue(unused[1])
         self._populate_extra_channels()
+
+    def apply_line_map(self, manual_line_map: dict[str, int]) -> None:
+        """Fill role spinboxes and extra channels from a role→line map (not arena window)."""
+        arena_role = self._arena_channel_name
+        if arena_role in manual_line_map:
+            self._arena_line.setValue(int(manual_line_map[arena_role]))
+        if "LED_driver" in manual_line_map:
+            self._led_driver_line.setValue(int(manual_line_map["LED_driver"]))
+        if "L_eye_TTL" in manual_line_map:
+            self._l_eye_line.setValue(int(manual_line_map["L_eye_TTL"]))
+        if "R_eye_TTL" in manual_line_map:
+            self._r_eye_line.setValue(int(manual_line_map["R_eye_TTL"]))
+
+        self._extra_table.setRowCount(0)
+        for role, line in sorted(manual_line_map.items(), key=lambda kv: kv[0]):
+            if role in REQUIRED_TTL_ROLES or role == arena_role:
+                continue
+            self._add_extra_channel_row(str(role), int(line))
+
+    def _on_apply_leech_mapping(self) -> None:
+        line_map = self._leech_block.currentData()
+        if not isinstance(line_map, dict):
+            QtWidgets.QMessageBox.information(
+                self,
+                "Copy mapping",
+                "Select a block to copy its TTL line mapping from.",
+            )
+            return
+        self.apply_line_map({str(k): int(v) for k, v in line_map.items()})
 
     def _window_mode(self) -> str:
         if self._mode_sample.isChecked():

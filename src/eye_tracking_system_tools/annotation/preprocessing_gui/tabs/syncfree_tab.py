@@ -7,16 +7,20 @@ from pathlib import Path
 import pandas as pd
 from PyQt6 import QtWidgets
 
+from eye_tracking_system_tools.annotation.preprocessing_gui.analysis_artifacts import (
+    syncfree_artifact_profile,
+    syncfree_status_signature_paths,
+)
 from eye_tracking_system_tools.annotation.preprocessing_gui.ellipse_verifier import (
     EllipseVerifierWidget,
 )
 from eye_tracking_system_tools.annotation.preprocessing_gui.models import BlockHandle
 from eye_tracking_system_tools.annotation.preprocessing_gui.tabs.base import BaseTab
 from eye_tracking_system_tools.annotation.preprocessing_gui.workers import CallableWorker
-from eye_tracking_system_tools.preprocessing.BlockSync_class import BlockSync
 from eye_tracking_system_tools.preprocessing.sync_free_eye_io import (
     analysis_syncfree_timeline_path,
     default_syncfree_paths,
+    discover_eye_video_paths,
     finalize_syncfree_eye,
     maybe_load_kerr_refs,
     resolve_syncfree_working_csv,
@@ -32,15 +36,17 @@ class SyncFreeTab(BaseTab):
     tab_label = "Sync-free"
 
     def __init__(self, state, config, parent=None):
-        self._block: BlockHandle | None = None
-        self._blocksync: BlockSync | None = None
         self._left_verifier: EllipseVerifierWidget | None = None
         self._right_verifier: EllipseVerifierWidget | None = None
         self._worker: CallableWorker | None = None
         super().__init__(state, config, parent)
 
+    def artifact_profile(self):
+        return syncfree_artifact_profile(self._artifact_tag_value())
+
     def build_ui(self) -> None:
         layout = QtWidgets.QVBoxLayout(self)
+        layout.addWidget(self._build_artifact_panel())
 
         self._stale_banner = QtWidgets.QLabel()
         self._stale_banner.setWordWrap(True)
@@ -72,6 +78,7 @@ class SyncFreeTab(BaseTab):
         params = QtWidgets.QFormLayout()
         self._artifact_tag = QtWidgets.QLineEdit(str(self._config.syncfree_artifact_tag))
         self._artifact_tag.setPlaceholderText("v1")
+        self._artifact_tag.textChanged.connect(lambda _: self._refresh_artifact_ui())
         self._uncertainty_thr = QtWidgets.QDoubleSpinBox()
         self._uncertainty_thr.setRange(0.0, 1.0)
         self._uncertainty_thr.setDecimals(3)
@@ -112,29 +119,9 @@ class SyncFreeTab(BaseTab):
         self._btn_finalize.clicked.connect(self._run_finalize)
 
     def status_signature(self, block: BlockHandle) -> list[Path]:
-        tag = self._artifact_tag_value()
-        try:
-            blocksync = BlockSync(
-                block.animal_call,
-                block.experiment_date,
-                block.block_num,
-                block.path_to_animal_folder,
-                channeldict=block.channeldict,
-            )
-            blocksync.handle_eye_videos()
-            left = default_syncfree_paths(
-                video_path_for_eye(blocksync, "left"), "left", tag
-            )["eye_data"]
-            right = default_syncfree_paths(
-                video_path_for_eye(blocksync, "right"), "right", tag
-            )["eye_data"]
-            return [left, right]
-        except Exception:
-            return []
+        return syncfree_status_signature_paths(block, self._config)
 
     def set_block(self, block: BlockHandle | None) -> None:
-        self._block = block
-        self._blocksync = None
         self._clear_verifiers()
         self._btn_save_draft.setEnabled(False)
         self._btn_finalize.setEnabled(False)
@@ -143,26 +130,27 @@ class SyncFreeTab(BaseTab):
             self._stale_banner.hide()
             self._missing_sync_banner.hide()
             self._status.setText("")
-            return
-
-        self._info.setText(f"Active block: {block.display_label}")
-        final_sync = block.analysis_path / "final_sync_df.csv"
-        self._missing_sync_banner.setVisible(not final_sync.is_file())
-        self._chk_map_timeline.setEnabled(final_sync.is_file())
-        if not final_sync.is_file():
-            self._chk_map_timeline.setChecked(False)
-        self._update_stale_banner(block)
-        try:
-            blocksync = self._blocksync_for_handle(block)
-            blocksync.handle_eye_videos()
-            self._blocksync = blocksync
-            self._try_load_verifiers()
+        else:
+            self._info.setText(f"Active block: {block.display_label}")
+            final_sync = block.analysis_path / "final_sync_df.csv"
+            self._missing_sync_banner.setVisible(not final_sync.is_file())
+            self._chk_map_timeline.setEnabled(final_sync.is_file())
+            if not final_sync.is_file():
+                self._chk_map_timeline.setChecked(False)
+            self._update_stale_banner(block)
             self._status.setText(
-                "Run ellipses, verify in the viewers, then Finalize to write "
-                "per-eye eye_data + kerr_refs + meta."
+                "Use 'Load prev analysis' when sync-free outputs exist on disk."
             )
+        super().set_block(block)
+
+    def _after_load_artifacts(self, report) -> None:
+        if self._block is None:
+            return
+        try:
+            self._try_load_verifiers()
+            self._status.setText("Loaded sync-free artifacts from disk.")
         except Exception as e:
-            self._info.setText(f"Cannot prepare sync-free workflow: {e}")
+            self._info.setText(f"Cannot load sync-free data: {e}")
             self._status.setText("")
 
     def _artifact_tag_value(self) -> str:
@@ -172,22 +160,10 @@ class SyncFreeTab(BaseTab):
     def _uncertainty_value(self) -> float:
         return float(self._uncertainty_thr.value())
 
-    def _blocksync_for_handle(self, handle: BlockHandle) -> BlockSync:
-        return BlockSync(
-            handle.animal_call,
-            handle.experiment_date,
-            handle.block_num,
-            handle.path_to_animal_folder,
-            channeldict=handle.channeldict,
-        )
-
-    def _require_blocksync(self) -> BlockSync:
-        if self._block is None:
-            raise RuntimeError("No block loaded.")
-        if self._blocksync is None:
-            self._blocksync = self._blocksync_for_handle(self._block)
-            self._blocksync.handle_eye_videos()
-        return self._blocksync
+    def _require_blocksync(self):
+        bs = super()._require_blocksync()
+        self._session.ensure_eye_videos(bs)
+        return bs
 
     def _video_for_eye(self, eye: str) -> Path:
         return video_path_for_eye(self._require_blocksync(), eye)  # type: ignore[arg-type]

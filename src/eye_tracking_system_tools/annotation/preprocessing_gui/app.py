@@ -22,6 +22,10 @@ from PyQt6 import QtCore, QtGui, QtWidgets
 from eye_tracking_system_tools.annotation.preprocessing_gui.block_picker import (
     BlockPicker,
     discover_blocks,
+    infer_fields_from_block_folder,
+)
+from eye_tracking_system_tools.annotation.preprocessing_gui.add_blocks_dialog import (
+    AddBlocksDialog,
 )
 from eye_tracking_system_tools.annotation.preprocessing_gui.config_io import (
     PreprocConfig,
@@ -129,7 +133,7 @@ class StartupDialog(QtWidgets.QDialog):
         path = QtWidgets.QFileDialog.getExistingDirectory(self, "Select block folder")
         if not path:
             return
-        inferred = _infer_fields_from_block_folder(Path(path))
+        inferred = infer_fields_from_block_folder(Path(path))
         if inferred is None:
             QtWidgets.QMessageBox.warning(
                 self,
@@ -224,7 +228,7 @@ class PreprocessingGuiWindow(QtWidgets.QMainWindow):
             )
 
         file_menu = self.menuBar().addMenu("File")
-        file_menu.addAction("Open block folder...", self._open_block_folder)
+        file_menu.addAction("Add block from folder…", self._open_block_folder)
         file_menu.addAction("Reload current block", self._reload_block)
         file_menu.addSeparator()
         file_menu.addAction("Exit", self.close)
@@ -238,10 +242,34 @@ class PreprocessingGuiWindow(QtWidgets.QMainWindow):
     def _wire_signals(self) -> None:
         self._block_picker.block_changed.connect(self._on_block_changed)
         self._block_picker.reload_button().clicked.connect(self._reload_block)
+        self._block_picker.add_blocks_requested.connect(self._add_blocks)
+        self._block_picker.release_block_requested.connect(self._release_current_block)
         self._status_bus.status_changed.connect(self._on_status_changed)
+        self._status_bus.status_changed.connect(self._on_any_status_refresh)
+        self._busy_timer = QtCore.QTimer(self)
+        self._busy_timer.timeout.connect(self._update_block_picker_busy)
+        self._busy_timer.start(400)
+
+    def _update_block_picker_busy(self) -> None:
+        self._block_picker.set_session_busy(self._session_busy())
 
     def _populate_block_picker(self) -> None:
         self._block_picker.set_blocks(self._state.blocks, self._state.current_index)
+
+    def _on_any_status_refresh(self, _tab_id: str, _status: StageStatus) -> None:
+        for tab in self._tabs.values():
+            if hasattr(tab, "on_filesystem_changed"):
+                tab.on_filesystem_changed()
+
+    def _session_busy(self) -> bool:
+        for tab in self._tabs.values():
+            worker = getattr(tab, "_worker", None)
+            if worker is not None and worker.isRunning():
+                return True
+            batch = getattr(tab, "_batch_worker", None)
+            if batch is not None and batch.isRunning():
+                return True
+        return False
 
     def _on_block_changed(self, index: int) -> None:
         if 0 <= index < len(self._state.blocks):
@@ -259,6 +287,118 @@ class PreprocessingGuiWindow(QtWidgets.QMainWindow):
         else:
             self.statusBar().showMessage(f"Active block: {block.display_label}")
 
+    def _reload_block(self) -> None:
+        block = self._state.current_block
+        if block is not None:
+            self._state.ensure_session().invalidate(block)
+        self._on_block_changed(self._block_picker.current_index())
+
+    def _add_blocks(self) -> None:
+        if self._session_busy():
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Add block",
+                "Wait for the current background job to finish.",
+            )
+            return
+        animal = None
+        if self._state.blocks:
+            animal = self._state.blocks[0].animal_call
+        loaded = {b.block_path for b in self._state.blocks}
+        dlg = AddBlocksDialog(
+            experiment_path=self._state.experiment_path,
+            animal=animal,
+            loaded_paths=loaded,
+            parent=self,
+        )
+        if dlg.exec() != QtWidgets.QDialog.DialogCode.Accepted:
+            return
+        new_handles = dlg.selected_handles()
+        if not new_handles:
+            return
+        if self._state.experiment_path is None and new_handles:
+            self._state.experiment_path = new_handles[0].path_to_animal_folder
+        added = self._state.add_blocks(new_handles)
+        if added == 0:
+            QtWidgets.QMessageBox.information(
+                self, "Add block", "No new blocks were added (already in session)."
+            )
+            return
+        first_new_idx = len(self._state.blocks) - added
+        self._populate_block_picker()
+        self._block_picker.set_blocks(self._state.blocks, first_new_idx)
+        self.statusBar().showMessage(f"Added {added} block(s) to session.")
+
+    def _release_current_block(self) -> None:
+        if self._session_busy():
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Release block",
+                "Wait for the current background or batch job to finish.",
+            )
+            return
+        index = self._block_picker.current_index()
+        if not (0 <= index < len(self._state.blocks)):
+            return
+        block = self._state.blocks[index]
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            "Release block",
+            f"Release {block.display_label} from this session?\n\n"
+            "On-disk analysis files are kept; only in-memory state is freed.",
+            QtWidgets.QMessageBox.StandardButton.Ok
+            | QtWidgets.QMessageBox.StandardButton.Cancel,
+        )
+        if reply != QtWidgets.QMessageBox.StandardButton.Ok:
+            return
+        self._state.ensure_session().release(block)
+        self._state.remove_block_at(index)
+        self._populate_block_picker()
+        new_index = min(index, max(0, len(self._state.blocks) - 1))
+        if self._state.blocks:
+            self._block_picker.set_blocks(self._state.blocks, new_index)
+        else:
+            self._block_picker.set_blocks([], 0)
+            self._on_block_changed(-1)
+        self.statusBar().showMessage(f"Released block {block.block_num} from session.")
+
+    def _open_block_folder(self) -> None:
+        path = QtWidgets.QFileDialog.getExistingDirectory(self, "Select block folder")
+        if not path:
+            return
+        inferred = infer_fields_from_block_folder(Path(path))
+        if inferred is None:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Add block folder",
+                "Could not infer experiment/animal/block from this folder.\n"
+                "Expected .../<animal>/<date>/block_NNN or .../<animal>/block_NNN.",
+            )
+            return
+        experiment_path, animal, block = inferred
+        blocks = discover_blocks(experiment_path, animal, [block])
+        if not blocks:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Add block folder",
+                f"No matching block discovered for inferred block id {block}.",
+            )
+            return
+        if self._state.experiment_path is None:
+            self._state.experiment_path = experiment_path
+        added = self._state.add_blocks(blocks)
+        if added == 0:
+            QtWidgets.QMessageBox.information(
+                self, "Add block folder", "That block is already in the session."
+            )
+            return
+        self._populate_block_picker()
+        idx = self._state.index_for_path(blocks[0].block_path)
+        self._block_picker.set_blocks(
+            self._state.blocks, idx if idx is not None else 0
+        )
+        self.statusBar().showMessage(f"Added block: {blocks[0].display_label}")
+
     def _on_status_changed(self, tab_id: str, status: StageStatus) -> None:
         tab = self._tabs.get(tab_id)
         if tab is None:
@@ -272,38 +412,6 @@ class PreprocessingGuiWindow(QtWidgets.QMainWindow):
             idx,
             f"{tab.tab_label}: {_STATUS_DOTS[status][2]}",
         )
-
-    def _reload_block(self) -> None:
-        self._on_block_changed(self._block_picker.current_index())
-
-    def _open_block_folder(self) -> None:
-        path = QtWidgets.QFileDialog.getExistingDirectory(self, "Select block folder")
-        if not path:
-            return
-        inferred = _infer_fields_from_block_folder(Path(path))
-        if inferred is None:
-            QtWidgets.QMessageBox.warning(
-                self,
-                "Open block folder",
-                "Could not infer experiment/animal/block from this folder.\n"
-                "Expected .../<animal>/<date>/block_NNN or .../<animal>/block_NNN.",
-            )
-            return
-        experiment_path, animal, block = inferred
-        blocks = discover_blocks(experiment_path, animal, [block])
-        if not blocks:
-            QtWidgets.QMessageBox.warning(
-                self,
-                "Open block folder",
-                f"No matching block discovered for inferred block id {block}.",
-            )
-            return
-        self._state.experiment_path = experiment_path
-        self._state.blocks = blocks
-        self._state.current_index = 0
-        self._populate_block_picker()
-        self._reload_block()
-        self.statusBar().showMessage(f"Loaded block from folder: {blocks[0].display_label}")
 
     def _show_about(self) -> None:
         QtWidgets.QMessageBox.about(
@@ -388,6 +496,9 @@ class PreprocessingGuiWindow(QtWidgets.QMainWindow):
             if len(animals) == 1:
                 self._config.last_animal = next(iter(animals))
             self._config.last_blocks = sorted({b.block_num for b in self._state.blocks})
+        behavior_tab = self._tabs.get("behavior")
+        if behavior_tab is not None and hasattr(behavior_tab, "_persist_tab_config"):
+            behavior_tab._persist_tab_config()
         save_config(self._config_path, self._config)
 
 
@@ -400,29 +511,6 @@ def _upstream_tabs(tab_id: str) -> list[str]:
         "behavior": ["sync"],
         "syncfree": ["sync"],
     }.get(tab_id, [])
-
-
-def _infer_fields_from_block_folder(
-    block_folder: Path,
-) -> tuple[Path, str, str] | None:
-    """Infer (experiment_path, animal, block_num) from a block folder path."""
-    p = block_folder
-    if not p.name.lower().startswith("block_"):
-        return None
-    block_num = p.name.split("_", 1)[1].strip()
-    if not block_num:
-        return None
-    if p.parent.name.count("_") == 2 and len(p.parent.name) == 10:
-        # .../<experiment>/<animal>/<yyyy_mm_dd>/block_NNN
-        animal = p.parent.parent.name
-        experiment_path = p.parent.parent.parent
-    else:
-        # .../<experiment>/<animal>/block_NNN
-        animal = p.parent.name
-        experiment_path = p.parent.parent
-    if not animal or not experiment_path.exists():
-        return None
-    return (experiment_path, animal, block_num)
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -540,6 +628,7 @@ def main(argv: list[str] | None = None) -> int:
         current_index=0,
         output_folder=output_folder,
     )
+    state.ensure_session()
 
     win = PreprocessingGuiWindow(state, config, config_path)
     win.resize(1280, 860)

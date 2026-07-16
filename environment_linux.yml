@@ -1,4 +1,4 @@
-# PETS conda environment — Linux (also try on macOS).
+# PETS conda environment — Linux only (use environment_mac.yml on macOS).
 #
 # Uses conda-forge PyQt, OpenCV, and X11/Qt runtime libraries.
 #

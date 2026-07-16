@@ -25,21 +25,30 @@ Or: `bash scripts/setup_eye_repo_linux.sh`
 
 ### macOS
 
-Use **`environment_linux.yml`** (`eye_repo_linux`) first — conda-forge PyQt/OpenCV. Report issues if a dedicated macOS file is needed.
+```bash
+cd /path/to/PETS
+conda env create -f environment_mac.yml
+conda activate eye_repo_mac
+```
+
+Or: `bash scripts/setup_eye_repo_mac.sh`
+
+Do **not** use `environment_linux.yml` on macOS — it pulls Linux-only packages (`libegl`, `xcb-util-cursor`) that are unavailable on `osx-arm64` / `osx-64`.
 
 ## Environment files
 
 | File | Env name | Platform |
 |------|----------|----------|
 | `environment_win.yml` | `eye_repo_win` | Windows (pip PyQt6 + opencv-python-headless) |
-| `environment_linux.yml` | `eye_repo_linux` | Linux; try on macOS |
+| `environment_linux.yml` | `eye_repo_linux` | Linux (conda-forge PyQt + OpenCV) |
+| `environment_mac.yml` | `eye_repo_mac` | macOS (pip PyQt6 + opencv-python-headless) |
 
 Both environments support: Jupyter notebooks, `BlockSync` preprocessing, Block Annotator, Preprocessing GUI, and Event Explorer.
 
 ## Jupyter kernel
 
 ```bash
-conda activate eye_repo_win   # or eye_repo_linux
+conda activate eye_repo_win   # or eye_repo_linux / eye_repo_mac
 python -m ipykernel install --user --name eye_repo --display-name "Python (PETS)"
 ```
 
@@ -53,10 +62,12 @@ python examples/smoke_preprocessing_imports.py
 
 Headless GUI smoke (optional):
 
-```powershell
-$env:QT_QPA_PLATFORM = "offscreen"
+```bash
+export QT_QPA_PLATFORM=offscreen   # macOS / Linux
 pytest tests/test_preprocessing_gui_phase0.py -q
 ```
+
+Windows PowerShell: `$env:QT_QPA_PLATFORM = "offscreen"` before `pytest`.
 
 ## Troubleshooting
 

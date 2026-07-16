@@ -104,6 +104,7 @@ def test_verify_tab_writes_self_kerr_refs(sample_block_path, qapp_session, tmp_p
 
     tab = VerifyTab(state, config)
     tab.set_block(block)
+    tab._on_load_prev_analysis()
     assert tab._left_verifier is not None and tab._right_verifier is not None
 
     tab._left_verifier.pick_ref_from_display_xy(101, 50)

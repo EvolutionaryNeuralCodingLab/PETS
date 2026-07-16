@@ -245,6 +245,8 @@ def test_sync_tab_phase2_widgets_construct(qapp_session):
 
     tab = SyncTab(_State(), _Cfg())
     assert tab._btn_read_dlc.text()
+    assert tab._dlc_le_combo is not None
+    assert tab._dlc_re_combo is not None
     assert tab._btn_jitter_report.text()
     assert tab._btn_correct_jitter.text()
     assert tab._btn_preview_jitter.text()

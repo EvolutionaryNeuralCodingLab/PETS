@@ -22,7 +22,8 @@ Two conda environments cover the full repository (notebooks, preprocessing, all 
 | Platform | File | Env name |
 |----------|------|----------|
 | **Windows** | `environment_win.yml` | `eye_repo_win` |
-| **Linux** (and macOS to try first) | `environment_linux.yml` | `eye_repo_linux` |
+| **Linux** | `environment_linux.yml` | `eye_repo_linux` |
+| **macOS** | `environment_mac.yml` | `eye_repo_mac` |
 
 **Windows:**
 
@@ -34,7 +35,7 @@ pip install -e .
 
 Or: `powershell -ExecutionPolicy Bypass -File scripts\setup_eye_repo_windows.ps1`
 
-**Linux / macOS:**
+**Linux:**
 
 ```bash
 conda env create -f environment_linux.yml
@@ -45,7 +46,16 @@ conda activate eye_repo_linux
 
 Or: `bash scripts/setup_eye_repo_linux.sh`
 
-GUI dependencies use **pip** PyQt6 + headless OpenCV on Windows (avoids conda/pip OpenCV DLL clashes). Linux uses conda-forge PyQt and OpenCV.
+**macOS:**
+
+```bash
+conda env create -f environment_mac.yml
+conda activate eye_repo_mac
+```
+
+Or: `bash scripts/setup_eye_repo_mac.sh`
+
+GUI dependencies use **pip** PyQt6 + headless OpenCV on Windows and macOS (avoids conda/pip OpenCV clashes and Linux-only system libs). Linux uses conda-forge PyQt and OpenCV.
 
 ### Verification
 
@@ -61,7 +71,7 @@ Standalone PyQt6 app for synchronized review of arena + eye videos, Open Ephys t
 
 ### Install and launch
 
-Use **`eye_repo_win`** (Windows) or **`eye_repo_linux`** (Linux/macOS) — see [Setup](#installation-recommended).
+Use **`eye_repo_win`** (Windows), **`eye_repo_linux`** (Linux), or **`eye_repo_mac`** (macOS) — see [Setup](#installation-recommended).
 
 ```powershell
 conda activate eye_repo_win

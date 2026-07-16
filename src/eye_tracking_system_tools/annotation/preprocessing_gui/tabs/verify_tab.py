@@ -6,6 +6,10 @@ from pathlib import Path
 
 from PyQt6 import QtWidgets
 
+from eye_tracking_system_tools.annotation.preprocessing_gui.analysis_artifacts import (
+    VERIFY_ARTIFACT_PROFILE,
+    LoadReport,
+)
 from eye_tracking_system_tools.annotation.preprocessing_gui.ellipse_verifier import (
     EllipseVerifierWidget,
 )
@@ -16,6 +20,9 @@ from eye_tracking_system_tools.preprocessing.data_verification_utils import (
     export_corrected_eye_data,
     export_current_kerr_refs,
     load_eye_data,
+)
+from eye_tracking_system_tools.preprocessing.calculate_kerr_angles import (
+    load_self_kerr_refs,
 )
 
 
@@ -38,14 +45,16 @@ class VerifyTab(BaseTab):
     tab_label = "Verify"
 
     def __init__(self, state, config, parent=None):
-        self._block: BlockHandle | None = None
-        self._blocksync: BlockSync | None = None
         self._left_verifier: EllipseVerifierWidget | None = None
         self._right_verifier: EllipseVerifierWidget | None = None
         super().__init__(state, config, parent)
 
+    def artifact_profile(self):
+        return VERIFY_ARTIFACT_PROFILE
+
     def build_ui(self) -> None:
         layout = QtWidgets.QVBoxLayout(self)
+        layout.addWidget(self._build_artifact_panel())
 
         self._stale_banner = QtWidgets.QLabel()
         self._stale_banner.setWordWrap(True)
@@ -80,23 +89,29 @@ class VerifyTab(BaseTab):
         return [block.analysis_path / "self_kerr_refs.csv"]
 
     def set_block(self, block: BlockHandle | None) -> None:
-        self._block = block
-        self._blocksync = None
         self._clear_verifiers()
         self._btn_save.setEnabled(False)
         if block is None:
             self._info.setText("No block loaded.")
             self._stale_banner.hide()
             self._status.setText("")
-            return
+        else:
+            self._info.setText(f"Active block: {block.display_label}")
+            self._update_stale_banner(block)
+            self._status.setText(
+                "Use 'Load prev analysis' when eye data exists on disk, "
+                "or complete Sync tab step 5 first."
+            )
+        super().set_block(block)
 
-        self._info.setText(f"Active block: {block.display_label}")
-        self._update_stale_banner(block)
+    def _after_load_artifacts(self, report: LoadReport) -> None:
+        if self._block is None:
+            return
         try:
-            self._load_verifiers(block)
+            self._load_verifiers(self._block)
             self._btn_save.setEnabled(True)
             self._status.setText(
-                "Adjust both eyes, then click Save once to export eye CSVs + self_kerr_refs.csv."
+                "Loaded verification data. Adjust both eyes, then Save once."
             )
         except Exception as e:
             self._info.setText(f"Cannot load verification data: {e}")
@@ -121,15 +136,6 @@ class VerifyTab(BaseTab):
         self._left_verifier = None
         self._right_verifier = None
 
-    def _blocksync_for_handle(self, handle: BlockHandle) -> BlockSync:
-        return BlockSync(
-            handle.animal_call,
-            handle.experiment_date,
-            handle.block_num,
-            handle.path_to_animal_folder,
-            channeldict=handle.channeldict,
-        )
-
     def _load_verifiers(self, block: BlockHandle) -> None:
         left_path = block.analysis_path / "left_eye_data.csv"
         right_path = block.analysis_path / "right_eye_data.csv"
@@ -139,10 +145,10 @@ class VerifyTab(BaseTab):
                 "Complete Sync tab step 5 first."
             )
 
-        blocksync = self._blocksync_for_handle(block)
-        blocksync.handle_eye_videos()
+        blocksync = self._require_blocksync()
+        self._session.ensure_eye_videos(blocksync)
         load_eye_data(blocksync)
-        self._blocksync = blocksync
+        load_self_kerr_refs(blocksync)
 
         ref_l = None
         ref_r = None
@@ -158,6 +164,7 @@ class VerifyTab(BaseTab):
         if not blocksync.le_videos or not blocksync.re_videos:
             raise RuntimeError("Eye videos not found — run Prepare data on Sync tab.")
 
+        self._clear_verifiers()
         self._left_verifier = EllipseVerifierWidget(
             blocksync.left_eye_data,
             blocksync.le_videos[0],
@@ -176,25 +183,26 @@ class VerifyTab(BaseTab):
         self._verifier_layout.addWidget(self._right_verifier)
 
     def _save_all(self) -> None:
-        if self._blocksync is None or self._left_verifier is None or self._right_verifier is None:
+        if self._left_verifier is None or self._right_verifier is None:
             return
 
+        blocksync = self._require_blocksync()
         left_df = self._left_verifier.df()
         right_df = self._right_verifier.df()
         left_ref = self._left_verifier.ref_xy()
         right_ref = self._right_verifier.ref_xy()
 
-        self._blocksync.left_eye_data = left_df
-        self._blocksync.right_eye_data = right_df
+        blocksync.left_eye_data = left_df
+        blocksync.right_eye_data = right_df
         if left_ref is not None:
-            self._blocksync.kerr_ref_l_x = int(round(left_ref[0]))
-            self._blocksync.kerr_ref_l_y = int(round(left_ref[1]))
+            blocksync.kerr_ref_l_x = int(round(left_ref[0]))
+            blocksync.kerr_ref_l_y = int(round(left_ref[1]))
         if right_ref is not None:
-            self._blocksync.kerr_ref_r_x = int(round(right_ref[0]))
-            self._blocksync.kerr_ref_r_y = int(round(right_ref[1]))
+            blocksync.kerr_ref_r_x = int(round(right_ref[0]))
+            blocksync.kerr_ref_r_y = int(round(right_ref[1]))
 
-        export_corrected_eye_data(self._blocksync)
-        export_current_kerr_refs(self._blocksync)
+        export_corrected_eye_data(blocksync)
+        export_current_kerr_refs(blocksync)
         self._status.setText(
             "Saved both eyes and exported left/right_eye_data.csv + self_kerr_refs.csv."
         )

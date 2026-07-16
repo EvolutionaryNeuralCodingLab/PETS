@@ -47,6 +47,8 @@ class PreprocConfig:
     behavior_window_size_ms: int = 10000
     behavior_step_size_ms: int = 1000
     behavior_threshold: float = 0.3
+    accel_calibration_mat_path: str | None = None
+    accel_calibration_headstage: str | None = None
 
     # ---- Stage 5 (sync-free) defaults ----
     syncfree_artifact_tag: str = "v1"

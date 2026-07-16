@@ -20,6 +20,7 @@ from bokeh.models import HoverTool, ColumnDataSource
 from bokeh.plotting import figure, show
 from bokeh.palettes import Category10
 from eye_tracking_system_tools.preprocessing.ellipse_fit import LsqEllipse
+from eye_tracking_system_tools.preprocessing.dlc_csv_io import resolve_dlc_csv
 from lxml import etree
 from scipy import signal
 from tqdm import tqdm
@@ -203,6 +204,9 @@ class BlockSync:
         self.synced_videos_validated = None
         self.le_csv = None
         self.re_csv = None
+        self.le_dlc_path = None
+        self.re_dlc_path = None
+        self.dlc_ellipse_fit_report = None
         self.le_ellipses = None
         self.re_ellipses = None
         self.euclidean_speed_per_frame = None
@@ -2099,10 +2103,11 @@ class BlockSync:
         return filtered_data
 
     @staticmethod
-    def eye_tracking_analysis(dlc_video_analysis_csv, uncertainty_thr):
+    def eye_tracking_analysis(dlc_video_analysis_csv, uncertainty_thr, *, fit_report=None):
         """
         :param dlc_video_analysis_csv: the csv output of a dlc analysis of one video, already read by pandas with header=1
         :param uncertainty_thr: The confidence P value to use as a threshold for datapoint validity in the analysis
+        :param fit_report: optional dict populated in-place with yield/likelihood stats
         :returns ellipse_df: a DataFrame of ellipses parameters (center, width, height, phi, size) for each video frame
 
         """
@@ -2144,11 +2149,35 @@ class BlockSync:
         edge_ys = edge_ys.rename(columns=dict(zip(edge_ys.columns, edge_xs.columns)))
         # e = edge_ps < uncertainty_thr
 
+        fit_rows = range(1, len(data) - 1)
+        n_frames = max(0, len(data) - 2)
+        n_fitted = 0
+        n_insufficient_points = 0
+        n_fit_failed = 0
+
+        if fit_report is not None and n_frames > 0:
+            likelihood_frames = list(fit_rows)
+            all_likelihood = pd.concat(
+                [pupil_ps.loc[likelihood_frames], edge_ps.loc[likelihood_frames]],
+                axis=1,
+            )
+            all_values = all_likelihood.to_numpy(dtype=float).ravel()
+            all_values = all_values[~np.isnan(all_values)]
+            used_values = all_values[all_values > uncertainty_thr]
+            fit_report["uncertainty_thr"] = float(uncertainty_thr)
+            fit_report["n_frames"] = int(n_frames)
+            fit_report["mean_likelihood_all"] = (
+                float(np.mean(all_values)) if all_values.size else float("nan")
+            )
+            fit_report["mean_likelihood_used"] = (
+                float(np.mean(used_values)) if used_values.size else float("nan")
+            )
+
         # work row by row to figure out the ellipses
         ellipses = []
         caudal_edge_ls = []
         rostral_edge_ls = []
-        for row in tqdm(range(1, len(data) - 1)):
+        for row in tqdm(fit_rows):
             # first, take all the values, and concatenate them into an X array
             x_values = pupil_xs.loc[row].values
             y_values = pupil_ys.loc[row].values
@@ -2159,13 +2188,19 @@ class BlockSync:
 
             # if there are enough rows for a fit, make an ellipse
             if X.shape[0] > 5:
-                el = LsqEllipse().fit(X)
-                center, width, height, phi = el.as_parameters()
-                center_x = center[0]
-                center_y = center[1]
-                ellipses.append([center_x, center_y, width, height, phi])
+                try:
+                    el = LsqEllipse().fit(X)
+                    center, width, height, phi = el.as_parameters()
+                    center_x = center[0]
+                    center_y = center[1]
+                    ellipses.append([center_x, center_y, width, height, phi])
+                    n_fitted += 1
+                except (IndexError, ValueError):
+                    ellipses.append([np.nan, np.nan, np.nan, np.nan, np.nan])
+                    n_fit_failed += 1
             else:
                 ellipses.append([np.nan, np.nan, np.nan, np.nan, np.nan])
+                n_insufficient_points += 1
 
             caudal_edge = [
                 float(data['Caudal_edge'][row]),
@@ -2191,7 +2226,23 @@ class BlockSync:
         ellipse_df[['rostral_edge_x', 'rostral_edge_y']] = pd.DataFrame(ellipse_df['rostral_edge'].tolist(),
                                                                         index=ellipse_df.index)
 
+        if fit_report is not None:
+            fit_report["n_fitted"] = int(n_fitted)
+            fit_report["n_insufficient_points"] = int(n_insufficient_points)
+            fit_report["n_fit_failed"] = int(n_fit_failed)
+            fit_report["yield_pct"] = (
+                float(100.0 * n_fitted / n_frames) if n_frames else float("nan")
+            )
+
         print(f'\n ellipses calculation complete')
+        if fit_report is not None:
+            print(
+                f"ellipse fit yield: {fit_report['yield_pct']:.1f}% "
+                f"({fit_report['n_fitted']}/{fit_report['n_frames']} frames), "
+                f"mean likelihood all={fit_report['mean_likelihood_all']:.3f}, "
+                f"used={fit_report['mean_likelihood_used']:.3f}, "
+                f"fit_failed={fit_report['n_fit_failed']}"
+            )
         return ellipse_df
 
     # ============================================================================
@@ -2199,7 +2250,14 @@ class BlockSync:
     # ============================================================================
     # [USED IN SYNC PIPELINE] These methods are used in the downstream pipeline
 
-    def read_dlc_data(self, threshold_to_use=0.95, export=True, overwrite=False):
+    def read_dlc_data(
+        self,
+        threshold_to_use=0.95,
+        export=True,
+        overwrite=False,
+        le_dlc_path=None,
+        re_dlc_path=None,
+    ):
         """
         Method to read and analyze the dlc files and fit ellipses to create the le/re ellipses attributes of the block
         """
@@ -2218,25 +2276,25 @@ class BlockSync:
             print('eye dataframes loaded from analysis folder')
             return
 
-        # find the dlc files, check for filtered results
-        pl = [i for i in os.listdir(self.l_e_path) if 'DLC' in i and '.csv' in i]
-        if len(pl) > 1:
-            pl = [i for i in pl if 'filtered' in i][0]
-        else:
-            pl = pl[0]
-        self.le_csv = pd.read_csv(self.l_e_path / pl, header=1)
+        le_path = resolve_dlc_csv(self.l_e_path, le_dlc_path)
+        re_path = resolve_dlc_csv(self.r_e_path, re_dlc_path)
+        self.le_dlc_path = le_path
+        self.re_dlc_path = re_path
+        self.le_csv = pd.read_csv(le_path, header=1, low_memory=False)
+        self.re_csv = pd.read_csv(re_path, header=1, low_memory=False)
 
-        pr = [i for i in os.listdir(self.r_e_path) if 'DLC' in i and '.csv' in i]
-        if len(pr) > 1:
-            print(pr)
-            pr = [i for i in pr if 'filtered' in i][0]
-        else:
-            pr = pr[0]
-        self.re_csv = pd.read_csv(self.r_e_path / pr, header=1)
-
-        # perform eye tracking analysis for each eye frame
-        self.le_ellipses = self.eye_tracking_analysis(self.le_csv, threshold_to_use)
-        self.re_ellipses = self.eye_tracking_analysis(self.re_csv, threshold_to_use)
+        le_stats: dict = {}
+        re_stats: dict = {}
+        self.le_ellipses = self.eye_tracking_analysis(
+            self.le_csv, threshold_to_use, fit_report=le_stats
+        )
+        self.re_ellipses = self.eye_tracking_analysis(
+            self.re_csv, threshold_to_use, fit_report=re_stats
+        )
+        self.dlc_ellipse_fit_report = {
+            "left": {**le_stats, "dlc_csv": str(le_path)},
+            "right": {**re_stats, "dlc_csv": str(re_path)},
+        }
 
         # get the frame-timestamp relationship for each video
         try:
@@ -4155,6 +4213,25 @@ class BlockSync:
             print(f'liz_mov_df created for {self}')
         except FileNotFoundError:
             print('mat file does not exist - run the matlab getLizMovement function')
+
+    def block_compute_lizard_movement(
+        self,
+        *,
+        overwrite: bool = False,
+        calibration=None,
+        params=None,
+    ):
+        """Compute and save ``lizMov.mat`` from OE accelerometer data (Python pipeline)."""
+        from eye_tracking_system_tools.preprocessing.lizard_movement import (
+            compute_and_save_lizard_movement,
+        )
+
+        return compute_and_save_lizard_movement(
+            self,
+            overwrite=overwrite,
+            params=params,
+            calibration=calibration,
+        )
 
     def apply_missing_frame_correction(
         self,

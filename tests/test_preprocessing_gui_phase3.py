@@ -16,6 +16,8 @@ from eye_tracking_system_tools.annotation.preprocessing_gui.manual_ttl_dialog im
 )
 from eye_tracking_system_tools.annotation.preprocessing_gui.qt_roi_picker import (
     QtRoiPickerDialog,
+    jitter_report_needs_computation,
+    normalize_correlation_roi,
 )
 from eye_tracking_system_tools.preprocessing.BlockSync_class import BlockSync
 
@@ -155,3 +157,18 @@ def test_qt_roi_picker_returns_tuple(qapp_session):
     dlg.set_selection_rect(10, 20, 30, 40)
     roi = dlg.selected_roi()
     assert roi == (10, 20, 30, 40)
+
+
+def test_normalize_correlation_roi_forces_odd_dimensions():
+    assert normalize_correlation_roi((10, 20, 30, 40)) == [10, 20, 31, 41]
+    assert normalize_correlation_roi((0, 0, 5, 7)) == [0, 0, 5, 7]
+
+
+def test_jitter_report_needs_computation(tmp_path):
+    analysis = tmp_path / "analysis"
+    analysis.mkdir()
+    blocksync = SimpleNamespace(analysis_path=analysis)
+    assert jitter_report_needs_computation(blocksync) is True
+    (analysis / "jitter_report_dict.pkl").write_bytes(b"stub")
+    assert jitter_report_needs_computation(blocksync) is False
+    assert jitter_report_needs_computation(blocksync, overwrite=True) is True

@@ -86,6 +86,7 @@ def main() -> int:
         current_index=0,
         output_folder=output_folder,
     )
+    state.ensure_session()
 
     win = PreprocessingGuiWindow(state, config, config_path)
     expected_ids = [cls.tab_id for cls in _TAB_CLASSES]
@@ -112,6 +113,21 @@ def main() -> int:
             print(f"[FAIL] {tab_id} StatusBus returned non-StageStatus {status!r}")
             ok = False
         print(f"[OK] {tab_id}: signature={[p.name for p in sig]} status={status.value}")
+
+    for tab_id, tab in win._tabs.items():
+        if not hasattr(tab, "_btn_load_prev"):
+            print(f"[FAIL] {tab_id} missing Load prev analysis button.")
+            ok = False
+        else:
+            print(f"[OK] {tab_id}: Load prev analysis button present.")
+
+    picker = win._block_picker
+    for attr in ("_btn_add", "_btn_release"):
+        if not hasattr(picker, attr):
+            print(f"[FAIL] BlockPicker missing {attr}.")
+            ok = False
+    if hasattr(picker, "_btn_add") and hasattr(picker, "_btn_release"):
+        print("[OK] BlockPicker add/release controls present.")
 
     # Phase 1: Sync tab should expose deterministic-stage widgets.
     sync_tab = win._tabs.get("sync")
@@ -153,6 +169,7 @@ def main() -> int:
             "_btn_preview_jitter",
             "_btn_apply_jitter",
             "_btn_finalize_eye",
+            "_btn_load_prev",
             "_jitter_plot_left",
             "_jitter_plot_right",
         ]
@@ -214,6 +231,7 @@ def main() -> int:
         if blocks:
             try:
                 verify_tab.set_block(blocks[0])
+                verify_tab._on_load_prev_analysis()
                 if verify_tab._left_verifier is None or verify_tab._right_verifier is None:
                     print(
                         "[WARN] Verify tab verifiers not loaded (missing eye CSVs/videos on sample block)."
@@ -267,10 +285,13 @@ def main() -> int:
         behavior_attrs = [
             "_movement_plot",
             "_btn_load",
+            "_btn_compute",
             "_btn_rolling",
             "_btn_export",
             "_threshold",
             "_lizmov_banner",
+            "_calib_path_edit",
+            "_headstage_combo",
         ]
         missing_b = [n for n in behavior_attrs if not hasattr(behavior_tab, n)]
         if missing_b:

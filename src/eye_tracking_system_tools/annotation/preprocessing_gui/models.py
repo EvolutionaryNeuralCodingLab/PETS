@@ -10,7 +10,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from eye_tracking_system_tools.annotation.preprocessing_gui.block_session import (
+        BlockSyncSession,
+    )
 
 
 class StageStatus(Enum):
@@ -68,6 +73,7 @@ class GuiState:
     blocks: list[BlockHandle] = field(default_factory=list)
     current_index: int = 0
     output_folder: Path | None = None
+    session: BlockSyncSession | None = None
 
     # Cached pipeline artefacts for the current block (cleared when block changes).
     df_left_simple_sync: Any = None
@@ -87,3 +93,46 @@ class GuiState:
         self.df_right_simple_sync = None
         self.arena_grid_df = None
         self.final_sync_df = None
+
+    def ensure_session(self) -> BlockSyncSession:
+        if self.session is None:
+            from eye_tracking_system_tools.annotation.preprocessing_gui.block_session import (
+                BlockSyncSession,
+            )
+
+            self.session = BlockSyncSession()
+        return self.session
+
+    def index_for_path(self, block_path: Path) -> int | None:
+        target = Path(block_path).resolve()
+        for i, handle in enumerate(self.blocks):
+            if Path(handle.block_path).resolve() == target:
+                return i
+        return None
+
+    def add_blocks(self, handles: list[BlockHandle]) -> int:
+        """Append blocks not already in session (dedup by block_path)."""
+        existing = {Path(b.block_path).resolve() for b in self.blocks}
+        added = 0
+        for handle in handles:
+            key = Path(handle.block_path).resolve()
+            if key in existing:
+                continue
+            self.blocks.append(handle)
+            existing.add(key)
+            added += 1
+        if self.blocks and self.current_index >= len(self.blocks):
+            self.current_index = len(self.blocks) - 1
+        return added
+
+    def remove_block_at(self, index: int) -> BlockHandle | None:
+        if not (0 <= index < len(self.blocks)):
+            return None
+        removed = self.blocks.pop(index)
+        if not self.blocks:
+            self.current_index = 0
+        elif index < self.current_index:
+            self.current_index -= 1
+        elif self.current_index >= len(self.blocks):
+            self.current_index = len(self.blocks) - 1
+        return removed

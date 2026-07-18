@@ -2191,11 +2191,25 @@ class BlockSync:
                 try:
                     el = LsqEllipse().fit(X)
                     center, width, height, phi = el.as_parameters()
-                    center_x = center[0]
-                    center_y = center[1]
+                    # Keep the ellipse column dtypes float64. A single complex
+                    # parameter would upcast the whole DataFrame to complex128
+                    # and CSV-export as "(x+0j)", which breaks Verify later.
+                    vals = [center[0], center[1], width, height, phi]
+                    if any(np.iscomplexobj(v) for v in vals):
+                        raise ValueError("non-real ellipse parameters")
+                    center_x = float(np.asarray(center[0]).real)
+                    center_y = float(np.asarray(center[1]).real)
+                    width = float(np.asarray(width).real)
+                    height = float(np.asarray(height).real)
+                    phi = float(np.asarray(phi).real)
+                    if not all(
+                        np.isfinite(v)
+                        for v in (center_x, center_y, width, height, phi)
+                    ):
+                        raise ValueError("non-finite ellipse parameters")
                     ellipses.append([center_x, center_y, width, height, phi])
                     n_fitted += 1
-                except (IndexError, ValueError):
+                except (IndexError, ValueError, TypeError, np.linalg.LinAlgError):
                     ellipses.append([np.nan, np.nan, np.nan, np.nan, np.nan])
                     n_fit_failed += 1
             else:

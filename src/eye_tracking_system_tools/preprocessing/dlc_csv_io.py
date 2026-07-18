@@ -5,6 +5,9 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import numpy as np
+import pandas as pd
+
 
 def list_dlc_csvs(eye_folder: Path) -> list[Path]:
     """Return DLC CSV paths in ``eye_folder``, sorted for stable UI display."""
@@ -56,3 +59,70 @@ def resolve_dlc_csv(eye_folder: Path, selected: str | Path | None = None) -> Pat
 def _dlc_sort_key(path: Path) -> tuple[int, float, str]:
     filtered_rank = 0 if "filtered" in path.name.lower() else 1
     return (filtered_rank, -path.stat().st_mtime, path.name.lower())
+
+
+def _likelihood_columns(data: pd.DataFrame) -> list[str]:
+    """Return Pupil*/edge* likelihood column names (every 3rd bodypart field)."""
+    cols: list[str] = []
+    for token in ("Pupil", "edge"):
+        elements = np.array([c for c in data.columns if token in str(c)])
+        if len(elements) == 0:
+            continue
+        cols.extend(elements[np.arange(2, len(elements), 3)].tolist())
+    return cols
+
+
+def load_dlc_likelihood_values(csv_path: Path | str) -> np.ndarray:
+    """
+    Extract all Pupil/edge likelihood samples from a DLC CSV.
+
+    Matches ``BlockSync.eye_tracking_analysis`` loading: ``header=1``, then
+    ``iloc[1:]`` numeric rows, likelihood columns at every 3rd Pupil*/edge* field.
+    """
+    path = Path(csv_path)
+    data = pd.read_csv(path, header=1, low_memory=False)
+    data = data.iloc[1:].apply(pd.to_numeric, errors="coerce")
+    likelihood_cols = _likelihood_columns(data)
+    if not likelihood_cols:
+        return np.asarray([], dtype=float)
+    values = data[likelihood_cols].to_numpy(dtype=float).ravel()
+    return values[~np.isnan(values)]
+
+
+def load_dlc_likelihood_values_many(csv_paths: list[Path | str]) -> np.ndarray:
+    """Concatenate likelihood samples from multiple DLC CSVs."""
+    chunks = [load_dlc_likelihood_values(p) for p in csv_paths]
+    chunks = [c for c in chunks if c.size]
+    if not chunks:
+        return np.asarray([], dtype=float)
+    return np.concatenate(chunks)
+
+
+def likelihood_threshold_stats(
+    values: np.ndarray, threshold: float
+) -> dict[str, float | int]:
+    """
+    Summarize how many likelihood samples a threshold keeps.
+
+    Uses the same rule as ``eye_tracking_analysis``: keep when ``value > threshold``.
+    """
+    arr = np.asarray(values, dtype=float)
+    arr = arr[~np.isnan(arr)]
+    n_total = int(arr.size)
+    if n_total == 0:
+        return {
+            "n_total": 0,
+            "n_kept": 0,
+            "n_removed": 0,
+            "frac_kept": float("nan"),
+            "frac_removed": float("nan"),
+        }
+    n_kept = int(np.sum(arr > float(threshold)))
+    n_removed = n_total - n_kept
+    return {
+        "n_total": n_total,
+        "n_kept": n_kept,
+        "n_removed": n_removed,
+        "frac_kept": float(n_kept / n_total),
+        "frac_removed": float(n_removed / n_total),
+    }

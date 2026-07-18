@@ -7,6 +7,7 @@ Each tab subclasses :class:`BaseTab` and declares:
 * ``status_signature(block)`` (list of files whose existence implies done)
 
 Phase 0 ships skeletons only; the actual controls land in Phases 1-7.
+Explore (Data Exploration) is a post-sync inspection tab added later.
 """
 
 from eye_tracking_system_tools.annotation.preprocessing_gui.tabs.base import BaseTab
@@ -21,6 +22,9 @@ from eye_tracking_system_tools.annotation.preprocessing_gui.tabs.behavior_tab im
 from eye_tracking_system_tools.annotation.preprocessing_gui.tabs.syncfree_tab import (
     SyncFreeTab,
 )
+from eye_tracking_system_tools.annotation.preprocessing_gui.tabs.explore_tab import (
+    ExploreTab,
+)
 
 __all__ = [
     "BaseTab",
@@ -29,4 +33,5 @@ __all__ = [
     "KerrTab",
     "BehaviorTab",
     "SyncFreeTab",
+    "ExploreTab",
 ]

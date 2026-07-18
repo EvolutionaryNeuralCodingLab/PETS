@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 
 from eye_tracking_system_tools.preprocessing.BlockSync_class import BlockSync
+from eye_tracking_system_tools.preprocessing.ellipse_fit import LsqEllipse
 
 
 def _make_dlc_df(n_frames: int = 12, *, collinear: bool = False) -> pd.DataFrame:
@@ -121,6 +123,59 @@ def test_eye_tracking_analysis_populates_fit_report() -> None:
     assert "mean_likelihood_all" in report
     assert "mean_likelihood_used" in report
     assert report["uncertainty_thr"] == 0.95
+
+
+def test_lsq_ellipse_rejects_complex_eigendecomposition() -> None:
+    """Point sets whose eigendecomposition is complex must not yield complex params.
+
+    For this cloud, ``np.linalg.eig`` returns one real + one complex-conjugate
+    pair. The real eigenvector fails ``4ac - b^2 > 0``; the old code accepted a
+    complex eigenvector and returned complex ellipse parameters.
+    """
+    X = np.array(
+        [
+            [442.02758307005246, 521.1634866983218],
+            [465.4948413949485, 526.6130910266664],
+            [470.48509853488355, 526.4895912859606],
+            [476.30316188740596, 525.2027738217914],
+            [469.3302916039463, 525.4063969809491],
+            [437.81940697022685, 520.565617289417],
+            [470.020123700742, 524.2983374845327],
+            [473.56330992647406, 526.8620246125631],
+            [411.4920636182465, 519.4167832115719],
+            [464.90165194482864, 524.2896286837652],
+            [469.5435777379704, 524.5836403346974],
+            [416.0009110505036, 521.508699566414],
+        ]
+    )
+    with pytest.raises(ValueError, match="ellipse constraint"):
+        LsqEllipse().fit(X)
+
+    # Well-conditioned ellipses still fit and stay real float64.
+    t = np.linspace(0, 2 * np.pi, 20, endpoint=False)
+    el = LsqEllipse().fit(np.c_[3 * np.cos(t) + 10, 2 * np.sin(t) + 20])
+    center, width, height, phi = el.as_parameters()
+    assert el.coefficients.dtype == np.float64
+    assert not any(
+        np.iscomplexobj(v) for v in (center[0], center[1], width, height, phi)
+    )
+
+
+def test_eye_tracking_analysis_keeps_float_dtypes_with_pathological_points() -> None:
+    """One complex fit must not upcast the whole ellipse DataFrame."""
+    df = _make_dlc_df(n_frames=30)
+    # Overwrite one data row with a random non-elliptical pupil cloud.
+    rng = np.random.default_rng(7)
+    row_idx = 5  # first data row after the coords header row at index 0
+    for k in range(6):
+        df.iloc[row_idx, 1 + 3 * k] = float(rng.uniform(0, 640))
+        df.iloc[row_idx, 2 + 3 * k] = float(rng.uniform(0, 480))
+        df.iloc[row_idx, 3 + 3 * k] = 0.99
+
+    out = BlockSync.eye_tracking_analysis(df, 0.95)
+    for col in ("center_x", "center_y", "width", "height", "phi", "ellipse_size"):
+        assert out[col].dtype == np.float64, col
+        assert not np.iscomplexobj(out[col].to_numpy())
 
 
 def test_read_dlc_data_sets_report_attribute(tmp_path: Path, monkeypatch) -> None:

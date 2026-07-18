@@ -355,6 +355,51 @@ def main() -> int:
             except Exception as e:
                 print(f"[WARN] Sync-free tab set_block: {e}")
 
+    explore_tab = win._tabs.get("explore")
+    if explore_tab is None:
+        print("[FAIL] Data Exploration tab missing from tab registry.")
+        ok = False
+    else:
+        explore_attrs = [
+            "_plot",
+            "_video",
+            "_time_label",
+            "_stale_banner",
+            "_btn_load_prev",
+        ]
+        missing_e = [n for n in explore_attrs if not hasattr(explore_tab, n)]
+        if missing_e:
+            print(f"[FAIL] Explore tab missing expected widgets: {missing_e}")
+            ok = False
+        else:
+            print("[OK] Data Exploration tab Phase 0/1 widgets instantiated.")
+            plot = explore_tab._plot
+            if not hasattr(plot, "_box_zoom_btn"):
+                print("[FAIL] Explore plot missing box-zoom toggle.")
+                ok = False
+            else:
+                print("[OK] Explore plot box-zoom control present.")
+            video = explore_tab._video
+            video_attrs = [
+                "_left_panel",
+                "_arena_panel",
+                "_right_panel",
+                "_playback",
+                "_slider",
+            ]
+            missing_v = [n for n in video_attrs if not hasattr(video, n)]
+            if missing_v:
+                print(f"[FAIL] Explore video panel missing: {missing_v}")
+                ok = False
+            else:
+                print("[OK] Explore video LE/Arena/RE panels present.")
+        if blocks:
+            try:
+                explore_tab.set_block(blocks[0])
+                print("[OK] Explore tab set_block completed.")
+            except Exception as e:
+                print(f"[WARN] Explore tab set_block: {e}")
+
     # Touch the close path so persistence runs without crashing.
     try:
         win._persist_defaults()

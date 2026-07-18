@@ -402,6 +402,31 @@ BEHAVIOR_ARTIFACT_PROFILE = TabArtifactProfile(
 )
 
 
+EXPLORE_ARTIFACT_PROFILE = TabArtifactProfile(
+    tab_id="explore",
+    artifacts=(
+        ArtifactSpec(
+            "final_sync_df",
+            "final_sync_df.csv",
+            lambda b, c: [b.analysis_path / "final_sync_df.csv"],
+            _load_final_sync,
+        ),
+        ArtifactSpec(
+            "left_eye_data",
+            "left_eye_data.csv",
+            lambda b, c: [b.analysis_path / "left_eye_data.csv"],
+            _load_left_eye_data,
+        ),
+        ArtifactSpec(
+            "right_eye_data",
+            "right_eye_data.csv",
+            lambda b, c: [b.analysis_path / "right_eye_data.csv"],
+            lambda s, bs, b, st, c: load_eye_data_verify(bs),
+        ),
+    ),
+)
+
+
 def syncfree_artifact_profile(artifact_tag: str) -> TabArtifactProfile:
     tag = artifact_tag or "v1"
 

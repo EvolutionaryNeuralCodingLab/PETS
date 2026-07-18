@@ -337,30 +337,50 @@ class SyncTab(BaseTab):
 
         dlc_row = QtWidgets.QHBoxLayout()
         self._dlc_threshold = QtWidgets.QDoubleSpinBox()
-        self._dlc_threshold.setRange(0.5, 1.0)
+        self._dlc_threshold.setRange(0.0, 1.0)
         self._dlc_threshold.setSingleStep(0.01)
+        self._dlc_threshold.setDecimals(3)
         self._dlc_threshold.setValue(
             float(getattr(self._config, "dlc_threshold_to_use", 0.95))
         )
         self._btn_read_dlc = QtWidgets.QPushButton("Read DLC + fit ellipses")
+        self._dlc_overwrite = QtWidgets.QCheckBox("Overwrite existing")
+        self._dlc_overwrite.setChecked(False)
+        self._dlc_overwrite.setToolTip(
+            "When checked, recompute ellipses even if le_df.csv / re_df.csv already exist."
+        )
         self._dlc_le_combo = QtWidgets.QComboBox()
         self._dlc_le_combo.setMinimumWidth(180)
         self._dlc_re_combo = QtWidgets.QComboBox()
         self._dlc_re_combo.setMinimumWidth(180)
         dlc_row.addWidget(QtWidgets.QLabel("DLC threshold:"))
         dlc_row.addWidget(self._dlc_threshold)
+        self._btn_likelihood_hist = QtWidgets.QPushButton("Likelihood histogram…")
+        self._btn_likelihood_hist.setToolTip(
+            "Inspect likelihood distribution in the selected DLC CSVs and preview "
+            "how much data a threshold would discard."
+        )
+        dlc_row.addWidget(self._btn_likelihood_hist)
         dlc_row.addWidget(QtWidgets.QLabel("LE DLC:"))
         dlc_row.addWidget(self._dlc_le_combo)
         dlc_row.addWidget(QtWidgets.QLabel("RE DLC:"))
         dlc_row.addWidget(self._dlc_re_combo)
+        dlc_row.addWidget(self._dlc_overwrite)
         dlc_row.addWidget(self._btn_read_dlc)
         dlc_row.addStretch(1)
         layout.addLayout(dlc_row)
 
         jitter_row = QtWidgets.QHBoxLayout()
         self._btn_jitter_report = QtWidgets.QPushButton("Compute jitter report")
+        self._jitter_overwrite = QtWidgets.QCheckBox("Overwrite existing report")
+        self._jitter_overwrite.setChecked(False)
+        self._jitter_overwrite.setToolTip(
+            "When checked, recompute jitter even if analysis/jitter_report_dict.pkl exists "
+            "(re-prompts for eye ROIs)."
+        )
         self._btn_correct_jitter = QtWidgets.QPushButton("Correct jitter & remove LED blinks")
         jitter_row.addWidget(self._btn_jitter_report)
+        jitter_row.addWidget(self._jitter_overwrite)
         jitter_row.addWidget(self._btn_correct_jitter)
         layout.addLayout(jitter_row)
 
@@ -411,6 +431,7 @@ class SyncTab(BaseTab):
         layout.addStretch(1)
 
         self._btn_read_dlc.clicked.connect(self._run_read_dlc)
+        self._btn_likelihood_hist.clicked.connect(self._open_likelihood_histogram)
         self._btn_jitter_report.clicked.connect(self._run_jitter_report)
         self._btn_correct_jitter.clicked.connect(self._run_correct_jitter)
         self._btn_preview_jitter.clicked.connect(self._run_preview_jitter)
@@ -941,13 +962,15 @@ class SyncTab(BaseTab):
             )
             return
 
+        overwrite = self._dlc_overwrite.isChecked()
+
         def work():
             b = self._require_blocksync()
             self._require_final_sync_on_disk(b)
             b.read_dlc_data(
                 threshold_to_use=float(self._dlc_threshold.value()),
                 export=True,
-                overwrite=False,
+                overwrite=overwrite,
                 le_dlc_path=le_path,
                 re_dlc_path=re_path,
             )
@@ -958,8 +981,14 @@ class SyncTab(BaseTab):
 
         def on_ok(report) -> None:
             self._set_phase2_busy(False)
-            self._status("Read DLC and fitted ellipses.")
-            self._show_dlc_fit_report(report)
+            if report is None:
+                self._status(
+                    "Loaded existing le_df/re_df (overwrite unchecked). "
+                    "Check 'Overwrite existing' to recompute."
+                )
+            else:
+                self._status("Read DLC and fitted ellipses.")
+                self._show_dlc_fit_report(report)
             self._worker = None
             worker.deleteLater()
 
@@ -979,8 +1008,9 @@ class SyncTab(BaseTab):
         try:
             b = self._require_blocksync()
             self._require_final_sync_on_disk(b)
+            overwrite = self._jitter_overwrite.isChecked()
             roi_dict = None
-            if jitter_report_needs_computation(b, overwrite=False):
+            if jitter_report_needs_computation(b, overwrite=overwrite):
                 roi_dict = pick_jitter_rois_for_block(b, parent=self)
                 if roi_dict is None:
                     self._status("Jitter ROI selection cancelled.")
@@ -991,19 +1021,50 @@ class SyncTab(BaseTab):
             return
 
         captured_roi = roi_dict
+        captured_overwrite = self._jitter_overwrite.isChecked()
 
         def work():
             blk = self._require_blocksync()
             self._require_final_sync_on_disk(blk)
             blk.get_jitter_reports(
                 export=True,
-                overwrite=False,
+                overwrite=captured_overwrite,
                 remove_led_blinks=False,
                 sort_on_loading=True,
                 roi_dict=captured_roi,
             )
 
-        self._run_async(work, "Computed jitter reports.", "Computing jitter report…")
+        msg = (
+            "Recomputed jitter reports (overwrite)."
+            if captured_overwrite
+            else "Computed jitter reports."
+        )
+        self._run_async(work, msg, "Computing jitter report…")
+
+    def _open_likelihood_histogram(self) -> None:
+        le_path = self._dlc_le_combo.currentData()
+        re_path = self._dlc_re_combo.currentData()
+        paths = [p for p in (le_path, re_path) if p]
+        if not paths:
+            QtWidgets.QMessageBox.warning(
+                self, "Sync tab", "Select at least one DLC CSV first."
+            )
+            return
+        from eye_tracking_system_tools.annotation.preprocessing_gui.likelihood_threshold_dialog import (
+            LikelihoodThresholdDialog,
+        )
+
+        dlg = LikelihoodThresholdDialog(
+            paths,
+            initial_threshold=float(self._dlc_threshold.value()),
+            parent=self,
+        )
+        if dlg.exec() == QtWidgets.QDialog.DialogCode.Accepted:
+            self._dlc_threshold.setValue(float(dlg.threshold()))
+            self._status(
+                f"DLC threshold set to {self._dlc_threshold.value():.3f} "
+                f"from likelihood histogram."
+            )
 
     def _run_correct_jitter(self) -> None:
         def work():
@@ -1180,7 +1241,7 @@ class SyncTab(BaseTab):
         b.read_dlc_data(
             threshold_to_use=float(self._dlc_threshold.value()),
             export=True,
-            overwrite=False,
+            overwrite=self._dlc_overwrite.isChecked(),
         )
         return "le_df.csv / re_df.csv written"
 
@@ -1190,14 +1251,15 @@ class SyncTab(BaseTab):
         if not path.exists():
             raise RuntimeError("final_sync_df.csv missing")
         load_final_sync_df(b, verbose=False)
+        overwrite = self._jitter_overwrite.isChecked()
         roi_dict = None
-        if jitter_report_needs_computation(b, overwrite=False):
+        if jitter_report_needs_computation(b, overwrite=overwrite):
             roi_dict = pick_jitter_rois_for_block(b, parent=self)
             if roi_dict is None:
                 raise RuntimeError("Jitter ROI selection cancelled.")
         b.get_jitter_reports(
             export=True,
-            overwrite=False,
+            overwrite=overwrite,
             remove_led_blinks=False,
             sort_on_loading=True,
             roi_dict=roi_dict,

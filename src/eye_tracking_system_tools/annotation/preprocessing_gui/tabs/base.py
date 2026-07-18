@@ -91,13 +91,14 @@ class BaseTab(QtWidgets.QWidget):
 
     def set_block(self, block: BlockHandle | None) -> None:
         self._block = block
-        if self._placeholder_label is not None:
+        placeholder = getattr(self, "_placeholder_label", None)
+        if placeholder is not None:
             if block is None:
-                self._placeholder_label.setText(
+                placeholder.setText(
                     f"<i>{self.tab_label}</i> — no block loaded."
                 )
             else:
-                self._placeholder_label.setText(
+                placeholder.setText(
                     f"<i>{self.tab_label}</i> — active block: "
                     f"<b>{block.display_label}</b>"
                 )

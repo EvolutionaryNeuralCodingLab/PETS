@@ -84,14 +84,32 @@ class LsqEllipse:
 
         # M*|a b c >=l|a b c >. Find eigenvalues and eigenvectors from this
         # equation [eqn. 28]
-        eigval, eigvec = np.linalg.eig(M)
+        #
+        # M is real but non-symmetric, so np.linalg.eig may return a complex
+        # eigendecomposition when the point set does not admit a real ellipse.
+        # Those complex eigenvectors are not valid Halir–Flusser solutions and
+        # must not propagate into float ellipse parameters / CSV exports.
+        _eigval, eigvec = np.linalg.eig(M)
+        if np.iscomplexobj(eigvec):
+            real_cols = np.all(np.abs(eigvec.imag) <= 1e-12, axis=0)
+            eigvec = np.real(eigvec[:, real_cols])
+        else:
+            eigvec = np.asarray(eigvec, dtype=float)
+
+        if eigvec.ndim != 2 or eigvec.shape[1] == 0:
+            raise ValueError("No real eigenvector for ellipse fit")
 
         # Eigenvector must meet constraint 4ac - b^2 to be valid.
         cond = (
-            4*np.multiply(eigvec[0, :], eigvec[2, :])
+            4 * np.multiply(eigvec[0, :], eigvec[2, :])
             - np.power(eigvec[1, :], 2)
         )
-        a1 = eigvec[:, np.nonzero(cond > 0)[0]]
+        idxs = np.nonzero(cond > 0)[0]
+        if idxs.size == 0:
+            raise ValueError(
+                "No eigenvector satisfies the ellipse constraint 4ac - b^2 > 0"
+            )
+        a1 = eigvec[:, idxs]
 
         # |d f g> = -S3^(-1) * S2^(T)*|a b c> [eqn. 24]
         a2 = la.inv(-S3) @ S2.T @ a1

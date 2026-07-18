@@ -5,11 +5,14 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from eye_tracking_system_tools.preprocessing.dlc_csv_io import (
     default_dlc_csv,
+    likelihood_threshold_stats,
     list_dlc_csvs,
+    load_dlc_likelihood_values,
     resolve_dlc_csv,
 )
 
@@ -73,3 +76,38 @@ def test_resolve_dlc_csv_rejects_unknown(tmp_path: Path) -> None:
     _touch(tmp_path / "trialDLC_a.csv")
     with pytest.raises(ValueError):
         resolve_dlc_csv(tmp_path, "missingDLC.csv")
+
+
+def _write_minimal_dlc_csv(path: Path) -> None:
+    """Two bodyparts (Pupil, edge0), three likelihood samples after header trim."""
+    path.write_text(
+        "scorer,scorer,scorer,scorer,scorer,scorer\n"
+        "bodyparts,Pupil,Pupil,Pupil,edge0,edge0,edge0\n"
+        "coords,x,y,likelihood,x,y,likelihood\n"
+        "0,1,2,0.10,3,4,0.20\n"
+        "1,1,2,0.40,3,4,0.60\n"
+        "2,1,2,0.90,3,4,0.95\n"
+        "3,1,2,0.99,3,4,1.00\n",
+        encoding="utf-8",
+    )
+
+
+def test_load_dlc_likelihood_values(tmp_path: Path) -> None:
+    path = tmp_path / "trialDLC.csv"
+    _write_minimal_dlc_csv(path)
+    values = load_dlc_likelihood_values(path)
+    # header=1 + iloc[1:] drops the coords label row; all numeric frames remain
+    assert values.size == 8
+    np.testing.assert_allclose(
+        np.sort(values),
+        [0.10, 0.20, 0.40, 0.60, 0.90, 0.95, 0.99, 1.00],
+    )
+
+
+def test_likelihood_threshold_stats_matches_gt_rule() -> None:
+    values = np.array([0.4, 0.6, 0.9, 0.95, 0.99, 1.0])
+    stats = likelihood_threshold_stats(values, 0.9)
+    assert stats["n_total"] == 6
+    assert stats["n_kept"] == 3  # > 0.9
+    assert stats["n_removed"] == 3
+    assert stats["frac_kept"] == pytest.approx(0.5)

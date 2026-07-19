@@ -6,7 +6,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from PyQt6 import QtCore, QtWidgets
+from PyQt6 import QtCore, QtGui, QtWidgets
 
 from eye_tracking_system_tools.annotation.block_annotator.models import (
     AnnotatorConfig,
@@ -42,6 +42,9 @@ class ExploreVideoPanel(QtWidgets.QWidget):
         self._arena_index = 0
         self._playback = PlaybackController(self)
         self._suppress_time_emit = False
+        self._original_arena: list[Path] = []
+        self._original_le: list[Path] = []
+        self._original_re: list[Path] = []
 
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -58,8 +61,6 @@ class ExploreVideoPanel(QtWidgets.QWidget):
         self._slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
         self._slider.setMinimum(0)
         self._slider.setMaximum(0)
-        self._hud = QtWidgets.QLabel("—")
-        self._hud.setMinimumWidth(180)
         transport.addWidget(self._btn_play)
         transport.addWidget(self._btn_rev)
         transport.addWidget(self._btn_step_back)
@@ -67,8 +68,16 @@ class ExploreVideoPanel(QtWidgets.QWidget):
         transport.addWidget(QtWidgets.QLabel("Speed"))
         transport.addWidget(self._speed)
         transport.addWidget(self._slider, stretch=1)
-        transport.addWidget(self._hud)
         layout.addLayout(transport)
+
+        self._hud = QtWidgets.QLabel("—")
+        self._hud.setAlignment(QtCore.Qt.AlignmentFlag.AlignLeft)
+        mono = QtGui.QFontDatabase.systemFont(QtGui.QFontDatabase.SystemFont.FixedFont)
+        self._hud.setFont(mono)
+        self._hud.setTextInteractionFlags(
+            QtCore.Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        layout.addWidget(self._hud)
 
         splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
         self._left_panel = VideoPanel("Left eye", min_width=120, min_height=100)
@@ -124,21 +133,22 @@ class ExploreVideoPanel(QtWidgets.QWidget):
         self._playback.index_changed.connect(self._on_index)
         self._playback.playing_changed.connect(self._on_playing_changed)
         self._arena_combo.currentIndexChanged.connect(self._on_arena_changed)
-        for w in (
-            self._le_ann,
-            self._re_ann,
-            self._le_flip_v,
-            self._re_flip_v,
-            self._le_flip_h,
-            self._re_flip_h,
-        ):
-            w.toggled.connect(self._update_frame)
+        self._le_ann.toggled.connect(self._on_display_toggles)
+        self._re_ann.toggled.connect(self._on_display_toggles)
+        self._le_flip_v.toggled.connect(self._on_display_toggles)
+        self._re_flip_v.toggled.connect(self._on_display_toggles)
+        self._le_flip_h.toggled.connect(self._on_display_toggles)
+        self._re_flip_h.toggled.connect(self._on_display_toggles)
 
         self._set_enabled(False)
+        self._apply_display_options()
 
     def clear(self) -> None:
         self._playback.pause()
         self._session = None
+        self._original_arena = []
+        self._original_le = []
+        self._original_re = []
         self._arena_panel.set_video(None)
         self._left_panel.set_video(None)
         self._right_panel.set_video(None)
@@ -210,6 +220,71 @@ class ExploreVideoPanel(QtWidgets.QWidget):
             return None
         return float(self._session.ms_at(self._playback.index))
 
+    def source_video_paths(self) -> list[Path]:
+        """Original remote (or on-disk) video paths discovered at load time."""
+        paths: list[Path] = []
+        for group in (self._original_arena, self._original_le, self._original_re):
+            paths.extend(group)
+        return paths
+
+    def remount_videos(
+        self,
+        *,
+        arena_videos: list[Path] | None = None,
+        le_videos: list[Path] | None = None,
+        re_videos: list[Path] | None = None,
+    ) -> None:
+        """Rebind OpenCV readers to new paths without reloading the timeline."""
+        if self._session is None:
+            return
+        idx = self._playback.index
+        if arena_videos is not None:
+            self._session.arena_videos = [Path(p) for p in arena_videos]
+        if le_videos is not None:
+            self._session.le_videos = [Path(p) for p in le_videos]
+        if re_videos is not None:
+            self._session.re_videos = [Path(p) for p in re_videos]
+
+        self._arena_combo.blockSignals(True)
+        self._arena_combo.clear()
+        for p in self._session.arena_videos:
+            self._arena_combo.addItem(p.name, str(p))
+        if self._session.arena_videos:
+            self._arena_index = min(
+                self._arena_index, len(self._session.arena_videos) - 1
+            )
+            self._arena_combo.setCurrentIndex(self._arena_index)
+        self._arena_combo.blockSignals(False)
+
+        if self._session.arena_videos:
+            self._arena_panel.set_video(
+                self._session.arena_videos[self._arena_index]
+            )
+        else:
+            self._arena_panel.set_video(None)
+        if self._session.le_videos:
+            self._left_panel.set_video(self._session.le_videos[0])
+        else:
+            self._left_panel.set_video(None)
+        if self._session.re_videos:
+            self._right_panel.set_video(self._session.re_videos[0])
+        else:
+            self._right_panel.set_video(None)
+
+        self._playback.set_index(idx)
+
+    def _apply_display_options(self) -> None:
+        self._left_panel.set_flip_horizontal(self._le_flip_h.isChecked())
+        self._right_panel.set_flip_horizontal(self._re_flip_h.isChecked())
+        self._left_panel.set_flip_vertical(self._le_flip_v.isChecked())
+        self._right_panel.set_flip_vertical(self._re_flip_v.isChecked())
+        self._left_panel.set_show_annotations(self._le_ann.isChecked())
+        self._right_panel.set_show_annotations(self._re_ann.isChecked())
+
+    def _on_display_toggles(self, *_args) -> None:
+        self._apply_display_options()
+        self._update_frame()
+
     def _set_enabled(self, enabled: bool) -> None:
         for w in (
             self._btn_play,
@@ -230,6 +305,9 @@ class ExploreVideoPanel(QtWidgets.QWidget):
 
     def _bind_session(self, session: BlockSession) -> None:
         self._session = session
+        self._original_arena = [Path(p) for p in session.arena_videos]
+        self._original_le = [Path(p) for p in session.le_videos]
+        self._original_re = [Path(p) for p in session.re_videos]
         self._arena_index = 0
         self._arena_combo.blockSignals(True)
         self._arena_combo.clear()
@@ -252,6 +330,7 @@ class ExploreVideoPanel(QtWidgets.QWidget):
             session.re_ellipse_df,
             _ellipse_frame_col(session.re_ellipse_df, "R_eye_frame"),
         )
+        self._apply_display_options()
         self._left_panel.set_display_limits(360, 0)
         self._right_panel.set_display_limits(360, 0)
         self._arena_panel.set_display_limits(640, 0)
@@ -310,22 +389,33 @@ class ExploreVideoPanel(QtWidgets.QWidget):
         if self._session is not None and not self._suppress_time_emit:
             self.time_changed.emit(float(self._session.ms_at(index)))
 
+    def _format_hud(self, i: int, ms: float, arena_f, le_f, re_f) -> str:
+        n_max = max(0, (self._session.n if self._session else 1) - 1)
+        w = max(1, len(str(n_max)))
+        # Frame ids may be None — keep fixed field width.
+        fw = max(w, 6)
+
+        def _f(v) -> str:
+            if v is None:
+                return " " * (fw - 1) + "—"
+            try:
+                return f"{int(v):>{fw}d}"
+            except (TypeError, ValueError):
+                return f"{str(v):>{fw}}"
+
+        return (
+            f"i={i:0{w}d}/{n_max:0{w}d}  "
+            f"t={ms:12.1f} ms  "
+            f"A={_f(arena_f)}  L={_f(le_f)}  R={_f(re_f)}"
+        )
+
     def _update_frame(self) -> None:
         if self._session is None:
             return
         i = self._playback.index
         arena_f, le_f, re_f = self._session.frame_ids_at(i)
         ms = self._session.ms_at(i)
-        self._hud.setText(
-            f"i={i}/{max(0, self._session.n - 1)} | {ms:.1f} ms | "
-            f"A={arena_f} L={le_f} R={re_f}"
-        )
-        self._left_panel.set_flip_horizontal(self._le_flip_h.isChecked())
-        self._right_panel.set_flip_horizontal(self._re_flip_h.isChecked())
-        self._left_panel.set_flip_vertical(self._le_flip_v.isChecked())
-        self._right_panel.set_flip_vertical(self._re_flip_v.isChecked())
-        self._left_panel.set_show_annotations(self._le_ann.isChecked())
-        self._right_panel.set_show_annotations(self._re_ann.isChecked())
+        self._hud.setText(self._format_hud(i, ms, arena_f, le_f, re_f))
         self._arena_panel.show_frame(arena_f, f"frame {arena_f}")
         self._left_panel.show_frame(le_f, f"frame {le_f}")
         self._right_panel.show_frame(re_f, f"frame {re_f}")

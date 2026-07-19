@@ -201,8 +201,13 @@ def test_explore_tab_instantiates(qapp_session, tmp_path: Path):
     tab = ExploreTab(state, config)
     assert tab.tab_id == "explore"
     assert tab._plot is not None
-    assert tab._video is not None
+    assert tab._video is None
+    assert tab._video_window is None
+    assert tab._btn_open_video is not None
+    assert tab._btn_cache_videos is not None
     assert tab._time_label is not None
+    assert tab._plot.chrome_widget is not None
+    assert tab._plot.chrome_widget.parent() is not tab._plot
     block = BlockHandle(
         animal_call="PV_106",
         experiment_date="2025_09_04",
@@ -213,3 +218,78 @@ def test_explore_tab_instantiates(qapp_session, tmp_path: Path):
     (tmp_path / "block_015" / "analysis").mkdir(parents=True)
     tab.set_block(block)
     assert "015" in tab._info.text() or "block" in tab._info.text().lower()
+
+
+def test_explore_playhead_emits_on_release_not_drag(qapp_session):
+    final = _synthetic_final_sync(30)
+    eye = _synthetic_eye_df(30, with_kerr=True)
+    catalog = build_explore_catalog(final, 30000.0, le_df=eye, re_df=eye)
+    panel = ExplorePlotPanel()
+    panel.set_catalog(catalog)
+    assert panel._playheads
+
+    selected: list[float] = []
+    previewed: list[float] = []
+    panel.time_selected.connect(selected.append)
+    panel.time_preview.connect(previewed.append)
+
+    line = next(iter(panel._playheads.values()))
+    line.setPos(float(catalog.ms_axis[10]))
+    assert selected == []
+    assert previewed
+    assert previewed[-1] == pytest.approx(float(catalog.ms_axis[10]))
+
+    line.sigPositionChangeFinished.emit(line)
+    assert selected
+    assert selected[-1] == pytest.approx(float(catalog.ms_axis[10]))
+
+
+def test_explore_video_cache_copy_and_clear(tmp_path: Path):
+    from eye_tracking_system_tools.annotation.preprocessing_gui.explore_video_cache import (
+        ExploreVideoCache,
+    )
+
+    src_a = tmp_path / "arena.mp4"
+    src_b = tmp_path / "le.mp4"
+    src_a.write_bytes(b"aaa" * 1000)
+    src_b.write_bytes(b"bbb" * 1000)
+
+    cache = ExploreVideoCache()
+    reports: list[tuple] = []
+
+    def on_bytes(*args):
+        reports.append(args)
+
+    mapping = cache.cache_paths([src_a, src_b], progress_bytes=on_bytes)
+    assert cache.active
+    assert src_a.resolve() in mapping
+    assert reports
+    local_a = cache.local_path(src_a)
+    assert local_a.is_file()
+    assert local_a.read_bytes() == src_a.read_bytes()
+    assert local_a != src_a.resolve()
+
+    root = cache.root
+    assert root is not None and root.is_dir()
+    cache.clear()
+    assert not cache.active
+    assert cache.local_path(src_a) == src_a
+    assert root is None or not root.exists()
+
+
+def test_explore_plot_x_window_and_y_controls(qapp_session):
+    final = _synthetic_final_sync(30)
+    eye = _synthetic_eye_df(30, with_kerr=True)
+    catalog = build_explore_catalog(final, 30000.0, le_df=eye, re_df=eye)
+    panel = ExplorePlotPanel()
+    panel.set_catalog(catalog)
+    assert panel._btn_apply_x is not None
+    assert panel._center_ms is not None
+    assert panel._window_ms is not None
+    assert panel._y_controls
+    row_id = next(iter(panel._plot_rows))
+    panel._on_y_limits(row_id, 1.0, 2.0)
+    assert panel._y_limits[row_id] == (1.0, 2.0)
+    ymin, ymax = panel._plot_rows[row_id].viewRange()[1]
+    assert ymin == pytest.approx(1.0)
+    assert ymax == pytest.approx(2.0)

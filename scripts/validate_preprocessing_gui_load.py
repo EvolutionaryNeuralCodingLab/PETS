@@ -362,10 +362,12 @@ def main() -> int:
     else:
         explore_attrs = [
             "_plot",
-            "_video",
             "_time_label",
             "_stale_banner",
             "_btn_load_prev",
+            "_btn_open_video",
+            "_btn_cache_videos",
+            "_video_cache",
         ]
         missing_e = [n for n in explore_attrs if not hasattr(explore_tab, n)]
         if missing_e:
@@ -379,7 +381,16 @@ def main() -> int:
                 ok = False
             else:
                 print("[OK] Explore plot box-zoom control present.")
-            video = explore_tab._video
+            if not hasattr(plot, "time_preview"):
+                print("[FAIL] Explore plot missing time_preview signal.")
+                ok = False
+            else:
+                print("[OK] Explore plot release-seek signals present.")
+            from eye_tracking_system_tools.annotation.preprocessing_gui.explore_video_panel import (
+                ExploreVideoPanel,
+            )
+
+            video = ExploreVideoPanel()
             video_attrs = [
                 "_left_panel",
                 "_arena_panel",
@@ -392,7 +403,13 @@ def main() -> int:
                 print(f"[FAIL] Explore video panel missing: {missing_v}")
                 ok = False
             else:
-                print("[OK] Explore video LE/Arena/RE panels present.")
+                print("[OK] Explore video LE/Arena/RE panels present (floating window).")
+            video.deleteLater()
+            if explore_tab._video is not None:
+                print("[FAIL] Explore tab should not embed video until window opens.")
+                ok = False
+            else:
+                print("[OK] Explore video is detached until Open video window.")
         if blocks:
             try:
                 explore_tab.set_block(blocks[0])

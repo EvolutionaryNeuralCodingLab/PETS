@@ -24,12 +24,13 @@ pg.setConfigOptions(antialias=True, background="w", foreground="k")
 def _make_check_list(
     title: str,
     *,
-    min_height: int = 80,
-    max_height: int = 160,
+    min_height: int = 40,
+    max_height: int = 72,
 ) -> tuple[QtWidgets.QGroupBox, QtWidgets.QVBoxLayout]:
     box = QtWidgets.QGroupBox(title)
     outer = QtWidgets.QVBoxLayout(box)
-    outer.setContentsMargins(6, 6, 6, 6)
+    outer.setContentsMargins(4, 4, 4, 4)
+    outer.setSpacing(2)
     scroll = QtWidgets.QScrollArea()
     scroll.setWidgetResizable(True)
     scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
@@ -38,17 +39,70 @@ def _make_check_list(
     host = QtWidgets.QWidget()
     lay = QtWidgets.QVBoxLayout(host)
     lay.setContentsMargins(2, 2, 2, 2)
-    lay.setSpacing(2)
+    lay.setSpacing(1)
     lay.addStretch(1)
     scroll.setWidget(host)
     outer.addWidget(scroll)
+    box.setSizePolicy(
+        QtWidgets.QSizePolicy.Policy.Preferred,
+        QtWidgets.QSizePolicy.Policy.Maximum,
+    )
     return box, lay
+
+
+class _YLimitControls(QtWidgets.QWidget):
+    """Compact ymin/ymax inputs beside a plot's Y axis."""
+
+    limits_applied = QtCore.pyqtSignal(float, float)
+
+    def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
+        super().__init__(parent)
+        lay = QtWidgets.QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 4, 0)
+        lay.setSpacing(2)
+        self._ymin = QtWidgets.QDoubleSpinBox()
+        self._ymax = QtWidgets.QDoubleSpinBox()
+        for spin in (self._ymin, self._ymax):
+            spin.setDecimals(3)
+            spin.setRange(-1e12, 1e12)
+            spin.setMaximumWidth(78)
+            spin.setButtonSymbols(QtWidgets.QAbstractSpinBox.ButtonSymbols.NoButtons)
+        self._ymin.setToolTip("Y min")
+        self._ymax.setToolTip("Y max")
+        btn = QtWidgets.QPushButton("Y")
+        btn.setFixedWidth(28)
+        btn.setToolTip("Apply Y limits")
+        btn.clicked.connect(self._emit)
+        lay.addWidget(QtWidgets.QLabel("max"))
+        lay.addWidget(self._ymax)
+        lay.addWidget(QtWidgets.QLabel("min"))
+        lay.addWidget(self._ymin)
+        lay.addWidget(btn)
+        lay.addStretch(1)
+        self.setFixedWidth(86)
+
+    def set_limits(self, ymin: float, ymax: float) -> None:
+        self._ymin.blockSignals(True)
+        self._ymax.blockSignals(True)
+        self._ymin.setValue(float(ymin))
+        self._ymax.setValue(float(ymax))
+        self._ymin.blockSignals(False)
+        self._ymax.blockSignals(False)
+
+    def _emit(self) -> None:
+        ymin = float(self._ymin.value())
+        ymax = float(self._ymax.value())
+        if ymax < ymin:
+            ymin, ymax = ymax, ymin
+            self.set_limits(ymin, ymax)
+        self.limits_applied.emit(ymin, ymax)
 
 
 class ExplorePlotPanel(QtWidgets.QWidget):
     """Paired eye metrics + multi-EP stacked plots with shared X (ms)."""
 
     time_selected = QtCore.pyqtSignal(float)
+    time_preview = QtCore.pyqtSignal(float)  # playhead drag (no video seek)
     refresh_requested = QtCore.pyqtSignal()
     eye_version_changed = QtCore.pyqtSignal(str)
 
@@ -58,6 +112,8 @@ class ExplorePlotPanel(QtWidgets.QWidget):
         self._playhead_ms = 0.0
         self._plot_rows: dict[str, pg.PlotWidget] = {}
         self._playheads: dict[str, pg.InfiniteLine] = {}
+        self._y_controls: dict[str, _YLimitControls] = {}
+        self._y_limits: dict[str, tuple[float, float]] = {}
         self._eye_checks: dict[str, QtWidgets.QCheckBox] = {}
         self._ep_checks: dict[str, QtWidgets.QCheckBox] = {}
         self._ep_streams_by_key: dict[str, OEStream] = {}
@@ -66,32 +122,37 @@ class ExplorePlotPanel(QtWidgets.QWidget):
 
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+
+        self._chrome = QtWidgets.QWidget()
+        chrome_lay = QtWidgets.QVBoxLayout(self._chrome)
+        chrome_lay.setContentsMargins(0, 0, 0, 0)
+        chrome_lay.setSpacing(4)
 
         version_row = QtWidgets.QHBoxLayout()
-        version_row.addWidget(QtWidgets.QLabel("Eye data version:"))
+        version_row.addWidget(QtWidgets.QLabel("Eye data:"))
         self._version_combo = QtWidgets.QComboBox()
-        self._version_combo.setMinimumWidth(220)
+        self._version_combo.setMinimumWidth(160)
         self._version_combo.setEnabled(False)
         version_row.addWidget(self._version_combo, stretch=1)
-        version_row.addStretch(1)
-        layout.addLayout(version_row)
+        chrome_lay.addLayout(version_row)
 
         pickers = QtWidgets.QHBoxLayout()
-        eye_box, self._eye_list_layout = _make_check_list("Eye traces (L+R)")
-        ep_box, self._ep_list_layout = _make_check_list(
-            "Electrophysiology", min_height=80, max_height=200
-        )
+        pickers.setSpacing(4)
+        eye_box, self._eye_list_layout = _make_check_list("Eye (L+R)")
+        ep_box, self._ep_list_layout = _make_check_list("EP")
         pickers.addWidget(eye_box, stretch=1)
         pickers.addWidget(ep_box, stretch=1)
 
-        ep_opts = QtWidgets.QVBoxLayout()
-        ep_opts.addWidget(QtWidgets.QLabel("EP downsample"))
+        tools = QtWidgets.QHBoxLayout()
+        tools.setSpacing(4)
+        tools.addWidget(QtWidgets.QLabel("EP↓"))
         self._downsample = QtWidgets.QSpinBox()
         self._downsample.setRange(1, 10000)
         self._downsample.setValue(50)
+        self._downsample.setMaximumWidth(64)
         self._downsample.setEnabled(False)
-        ep_opts.addWidget(self._downsample)
-        ep_opts.addStretch(1)
+        tools.addWidget(self._downsample)
         self._box_zoom_btn = QtWidgets.QPushButton("Box zoom")
         self._box_zoom_btn.setCheckable(True)
         self._box_zoom_btn.setChecked(True)
@@ -99,19 +160,58 @@ class ExplorePlotPanel(QtWidgets.QWidget):
             "When on: drag a rectangle to zoom. Drag the playhead (or turn off) to set time.\n"
             "When off: left-drag pans; click sets the playhead."
         )
-        self._zoom_all_btn = QtWidgets.QPushButton("Zoom to all")
+        self._zoom_all_btn = QtWidgets.QPushButton("Zoom all")
         self._refresh_btn = QtWidgets.QPushButton("Refresh")
-        ep_opts.addWidget(self._box_zoom_btn)
-        ep_opts.addWidget(self._zoom_all_btn)
-        ep_opts.addWidget(self._refresh_btn)
-        pickers.addLayout(ep_opts)
-        layout.addLayout(pickers)
+        tools.addWidget(self._box_zoom_btn)
+        tools.addWidget(self._zoom_all_btn)
+        tools.addWidget(self._refresh_btn)
+        tools.addStretch(1)
+        pickers_col = QtWidgets.QVBoxLayout()
+        pickers_col.setSpacing(2)
+        pickers_col.addLayout(pickers)
+        pickers_col.addLayout(tools)
+        chrome_lay.addLayout(pickers_col)
 
-        legend = QtWidgets.QLabel(
-            '<span style="color:#1f77b4;">● Left</span> &nbsp; '
-            '<span style="color:#d62728;">● Right</span>'
+        x_row = QtWidgets.QHBoxLayout()
+        x_row.setSpacing(4)
+        x_row.addWidget(QtWidgets.QLabel("t (ms)"))
+        self._center_ms = QtWidgets.QDoubleSpinBox()
+        self._center_ms.setDecimals(1)
+        self._center_ms.setRange(-1e12, 1e12)
+        self._center_ms.setMaximumWidth(110)
+        self._center_ms.setButtonSymbols(
+            QtWidgets.QAbstractSpinBox.ButtonSymbols.NoButtons
         )
-        layout.addWidget(legend)
+        x_row.addWidget(self._center_ms)
+        x_row.addWidget(QtWidgets.QLabel("window (ms)"))
+        self._window_ms = QtWidgets.QDoubleSpinBox()
+        self._window_ms.setDecimals(1)
+        self._window_ms.setRange(1.0, 1e12)
+        self._window_ms.setValue(2000.0)
+        self._window_ms.setMaximumWidth(100)
+        self._window_ms.setToolTip("Visible X span centered on t.")
+        self._window_ms.setButtonSymbols(
+            QtWidgets.QAbstractSpinBox.ButtonSymbols.NoButtons
+        )
+        x_row.addWidget(self._window_ms)
+        self._btn_apply_x = QtWidgets.QPushButton("Apply X")
+        self._btn_apply_x.setToolTip(
+            "Move playhead to t and set linked X range to t ± window/2."
+        )
+        x_row.addWidget(self._btn_apply_x)
+        legend = QtWidgets.QLabel(
+            '<span style="color:#1f77b4;">● L</span> '
+            '<span style="color:#d62728;">● R</span>'
+        )
+        x_row.addWidget(legend)
+        x_row.addStretch(1)
+        chrome_lay.addLayout(x_row)
+
+        self._chrome.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Preferred,
+            QtWidgets.QSizePolicy.Policy.Maximum,
+        )
+        layout.addWidget(self._chrome)
 
         self._scroll = QtWidgets.QScrollArea()
         self._scroll.setWidgetResizable(True)
@@ -132,6 +232,11 @@ class ExplorePlotPanel(QtWidgets.QWidget):
         self._box_zoom_btn.toggled.connect(self._apply_mouse_mode)
         self._zoom_all_btn.clicked.connect(self.zoom_to_all)
         self._refresh_btn.clicked.connect(self.refresh_requested.emit)
+        self._btn_apply_x.clicked.connect(self._apply_x_window)
+
+    @property
+    def chrome_widget(self) -> QtWidgets.QWidget:
+        return self._chrome
 
     def set_eye_versions(
         self,
@@ -163,11 +268,12 @@ class ExplorePlotPanel(QtWidgets.QWidget):
 
     def set_catalog(self, catalog: ExploreCatalog | None) -> None:
         self._catalog = catalog
-        # Preserve checked eye metrics / EP streams across version switches.
         prev_eye = set(self.enabled_eye_metric_ids())
         prev_ep = set(self.enabled_ep_stream_keys())
         self._rebuild_eye_picker(prefer_checked=prev_eye or None)
         self._rebuild_ep_picker(prefer_checked=prev_ep or None)
+        if catalog is not None and len(catalog.ms_axis):
+            self._center_ms.setValue(float(self._playhead_ms or catalog.ms_axis[0]))
         self._redraw()
 
     def playhead_ms(self) -> float:
@@ -175,6 +281,9 @@ class ExplorePlotPanel(QtWidgets.QWidget):
 
     def set_playhead_ms(self, ms: float, *, emit: bool = False) -> None:
         self._playhead_ms = float(ms)
+        self._center_ms.blockSignals(True)
+        self._center_ms.setValue(self._playhead_ms)
+        self._center_ms.blockSignals(False)
         for line in self._playheads.values():
             line.blockSignals(True)
             line.setPos(self._playhead_ms)
@@ -197,12 +306,22 @@ class ExplorePlotPanel(QtWidgets.QWidget):
         ]
 
     def zoom_to_all(self) -> None:
-        for plot in self._plot_rows.values():
+        for row_id, plot in self._plot_rows.items():
             plot.enableAutoRange(axis=pg.ViewBox.XYAxes)
             plot.autoRange(padding=0.05)
+            self._y_limits.pop(row_id, None)
+            self._sync_y_controls_from_plot(row_id)
+
+    def _apply_x_window(self) -> None:
+        center = float(self._center_ms.value())
+        window = max(1.0, float(self._window_ms.value()))
+        half = window / 2.0
+        self.set_playhead_ms(center, emit=True)
+        x0, x1 = center - half, center + half
+        for plot in self._plot_rows.values():
+            plot.setXRange(x0, x1, padding=0.0)
 
     def _apply_mouse_mode(self, *_args) -> None:
-        """Box zoom (RectMode) vs pan (PanMode) on all plot rows."""
         mode = (
             pg.ViewBox.RectMode
             if self._box_zoom_btn.isChecked()
@@ -211,7 +330,9 @@ class ExplorePlotPanel(QtWidgets.QWidget):
         for plot in self._plot_rows.values():
             plot.getViewBox().setMouseMode(mode)
 
-    def _clear_layout_items(self, layout: QtWidgets.QVBoxLayout, *, keep_stretch: bool = True) -> None:
+    def _clear_layout_items(
+        self, layout: QtWidgets.QVBoxLayout, *, keep_stretch: bool = True
+    ) -> None:
         while layout.count():
             item = layout.takeAt(0)
             widget = item.widget()
@@ -228,6 +349,7 @@ class ExplorePlotPanel(QtWidgets.QWidget):
                 widget.deleteLater()
         self._plot_rows.clear()
         self._playheads.clear()
+        self._y_controls.clear()
 
     def _rebuild_eye_picker(self, prefer_checked: set[str] | None = None) -> None:
         self._clear_layout_items(self._eye_list_layout)
@@ -239,7 +361,7 @@ class ExplorePlotPanel(QtWidgets.QWidget):
             return
         metrics = available_eye_metric_ids(self._catalog)
         if not metrics:
-            lbl = QtWidgets.QLabel("(no eye metrics available)")
+            lbl = QtWidgets.QLabel("(no eye metrics)")
             lbl.setStyleSheet("color: #888;")
             self._eye_list_layout.insertWidget(0, lbl)
             return
@@ -265,7 +387,7 @@ class ExplorePlotPanel(QtWidgets.QWidget):
         )
         self._downsample.setEnabled(has_oe)
         if not has_oe:
-            lbl = QtWidgets.QLabel("(no OE streams)")
+            lbl = QtWidgets.QLabel("(no OE)")
             lbl.setStyleSheet("color: #888;")
             self._ep_list_layout.insertWidget(0, lbl)
             return
@@ -321,9 +443,42 @@ class ExplorePlotPanel(QtWidgets.QWidget):
             pen=pg.mkPen("#333333", width=2),
         )
         playhead.sigPositionChanged.connect(self._on_playhead_dragged)
+        playhead.sigPositionChangeFinished.connect(self._on_playhead_drag_finished)
         plot.addItem(playhead)
         self._playheads[row_id] = playhead
+
+        yctl = _YLimitControls()
+        yctl.limits_applied.connect(
+            lambda ymin, ymax, rid=row_id: self._on_y_limits(rid, ymin, ymax)
+        )
+        self._y_controls[row_id] = yctl
+
+        row = QtWidgets.QWidget()
+        row_lay = QtWidgets.QHBoxLayout(row)
+        row_lay.setContentsMargins(0, 0, 0, 0)
+        row_lay.setSpacing(0)
+        row_lay.addWidget(yctl)
+        row_lay.addWidget(plot, stretch=1)
+        self._plots_layout.addWidget(row)
+        self._plot_rows[row_id] = plot
         return plot
+
+    def _on_y_limits(self, row_id: str, ymin: float, ymax: float) -> None:
+        self._y_limits[row_id] = (ymin, ymax)
+        plot = self._plot_rows.get(row_id)
+        if plot is not None:
+            plot.setYRange(ymin, ymax, padding=0.0)
+
+    def _sync_y_controls_from_plot(self, row_id: str) -> None:
+        plot = self._plot_rows.get(row_id)
+        yctl = self._y_controls.get(row_id)
+        if plot is None or yctl is None:
+            return
+        if row_id in self._y_limits:
+            ymin, ymax = self._y_limits[row_id]
+        else:
+            (ymin, ymax), _ = plot.viewRange()
+        yctl.set_limits(float(ymin), float(ymax))
 
     def _link_x_axes(self) -> None:
         plots = list(self._plot_rows.values())
@@ -339,10 +494,19 @@ class ExplorePlotPanel(QtWidgets.QWidget):
         sender = self.sender()
         if not isinstance(sender, pg.InfiniteLine):
             return
+        ms = float(sender.value())
+        self.set_playhead_ms(ms, emit=False)
+        self.time_preview.emit(ms)
+
+    def _on_playhead_drag_finished(self) -> None:
+        if self._updating:
+            return
+        sender = self.sender()
+        if not isinstance(sender, pg.InfiniteLine):
+            return
         self.set_playhead_ms(float(sender.value()), emit=True)
 
     def _on_plot_clicked(self, event, plot: pg.PlotWidget) -> None:
-        # In box-zoom mode, left-drag is for the rectangle; playhead via InfiniteLine.
         if self._box_zoom_btn.isChecked():
             return
         if event.button() != QtCore.Qt.MouseButton.LeftButton:
@@ -371,8 +535,6 @@ class ExplorePlotPanel(QtWidgets.QWidget):
                 pen=pg.mkPen(COLOR_RIGHT, width=1.2),
                 name="Right",
             )
-        self._plot_rows[metric_id] = plot
-        self._plots_layout.addWidget(plot)
 
     def _add_ep_plot(self, key: str, color_index: int) -> None:
         assert self._catalog is not None
@@ -395,8 +557,6 @@ class ExplorePlotPanel(QtWidgets.QWidget):
             pen=pg.mkPen(color, width=1.2),
             name=ep.label,
         )
-        self._plot_rows[row_id] = plot
-        self._plots_layout.addWidget(plot)
 
     def _redraw(self) -> None:
         self._updating = True
@@ -426,7 +586,13 @@ class ExplorePlotPanel(QtWidgets.QWidget):
                 return
 
             self._link_x_axes()
-            self.zoom_to_all()
+            for row_id, plot in self._plot_rows.items():
+                plot.enableAutoRange(axis=pg.ViewBox.XYAxes)
+                plot.autoRange(padding=0.05)
+                if row_id in self._y_limits:
+                    ymin, ymax = self._y_limits[row_id]
+                    plot.setYRange(ymin, ymax, padding=0.0)
+                self._sync_y_controls_from_plot(row_id)
             self.set_playhead_ms(self._playhead_ms, emit=False)
         finally:
             self._updating = False

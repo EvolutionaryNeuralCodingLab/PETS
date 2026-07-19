@@ -61,6 +61,13 @@ def infer_metadata(block_path: Path) -> tuple[str, str | None, str, Path]:
     return animal_call, experiment_date, block_num, path_to_animal
 
 
+def discover_block_videos(
+    block_path: Path,
+) -> tuple[list[Path], list[Path], list[Path]]:
+    """Public wrapper: arena, left-eye, right-eye mp4 paths under a block."""
+    return _discover_videos(Path(block_path))
+
+
 def _discover_videos(block_path: Path) -> tuple[list[Path], list[Path], list[Path]]:
     arena_nested = block_path / "arena_videos" / "videos"
     arena_flat = block_path / "arena_videos"

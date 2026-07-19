@@ -250,6 +250,16 @@ class PreprocessingGuiWindow(QtWidgets.QMainWindow):
         self._busy_timer = QtCore.QTimer(self)
         self._busy_timer.timeout.connect(self._update_block_picker_busy)
         self._busy_timer.start(400)
+        self._tab_widget.currentChanged.connect(self._on_tab_changed)
+        self._prev_tab_index = self._tab_widget.currentIndex()
+
+    def _on_tab_changed(self, index: int) -> None:
+        prev = getattr(self, "_prev_tab_index", -1)
+        if 0 <= prev < self._tab_widget.count():
+            prev_widget = self._tab_widget.widget(prev)
+            if prev_widget is not None and hasattr(prev_widget, "on_tab_deactivated"):
+                prev_widget.on_tab_deactivated()
+        self._prev_tab_index = index
 
     def _update_block_picker_busy(self) -> None:
         self._block_picker.set_session_busy(self._session_busy())

@@ -71,6 +71,8 @@ class BaseTab(QtWidgets.QWidget):
     def _build_artifact_panel(self) -> QtWidgets.QWidget:
         box = QtWidgets.QGroupBox("Previous analysis on disk")
         lay = QtWidgets.QVBoxLayout(box)
+        lay.setContentsMargins(6, 6, 6, 6)
+        lay.setSpacing(4)
         row = QtWidgets.QHBoxLayout()
         self._btn_load_prev = QtWidgets.QPushButton("Load prev analysis")
         self._btn_load_prev.setEnabled(False)
@@ -80,9 +82,18 @@ class BaseTab(QtWidgets.QWidget):
         lay.addLayout(row)
         self._artifact_checklist = QtWidgets.QPlainTextEdit()
         self._artifact_checklist.setReadOnly(True)
-        self._artifact_checklist.setMaximumHeight(120)
+        self._artifact_checklist.setMaximumHeight(52)
+        self._artifact_checklist.setMinimumHeight(36)
+        font = self._artifact_checklist.font()
+        font.setPointSize(max(9, font.pointSize() - 1))
+        self._artifact_checklist.setFont(font)
         self._artifact_checklist.setPlaceholderText("Artifact checklist…")
+        self._artifact_checklist.setToolTip("Disk artifact status for this tab.")
         lay.addWidget(self._artifact_checklist)
+        box.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Preferred,
+            QtWidgets.QSizePolicy.Policy.Maximum,
+        )
         return box
 
     def artifact_profile(self) -> TabArtifactProfile | None:
@@ -103,6 +114,10 @@ class BaseTab(QtWidgets.QWidget):
                     f"<b>{block.display_label}</b>"
                 )
         self._refresh_artifact_ui()
+
+    def on_tab_deactivated(self) -> None:
+        """Called when the user switches away from this tab. Override as needed."""
+        return
 
     def status_signature(self, block: BlockHandle) -> list[Path]:
         return []

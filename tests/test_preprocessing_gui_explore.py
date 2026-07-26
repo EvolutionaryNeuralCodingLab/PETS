@@ -244,6 +244,151 @@ def test_explore_playhead_emits_on_release_not_drag(qapp_session):
     assert selected[-1] == pytest.approx(float(catalog.ms_axis[10]))
 
 
+def test_video_panel_prepare_frame_returns_qimage(qapp_session):
+    from PyQt6 import QtGui
+
+    from eye_tracking_system_tools.annotation.block_annotator.video_widget import (
+        VideoPanel,
+        numpy_array_to_qimage,
+    )
+
+    panel = VideoPanel("test")
+    panel.show()
+
+    arr = np.zeros((24, 32, 3), dtype=np.uint8)
+    arr[:, :, 0] = 200
+    qimg = numpy_array_to_qimage(arr)
+    assert isinstance(qimg, QtGui.QImage)
+    assert not qimg.isNull()
+
+    calls: list[int | None] = []
+
+    class StubReader:
+        def read_frame(self, frame_idx):
+            calls.append(frame_idx)
+            return arr.copy()
+
+    panel._reader = StubReader()
+    out = panel.prepare_frame(3, fast_scale=True)
+    assert isinstance(out, QtGui.QImage)
+    assert not out.isNull()
+    assert calls == [3]
+
+
+def test_video_panel_display_image_sets_pixmap(qapp_session):
+    from PyQt6 import QtGui
+
+    from eye_tracking_system_tools.annotation.block_annotator.video_widget import (
+        MISSING_TEXT,
+        VideoPanel,
+        numpy_array_to_qimage,
+    )
+
+    panel = VideoPanel("test")
+    panel.show()
+    qimg = numpy_array_to_qimage(np.full((10, 12, 3), 128, dtype=np.uint8))
+    panel.display_image(qimg, "frame 1")
+    assert panel._info.text() == "frame 1"
+    assert panel._label.pixmap() is not None
+    assert not panel._label.pixmap().isNull()
+    assert panel._label.text() == ""
+
+    panel.display_image(None, "")
+    assert panel._label.text() == MISSING_TEXT
+
+
+def test_video_panel_fast_scale_toggle(qapp_session):
+    from PyQt6 import QtCore
+
+    from eye_tracking_system_tools.annotation.block_annotator.video_widget import (
+        VideoPanel,
+    )
+
+    panel = VideoPanel("test")
+    panel.show()
+
+    arr = np.zeros((24, 32, 3), dtype=np.uint8)
+
+    class StubReader:
+        def read_frame(self, frame_idx):
+            return arr.copy()
+
+    panel._reader = StubReader()
+    modes: list[QtCore.Qt.TransformationMode] = []
+    orig_prepare = panel.prepare_frame
+
+    def _spy(frame_idx, target_size=None, *, fast_scale=False):
+        modes.append(fast_scale)
+        return orig_prepare(frame_idx, target_size, fast_scale=fast_scale)
+
+    panel.prepare_frame = _spy
+
+    panel.set_fast_scale(True)
+    panel.show_frame(0, "")
+    panel.set_fast_scale(False)
+    panel.show_frame(0, "")
+    assert modes == [True, False]
+
+
+def _make_video_session(n: int = 5):
+    from eye_tracking_system_tools.annotation.block_annotator.models import (
+        AnnotatorConfig,
+        BlockSession,
+        compute_ms_axis,
+    )
+
+    final = _synthetic_final_sync(n)
+    return BlockSession(
+        animal_call="PV_test",
+        experiment_date="2024_01_01",
+        block_num="001",
+        block_path=Path("block"),
+        output_folder=Path("out"),
+        config=AnnotatorConfig(),
+        final_sync_df=final,
+        ms_axis=compute_ms_axis(final, 30000.0),
+        sample_rate_hz=30000.0,
+        arena_videos=[],
+        le_videos=[],
+        re_videos=[],
+    )
+
+
+def test_explore_video_panel_skips_unchanged_frame_ids(qapp_session):
+    from eye_tracking_system_tools.annotation.preprocessing_gui.explore_video_panel import (
+        ExploreVideoPanel,
+    )
+
+    panel = ExploreVideoPanel()
+    panel._bind_session(_make_video_session(5))
+    panel._playback.play(forward=True)
+
+    calls: list[int | None] = []
+    panel._arena_panel.show_frame = lambda idx, info="": calls.append(idx)
+    panel._left_panel.show_frame = lambda idx, info="": None
+    panel._right_panel.show_frame = lambda idx, info="": None
+
+    panel._playback.set_index(1)
+    panel._playback.set_index(1)
+    assert len(calls) == 1
+
+
+def test_explore_video_panel_pause_repaints_smoothly(qapp_session):
+    from eye_tracking_system_tools.annotation.preprocessing_gui.explore_video_panel import (
+        ExploreVideoPanel,
+    )
+
+    panel = ExploreVideoPanel()
+    panel._bind_session(_make_video_session(5))
+    panel._playback.play(forward=True)
+    assert panel._arena_panel._fast_scale is True
+
+    panel._playback.pause()
+    assert panel._arena_panel._fast_scale is False
+    assert panel._left_panel._fast_scale is False
+    assert panel._right_panel._fast_scale is False
+
+
 def test_explore_video_cache_copy_and_clear(tmp_path: Path):
     from eye_tracking_system_tools.annotation.preprocessing_gui.explore_video_cache import (
         ExploreVideoCache,

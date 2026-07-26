@@ -45,6 +45,8 @@ class ExploreVideoPanel(QtWidgets.QWidget):
         self._original_arena: list[Path] = []
         self._original_le: list[Path] = []
         self._original_re: list[Path] = []
+        self._last_frame_ids: tuple[int | None, int | None, int | None] | None = None
+        self._playhead_emit_counter = 0
 
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -145,6 +147,8 @@ class ExploreVideoPanel(QtWidgets.QWidget):
 
     def clear(self) -> None:
         self._playback.pause()
+        self._last_frame_ids = None
+        self._playhead_emit_counter = 0
         self._session = None
         self._original_arena = []
         self._original_le = []
@@ -361,6 +365,12 @@ class ExploreVideoPanel(QtWidgets.QWidget):
         self._playback.toggle_play(forward=False)
 
     def _on_playing_changed(self, playing: bool) -> None:
+        for panel in (self._arena_panel, self._left_panel, self._right_panel):
+            panel.set_fast_scale(playing)
+        if not playing:
+            # Repaint the current frame with smooth scaling once stopped.
+            self._last_frame_ids = None
+            self._update_frame()
         if playing and self._playback.forward:
             self._btn_play.setText("⏸ Pause")
             self._btn_rev.setText("◀ Rev")
@@ -387,7 +397,14 @@ class ExploreVideoPanel(QtWidgets.QWidget):
         self._slider.blockSignals(False)
         self._update_frame()
         if self._session is not None and not self._suppress_time_emit:
-            self.time_changed.emit(float(self._session.ms_at(index)))
+            if self._playback.playing:
+                self._playhead_emit_counter += 1
+                if self._playhead_emit_counter >= 6:
+                    self._playhead_emit_counter = 0
+                    self.time_changed.emit(float(self._session.ms_at(index)))
+            else:
+                self._playhead_emit_counter = 0
+                self.time_changed.emit(float(self._session.ms_at(index)))
 
     def _format_hud(self, i: int, ms: float, arena_f, le_f, re_f) -> str:
         n_max = max(0, (self._session.n if self._session else 1) - 1)
@@ -416,6 +433,14 @@ class ExploreVideoPanel(QtWidgets.QWidget):
         arena_f, le_f, re_f = self._session.frame_ids_at(i)
         ms = self._session.ms_at(i)
         self._hud.setText(self._format_hud(i, ms, arena_f, le_f, re_f))
+
+        frame_ids = (arena_f, le_f, re_f)
+        # During playback the timer can fire faster than frame IDs change; skip
+        # the redundant decode. When paused/scrubbing always repaint so display
+        # toggles and resizes take effect.
+        if self._playback.playing and frame_ids == self._last_frame_ids:
+            return
+        self._last_frame_ids = frame_ids
         self._arena_panel.show_frame(arena_f, f"frame {arena_f}")
         self._left_panel.show_frame(le_f, f"frame {le_f}")
         self._right_panel.show_frame(re_f, f"frame {re_f}")

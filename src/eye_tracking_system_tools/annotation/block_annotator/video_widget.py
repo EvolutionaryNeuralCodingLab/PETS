@@ -169,20 +169,21 @@ def _qimage_format(name: str) -> int:
     raise AttributeError(f"No QImage format constant for {name}")
 
 
-def numpy_rgb_to_qpixmap(arr: np.ndarray | None) -> QtGui.QPixmap:
-    if arr is None:
-        return QtGui.QPixmap()
+def numpy_array_to_qimage(arr: np.ndarray) -> QtGui.QImage:
+    """Like numpy_rgb_to_qpixmap but returns QImage (thread-safe)."""
     if arr.ndim == 2:
         arr = np.stack([arr, arr, arr], axis=-1)
     h, w, c = arr.shape
     arr = np.ascontiguousarray(arr)
-    if c == 4:
-        fmt = _qimage_format("RGBA8888")
-    else:
-        fmt = _qimage_format("RGB888")
+    fmt = _qimage_format("RGBA8888") if c == 4 else _qimage_format("RGB888")
     bytes_per_line = int(arr.strides[0])
-    qimg = QtGui.QImage(arr.data, w, h, bytes_per_line, fmt)
-    return QtGui.QPixmap.fromImage(qimg.copy())
+    return QtGui.QImage(arr.data, w, h, bytes_per_line, fmt).copy()
+
+
+def numpy_rgb_to_qpixmap(arr: np.ndarray | None) -> QtGui.QPixmap:
+    if arr is None:
+        return QtGui.QPixmap()
+    return QtGui.QPixmap.fromImage(numpy_array_to_qimage(arr))
 
 
 def missing_frame_pixmap(width: int = 320, height: int = 240) -> QtGui.QPixmap:
@@ -212,6 +213,7 @@ class VideoPanel(QtWidgets.QWidget):
         self._max_display_width = 0
         self._max_display_height = 0
         self._no_upscale = True
+        self._fast_scale = False
         self._last_frame_idx: int | None = None
 
         layout = QtWidgets.QVBoxLayout(self)
@@ -250,6 +252,10 @@ class VideoPanel(QtWidgets.QWidget):
     def set_show_annotations(self, enabled: bool) -> None:
         self._show_annotations = bool(enabled)
 
+    def set_fast_scale(self, enabled: bool) -> None:
+        """Use fast (nearest) scaling during playback; smooth when paused."""
+        self._fast_scale = bool(enabled)
+
     def set_display_limits(
         self,
         max_width: int = 0,
@@ -264,7 +270,7 @@ class VideoPanel(QtWidgets.QWidget):
         if self._last_frame_idx is not None:
             self.show_frame(self._last_frame_idx, self._info.text())
 
-    def _target_size(self, pix: QtGui.QPixmap) -> QtCore.QSize:
+    def _target_qsize(self, source_width: int, source_height: int) -> QtCore.QSize:
         label_sz = self._label.size()
         w, h = label_sz.width(), label_sz.height()
         if self._max_display_width > 0:
@@ -272,27 +278,46 @@ class VideoPanel(QtWidgets.QWidget):
         if self._max_display_height > 0:
             h = min(h, self._max_display_height)
         if self._no_upscale:
-            w = min(w, pix.width())
-            h = min(h, pix.height())
+            w = min(w, source_width)
+            h = min(h, source_height)
         return QtCore.QSize(max(1, w), max(1, h))
 
-    def _scale_pixmap(self, pix: QtGui.QPixmap) -> QtGui.QPixmap:
-        target = self._target_size(pix)
-        return pix.scaled(
-            target,
-            QtCore.Qt.AspectRatioMode.KeepAspectRatio,
-            QtCore.Qt.TransformationMode.SmoothTransformation,
+    def compute_target_size_upper_bound(self) -> QtCore.QSize:
+        """GUI-thread upper bound for scaled frame (label + display limits)."""
+        label_sz = self._label.size()
+        w, h = label_sz.width(), label_sz.height()
+        if self._max_display_width > 0:
+            w = min(w, self._max_display_width)
+        if self._max_display_height > 0:
+            h = min(h, self._max_display_height)
+        return QtCore.QSize(max(1, w), max(1, h))
+
+    def _apply_no_upscale(
+        self, target: QtCore.QSize, source_width: int, source_height: int
+    ) -> QtCore.QSize:
+        if not self._no_upscale:
+            return target
+        return QtCore.QSize(
+            min(target.width(), source_width),
+            min(target.height(), source_height),
         )
 
-    def show_frame(self, frame_idx: int | None, info: str = "") -> None:
-        self._info.setText(info)
-        self._last_frame_idx = frame_idx
+    def _scale_mode(self, *, fast_scale: bool) -> QtCore.Qt.TransformationMode:
+        if fast_scale:
+            return QtCore.Qt.TransformationMode.FastTransformation
+        return QtCore.Qt.TransformationMode.SmoothTransformation
+
+    def prepare_frame(
+        self,
+        frame_idx: int | None,
+        target_size: QtCore.QSize | None = None,
+        *,
+        fast_scale: bool = False,
+    ) -> QtGui.QImage | None:
+        """Decode + transform + scale to QImage. Thread-safe (no QPixmap, no widget access)."""
         arr = self._reader.read_frame(frame_idx)
         if arr is None:
-            self._label.setPixmap(QtGui.QPixmap())
-            self._label.setText(MISSING_TEXT)
-            return
-
+            return None
         arr = apply_display_transforms(
             arr,
             ellipse_df=self._ellipse_df,
@@ -302,10 +327,34 @@ class VideoPanel(QtWidgets.QWidget):
             flip_horizontal=self._flip_h,
             flip_vertical=self._flip_v,
         )
+        qimg = numpy_array_to_qimage(arr)
+        if target_size is None:
+            target_size = self._target_qsize(arr.shape[1], arr.shape[0])
+        else:
+            target_size = self._apply_no_upscale(
+                target_size, arr.shape[1], arr.shape[0]
+            )
+        return qimg.scaled(
+            target_size,
+            QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+            self._scale_mode(fast_scale=fast_scale),
+        )
 
-        pix = numpy_rgb_to_qpixmap(arr)
+    def display_image(self, qimg: QtGui.QImage | None, info: str = "") -> None:
+        """GUI-thread only: convert QImage to QPixmap and paint."""
+        self._info.setText(info)
+        if qimg is None:
+            self._label.setPixmap(QtGui.QPixmap())
+            self._label.setText(MISSING_TEXT)
+            return
+        pix = QtGui.QPixmap.fromImage(qimg)
         self._label.setText("")
-        self._label.setPixmap(self._scale_pixmap(pix))
+        self._label.setPixmap(pix)
+
+    def show_frame(self, frame_idx: int | None, info: str = "") -> None:
+        self._last_frame_idx = frame_idx
+        qimg = self.prepare_frame(frame_idx, fast_scale=self._fast_scale)
+        self.display_image(qimg, info)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

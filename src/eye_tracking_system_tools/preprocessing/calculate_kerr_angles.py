@@ -27,10 +27,20 @@ Usage:
     calculate_kerr_angles_for_block(block, name_tag='raw_verified', load_eye_data_flag=False)
 """
 
+from __future__ import annotations
+
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Union, List, Optional
+import re
 import pandas as pd
 import numpy as np
+
+# Canonical Kerr angle columns written by append_angle_data.
+KERR_ANGLE_COLS = ("k_phi", "k_theta")
+
+# Pandas merge suffixes / leftover names that must not survive a re-append.
+_KERR_ANGLE_COL_RE = re.compile(r"^k_(?:phi|theta)(?:_[xy])?$")
 
 
 def load_eye_data(block) -> None:
@@ -112,35 +122,235 @@ def load_self_kerr_refs(block, filename: str = "self_kerr_refs.csv") -> bool:
     return True
 
 
-def append_angle_data(eye_df: pd.DataFrame, new_df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Append the angle columns (phi and theta) from new_df to eye_df.
-    
-    The function renames 'phi' to 'k_phi' and 'theta' to 'k_theta', then merges
-    on the shared 'OE_timestamp' column.
+@dataclass(frozen=True)
+class KerrAnglePreview:
+    """In-memory Kerr angle preview for a single eye (no disk writes)."""
 
-    Parameters
-    ----------
-    eye_df : pd.DataFrame
-        DataFrame containing the eye tracking data.
-    new_df : pd.DataFrame
-        DataFrame containing the new kinematics data with columns
-        'phi' and 'theta' along with 'OE_timestamp'.
+    phi: np.ndarray
+    theta: np.ndarray
+    f_z: float
+    ref_x: float
+    ref_y: float
+    n_input: int
+    n_finite: int
 
-    Returns
-    -------
-    pd.DataFrame
-        Merged DataFrame with angle data appended.
+
+def preview_kerr_angles(
+    eye_df: pd.DataFrame,
+    ref_x: float,
+    ref_y: float,
+) -> KerrAnglePreview:
     """
-    # Select the necessary columns and rename them
-    angle_data = new_df[['OE_timestamp', 'phi', 'theta']].rename(
-        columns={'phi': 'k_phi', 'theta': 'k_theta'}
+    Run ``BlockSync.kerr`` for one eye using a tentative reference point.
+
+    Does not write CSVs or mutate the caller's dataframe. Missing
+    ``major_ax``/``minor_ax`` are derived from ``width``/``height`` when needed.
+    Placeholder ``OE_timestamp`` / ``ms_axis`` are filled only when absent so
+    the static Kerr helper can assemble its output frame.
+    """
+    if eye_df is None or eye_df.empty:
+        raise ValueError("eye_df is empty; cannot preview Kerr angles.")
+    if not np.isfinite(ref_x) or not np.isfinite(ref_y):
+        raise ValueError("Kerr reference must be a finite (x, y) point.")
+
+    from eye_tracking_system_tools.preprocessing.BlockSync_class import BlockSync
+
+    work = eye_df.copy()
+    if "major_ax" not in work.columns or "minor_ax" not in work.columns:
+        if not {"width", "height"}.issubset(work.columns):
+            raise ValueError(
+                "eye_df needs major_ax/minor_ax or width/height for Kerr preview."
+            )
+        work = BlockSync.get_maj_min_axes(work)
+    if "eye_frame" not in work.columns:
+        if "frame" in work.columns:
+            work = work.rename(columns={"frame": "eye_frame"})
+        else:
+            work["eye_frame"] = np.arange(len(work), dtype=int)
+    if "OE_timestamp" not in work.columns:
+        work["OE_timestamp"] = np.nan
+    if "ms_axis" not in work.columns:
+        work["ms_axis"] = np.nan
+
+    work["ratio2"] = work["minor_ax"] / work["major_ax"]
+    if "phi" in work.columns:
+        work["phi_ellipse"] = work["phi"]
+
+    with np.errstate(invalid="ignore", divide="ignore"):
+        f_z, angles = BlockSync.kerr(
+            work, aEC=float(ref_x), bEC=float(ref_y)
+        )
+
+    if angles is None:
+        raise RuntimeError("Kerr calculation returned no angles for this reference.")
+
+    phi = np.asarray(angles["phi"], dtype=float)
+    theta = np.asarray(angles["theta"], dtype=float)
+    finite = np.isfinite(phi) & np.isfinite(theta)
+    return KerrAnglePreview(
+        phi=phi,
+        theta=theta,
+        f_z=float(f_z),
+        ref_x=float(ref_x),
+        ref_y=float(ref_y),
+        n_input=int(len(work)),
+        n_finite=int(np.count_nonzero(finite)),
     )
 
-    # Merge on OE_timestamp using a left join to preserve all rows in eye_df
-    merged_df = pd.merge(eye_df, angle_data, on='OE_timestamp', how='left')
 
-    return merged_df
+def _existing_kerr_angle_columns(columns) -> list[str]:
+    """Return kerr angle / merge-suffix columns present in ``columns``."""
+    return [c for c in columns if _KERR_ANGLE_COL_RE.match(str(c))]
+
+
+def append_angle_data(eye_df: pd.DataFrame, new_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Append Kerr angle columns (``k_phi``, ``k_theta``) from ``new_df`` to ``eye_df``.
+
+    Renames angle-CSV ``phi``/``theta`` to ``k_phi``/``k_theta``, then left-merges
+    on ``OE_timestamp``. Idempotent: any existing ``k_phi``/``k_theta`` (including
+    pandas merge suffixes ``k_phi_x`` / ``k_phi_y``) are dropped from a copy of
+    ``eye_df`` before merging, so re-appending onto already-hydrated frames does
+    not produce suffix columns. Does **not** reload eye data from disk — callers
+    may pass filtered or alternate in-memory frames.
+    """
+    if eye_df is None:
+        raise ValueError("eye_df is None; load or assign eye data before appending angles.")
+    if new_df is None or new_df.empty:
+        raise ValueError("Angle dataframe is empty; run calculate_kerr_angles first.")
+    missing = [c for c in ("OE_timestamp", "phi", "theta") if c not in new_df.columns]
+    if missing:
+        raise ValueError(
+            f"Angle dataframe missing required columns {missing}; "
+            f"have {list(new_df.columns)}."
+        )
+    if "OE_timestamp" not in eye_df.columns:
+        raise ValueError(
+            "eye_df has no OE_timestamp column; cannot merge Kerr angles."
+        )
+
+    # Work on a copy so filtered/alternate in-memory frames stay intact for retry.
+    base = eye_df.copy()
+    drop_cols = _existing_kerr_angle_columns(base.columns)
+    if drop_cols:
+        base = base.drop(columns=drop_cols)
+
+    angle_data = new_df[["OE_timestamp", "phi", "theta"]].rename(
+        columns={"phi": "k_phi", "theta": "k_theta"}
+    )
+    return pd.merge(base, angle_data, on="OE_timestamp", how="left")
+
+
+@dataclass
+class AngleAppendCheck:
+    """Passive post-append health check (columns + finite sample counts)."""
+
+    side: str
+    ok: bool
+    columns_ok: bool
+    n_rows: int
+    n_k_phi: int
+    n_k_theta: int
+    n_src_phi: int
+    n_src_theta: int
+    messages: list[str] = field(default_factory=list)
+
+    def summary(self) -> str:
+        status = "ok" if self.ok else "warn"
+        return (
+            f"{self.side}: {status} | cols={self.columns_ok} | "
+            f"k_phi={self.n_k_phi}/{self.n_rows} k_theta={self.n_k_theta}/{self.n_rows} "
+            f"(src phi={self.n_src_phi} theta={self.n_src_theta})"
+            + (f" — {'; '.join(self.messages)}" if self.messages else "")
+        )
+
+
+def check_appended_angles(
+    eye_df: pd.DataFrame,
+    angle_df: pd.DataFrame,
+    *,
+    side: str = "eye",
+    min_finite_fraction: float = 0.0,
+) -> AngleAppendCheck:
+    """
+    Passive validation after ``append_angle_data``.
+
+    Checks that canonical ``k_phi``/``k_theta`` exist (and no merge-suffix leftovers),
+    and reports finite sample counts vs the source angle CSV. Does not mutate data
+    or reload from disk. ``ok`` is False when columns are wrong or finite counts
+    look suspicious relative to the source (or fall below ``min_finite_fraction``
+    of eye rows when that threshold is > 0).
+    """
+    messages: list[str] = []
+    n_rows = 0 if eye_df is None else len(eye_df)
+    cols = list(eye_df.columns) if eye_df is not None else []
+
+    has_phi = "k_phi" in cols
+    has_theta = "k_theta" in cols
+    suffix_cols = [
+        c for c in cols if c in ("k_phi_x", "k_phi_y", "k_theta_x", "k_theta_y")
+    ]
+    columns_ok = has_phi and has_theta and not suffix_cols
+    if not has_phi or not has_theta:
+        messages.append(
+            f"missing canonical columns "
+            f"(have k_phi={has_phi}, k_theta={has_theta}; cols sample={cols[:12]}…)"
+        )
+    if suffix_cols:
+        messages.append(f"merge-suffix leftovers present: {suffix_cols}")
+
+    n_k_phi = int(eye_df["k_phi"].notna().sum()) if has_phi else 0
+    n_k_theta = int(eye_df["k_theta"].notna().sum()) if has_theta else 0
+
+    n_src_phi = (
+        int(angle_df["phi"].notna().sum())
+        if angle_df is not None and "phi" in angle_df.columns
+        else 0
+    )
+    n_src_theta = (
+        int(angle_df["theta"].notna().sum())
+        if angle_df is not None and "theta" in angle_df.columns
+        else 0
+    )
+
+    # Timestamp misalignment / empty merge: appended finite count far below source.
+    if has_phi and n_src_phi > 0 and n_k_phi == 0:
+        messages.append("k_phi is all-NaN but source phi has finite samples")
+    elif has_phi and n_src_phi > 0 and n_k_phi < max(1, int(0.5 * n_src_phi)):
+        messages.append(
+            f"k_phi finite count ({n_k_phi}) << source phi ({n_src_phi}); "
+            "possible OE_timestamp misalignment"
+        )
+    if has_theta and n_src_theta > 0 and n_k_theta == 0:
+        messages.append("k_theta is all-NaN but source theta has finite samples")
+    elif has_theta and n_src_theta > 0 and n_k_theta < max(1, int(0.5 * n_src_theta)):
+        messages.append(
+            f"k_theta finite count ({n_k_theta}) << source theta ({n_src_theta}); "
+            "possible OE_timestamp misalignment"
+        )
+
+    if min_finite_fraction > 0 and n_rows > 0:
+        need = int(np.ceil(min_finite_fraction * n_rows))
+        if has_phi and n_k_phi < need:
+            messages.append(
+                f"k_phi finite {n_k_phi} < {min_finite_fraction:.0%} of {n_rows} rows"
+            )
+        if has_theta and n_k_theta < need:
+            messages.append(
+                f"k_theta finite {n_k_theta} < {min_finite_fraction:.0%} of {n_rows} rows"
+            )
+
+    return AngleAppendCheck(
+        side=side,
+        ok=columns_ok and not messages,
+        columns_ok=columns_ok,
+        n_rows=n_rows,
+        n_k_phi=n_k_phi,
+        n_k_theta=n_k_theta,
+        n_src_phi=n_src_phi,
+        n_src_theta=n_src_theta,
+        messages=messages,
+    )
 
 
 def export_eye_data_w_angles(block, name_tag: str = 'default') -> None:

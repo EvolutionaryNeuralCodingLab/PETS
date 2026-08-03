@@ -221,12 +221,14 @@ class SyncFreeTab(BaseTab):
         left_df = pd.read_csv(sources["left"])
         right_df = pd.read_csv(sources["right"])
         self._clear_verifiers()
+        block_path = Path(blocksync.block_path)
         self._left_verifier = EllipseVerifierWidget(
             left_df,
             video_path_for_eye(blocksync, "left"),
             "left",
             ref_point_xy=self._load_kerr_ref_for_eye("left"),
             parent=self,
+            block_path=block_path,
         )
         self._right_verifier = EllipseVerifierWidget(
             right_df,
@@ -234,6 +236,7 @@ class SyncFreeTab(BaseTab):
             "right",
             ref_point_xy=self._load_kerr_ref_for_eye("right"),
             parent=self,
+            block_path=block_path,
         )
         self._verifier_layout.addWidget(self._left_verifier)
         self._verifier_layout.addWidget(self._right_verifier)

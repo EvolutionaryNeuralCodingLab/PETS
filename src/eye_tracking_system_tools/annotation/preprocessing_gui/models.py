@@ -1,7 +1,7 @@
 """Data models for the Preprocessing GUI.
 
 These dataclasses are the single source of state shared between the Sync,
-Verify, Kerr, Behavior and Sync-free tabs. They intentionally do not hold any
+Verify, Kerr, Calibration, Saccades, Behavior and Sync-free tabs. They intentionally do not hold any
 Qt objects so they remain easy to test headlessly.
 """
 

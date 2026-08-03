@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pandas as pd
-from PyQt6 import QtWidgets
+from PyQt6 import QtCore, QtWidgets
 
 from eye_tracking_system_tools.annotation.preprocessing_gui.analysis_artifacts import (
     kerr_artifact_profile,
@@ -19,9 +19,16 @@ from eye_tracking_system_tools.annotation.preprocessing_gui.workers import Calla
 from eye_tracking_system_tools.preprocessing.BlockSync_class import BlockSync
 from eye_tracking_system_tools.preprocessing.calculate_kerr_angles import (
     append_angle_data,
+    check_appended_angles,
     export_eye_data_w_angles,
     load_eye_data,
     load_self_kerr_refs,
+)
+from eye_tracking_system_tools.preprocessing.noise_epochs import (
+    list_categories,
+    mask_eye_df_by_epochs,
+    read_noise_epochs,
+    resolve_frame_col,
 )
 
 
@@ -64,6 +71,31 @@ class KerrTab(BaseTab):
         self._name_tag.textChanged.connect(lambda _: self._refresh_artifact_ui())
         form.addRow("name_tag:", self._name_tag)
         layout.addLayout(form)
+
+        noise_box = QtWidgets.QGroupBox("Noise epochs (optional)")
+        noise_lay = QtWidgets.QVBoxLayout(noise_box)
+        self._chk_exclude_noise = QtWidgets.QCheckBox("Exclude noise epochs")
+        self._chk_exclude_noise.setToolTip(
+            "When checked, Kerr runs on an in-memory copy with geometry NaN'd for "
+            "selected categories. Disk eye CSVs are not modified."
+        )
+        self._chk_exclude_noise.setChecked(False)
+        noise_lay.addWidget(self._chk_exclude_noise)
+        self._noise_cats = QtWidgets.QListWidget()
+        self._noise_cats.setSelectionMode(
+            QtWidgets.QAbstractItemView.SelectionMode.NoSelection
+        )
+        self._noise_cats.setMaximumHeight(90)
+        self._noise_cats.setEnabled(False)
+        noise_lay.addWidget(self._noise_cats)
+        noise_hint = QtWidgets.QLabel(
+            "Default: none checked → raw data. Categories come from "
+            "analysis/noise_epochs_{left,right}.csv."
+        )
+        noise_hint.setWordWrap(True)
+        noise_lay.addWidget(noise_hint)
+        layout.addWidget(noise_box)
+        self._chk_exclude_noise.toggled.connect(self._on_exclude_noise_toggled)
 
         row = QtWidgets.QHBoxLayout()
         self._btn_calculate = QtWidgets.QPushButton("Calculate Kerr angles")
@@ -111,6 +143,7 @@ class KerrTab(BaseTab):
             self._info.setText("No block loaded.")
             self._refs_banner.hide()
             self._status.setText("")
+            self._refresh_noise_category_list(None)
         else:
             self._info.setText(f"Active block: {block.display_label}")
             left = block.analysis_path / "left_eye_data.csv"
@@ -129,7 +162,50 @@ class KerrTab(BaseTab):
             self._status.setText(
                 "Use 'Load prev analysis' to hydrate eye data and Kerr outputs from disk."
             )
+            self._refresh_noise_category_list(block)
         super().set_block(block)
+
+    def _on_exclude_noise_toggled(self, checked: bool) -> None:
+        self._noise_cats.setEnabled(bool(checked))
+
+    def _refresh_noise_category_list(self, block: BlockHandle | None) -> None:
+        self._noise_cats.clear()
+        if block is None:
+            return
+        for cat in list_categories(block.block_path):
+            item = QtWidgets.QListWidgetItem(cat)
+            item.setFlags(
+                item.flags()
+                | QtCore.Qt.ItemFlag.ItemIsUserCheckable
+                | QtCore.Qt.ItemFlag.ItemIsEnabled
+            )
+            item.setCheckState(QtCore.Qt.CheckState.Unchecked)
+            self._noise_cats.addItem(item)
+
+    def _selected_noise_categories(self) -> list[str]:
+        if not self._chk_exclude_noise.isChecked():
+            return []
+        out: list[str] = []
+        for i in range(self._noise_cats.count()):
+            item = self._noise_cats.item(i)
+            if item.checkState() == QtCore.Qt.CheckState.Checked:
+                out.append(item.text())
+        return out
+
+    def _apply_noise_mask_in_memory(self, blocksync: BlockSync, categories: list[str]) -> None:
+        if not categories:
+            return
+        block_path = Path(blocksync.block_path)
+        for eye, attr in (("left", "left_eye_data"), ("right", "right_eye_data")):
+            df = getattr(blocksync, attr, None)
+            if df is None or (hasattr(df, "empty") and df.empty):
+                continue
+            epochs = read_noise_epochs(block_path, eye)
+            frame_col = resolve_frame_col(df, eye)
+            masked, _ = mask_eye_df_by_epochs(
+                df, epochs, frame_col=frame_col, categories=categories
+            )
+            setattr(blocksync, attr, masked)
 
     def _after_load_artifacts(self, report) -> None:
         if self._block is None:
@@ -176,16 +252,25 @@ class KerrTab(BaseTab):
         def work():
             b = self._require_blocksync()
             self._ensure_kerr_refs(b)
+            load_eye_data(b)
+            cats = self._selected_noise_categories()
+            self._apply_noise_mask_in_memory(b, cats)
             tag = self._name_tag_value()
             b.calculate_kerr_angles(name_tag=tag)
+            return cats
 
         self._set_busy(True)
         worker = CallableWorker(work, self)
 
-        def on_ok(_=None):
+        def on_ok(cats=None):
             self._set_busy(False)
             self._btn_export.setEnabled(True)
-            self._status.setText(f"Calculated Kerr angles (tag={self._name_tag_value()}).")
+            extra = ""
+            if cats:
+                extra = f" (excluded noise: {', '.join(cats)})"
+            self._status.setText(
+                f"Calculated Kerr angles (tag={self._name_tag_value()}){extra}."
+            )
             self._worker = None
             worker.deleteLater()
 
@@ -201,23 +286,63 @@ class KerrTab(BaseTab):
         self._worker = worker
         worker.start()
 
+    def _merge_angles_onto_eye_data(self, blocksync, tag: str) -> list[str]:
+        """
+        Append Kerr angle CSVs onto current in-memory eye frames (no disk reload).
+
+        Returns human-readable passive-check lines (column names + finite counts).
+        Raises if canonical ``k_phi``/``k_theta`` are missing after append.
+        """
+        ap = Path(blocksync.analysis_path)
+        left_angle = ap / f"left_kerr_angle_{tag}.csv"
+        right_angle = ap / f"right_kerr_angle_{tag}.csv"
+        if not left_angle.is_file() or not right_angle.is_file():
+            raise RuntimeError(
+                f"Kerr angle CSVs for tag {tag!r} not found. Run Calculate first."
+            )
+        left_angles = pd.read_csv(left_angle)
+        right_angles = pd.read_csv(right_angle)
+        blocksync.left_eye_data = append_angle_data(
+            blocksync.left_eye_data, left_angles
+        )
+        blocksync.right_eye_data = append_angle_data(
+            blocksync.right_eye_data, right_angles
+        )
+        checks = [
+            check_appended_angles(
+                blocksync.left_eye_data, left_angles, side="left"
+            ),
+            check_appended_angles(
+                blocksync.right_eye_data, right_angles, side="right"
+            ),
+        ]
+        if any(not c.columns_ok for c in checks):
+            detail = "; ".join(c.summary() for c in checks)
+            raise RuntimeError(
+                "Appended eye data is missing canonical k_phi/k_theta columns. "
+                f"{detail}"
+            )
+        return [c.summary() for c in checks]
+
     def _run_export_merged(self) -> None:
         try:
             b = self._require_blocksync()
             tag = self._name_tag_value()
-            ap = Path(b.analysis_path)
-            left_angle = ap / f"left_kerr_angle_{tag}.csv"
-            right_angle = ap / f"right_kerr_angle_{tag}.csv"
-            if not left_angle.is_file() or not right_angle.is_file():
-                raise RuntimeError(
-                    f"Kerr angle CSVs for tag {tag!r} not found. Run Calculate first."
-                )
-            left_angles = pd.read_csv(left_angle)
-            right_angles = pd.read_csv(right_angle)
-            b.left_eye_data = append_angle_data(b.left_eye_data, left_angles)
-            b.right_eye_data = append_angle_data(b.right_eye_data, right_angles)
+            check_lines = self._merge_angles_onto_eye_data(b, tag)
             export_eye_data_w_angles(b, name_tag=tag)
-            self._status.setText(f"Exported left/right_eye_data_{tag}.csv")
+            warn = [line for line in check_lines if ": warn" in line]
+            status = f"Exported left/right_eye_data_{tag}.csv"
+            if warn:
+                status += " | " + " · ".join(warn)
+                self._status.setText(status)
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "Kerr tab — angle append check",
+                    "Export wrote files, but the passive angle check reported:\n\n"
+                    + "\n".join(check_lines),
+                )
+            else:
+                self._status.setText(status + " | " + " · ".join(check_lines))
         except Exception as e:
             self._status.setText(f"Error: {e}")
             QtWidgets.QMessageBox.warning(self, "Kerr tab", str(e))
@@ -256,16 +381,15 @@ class KerrTab(BaseTab):
         b = self._session.get(handle)
         load_eye_data(b)
         self._ensure_kerr_refs(b)
+        cats = self._selected_noise_categories()
+        self._apply_noise_mask_in_memory(b, cats)
         tag = self._name_tag_value()
         b.calculate_kerr_angles(name_tag=tag)
-        left_angle = Path(b.analysis_path) / f"left_kerr_angle_{tag}.csv"
-        right_angle = Path(b.analysis_path) / f"right_kerr_angle_{tag}.csv"
-        left_angles = pd.read_csv(left_angle)
-        right_angles = pd.read_csv(right_angle)
-        b.left_eye_data = append_angle_data(b.left_eye_data, left_angles)
-        b.right_eye_data = append_angle_data(b.right_eye_data, right_angles)
+        check_lines = self._merge_angles_onto_eye_data(b, tag)
         export_eye_data_w_angles(b, name_tag=tag)
-        return f"tag={tag} exported"
+        extra = f", excluded={cats}" if cats else ""
+        checks = " · ".join(check_lines)
+        return f"tag={tag} exported{extra} | {checks}"
 
     def _cancel_batch(self) -> None:
         if self._batch_worker is not None and self._batch_worker.isRunning():

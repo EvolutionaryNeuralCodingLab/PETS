@@ -44,6 +44,13 @@ from eye_tracking_system_tools.preprocessing.dlc_csv_io import (
     default_dlc_csv,
     list_dlc_csvs,
 )
+from eye_tracking_system_tools.preprocessing.noise_epochs import (
+    CATEGORY_LED_BLINK,
+    append_epochs,
+    apply_noise_epochs_to_block_csvs,
+    list_categories,
+    read_noise_epochs,
+)
 from eye_tracking_system_tools.preprocessing.block_sync_core import (
     drop_pandas_index_artifact_columns,
     load_eye_tracking_df_csv,
@@ -126,7 +133,7 @@ class SyncTab(BaseTab):
                 "Extract brightness",
                 "Read DLC + fit ellipses",
                 "Compute jitter report",
-                "Correct jitter & remove LED blinks",
+                "Correct jitter & catalog LED blinks",
             ]
         )
         self._btn_batch_run = QtWidgets.QPushButton("Run for all blocks")
@@ -330,7 +337,11 @@ class SyncTab(BaseTab):
 
         note = QtWidgets.QLabel(
             "Requires exported final_sync_df.csv. Long steps run in the background; "
-            "the UI stays responsive."
+            "the UI stays responsive. If analysis/pupil_perimeters.yaml exists "
+            "(from Verify), Pupil keypoints outside those bounds are excluded before "
+            "ellipse fitting. Correct jitter catalogs LED blinks into "
+            "noise_epochs_{left,right}.csv (does not NaN eye data); use "
+            "Apply selected noise… to NaN geometry only when you confirm."
         )
         note.setWordWrap(True)
         layout.addWidget(note)
@@ -378,11 +389,31 @@ class SyncTab(BaseTab):
             "When checked, recompute jitter even if analysis/jitter_report_dict.pkl exists "
             "(re-prompts for eye ROIs)."
         )
-        self._btn_correct_jitter = QtWidgets.QPushButton("Correct jitter & remove LED blinks")
+        self._btn_correct_jitter = QtWidgets.QPushButton(
+            "Correct jitter & catalog LED blinks"
+        )
+        self._btn_correct_jitter.setToolTip(
+            "Runs correct_jitter + find_led_blink_frames, then appends led_blink "
+            "epochs. Does not NaN eye CSVs."
+        )
         jitter_row.addWidget(self._btn_jitter_report)
         jitter_row.addWidget(self._jitter_overwrite)
         jitter_row.addWidget(self._btn_correct_jitter)
         layout.addLayout(jitter_row)
+
+        noise_row = QtWidgets.QHBoxLayout()
+        self._led_catalog_status = QtWidgets.QLabel(
+            "LED blinks: (run Correct jitter to catalog)"
+        )
+        self._led_catalog_status.setWordWrap(True)
+        self._btn_apply_noise = QtWidgets.QPushButton("Apply selected noise to eye data…")
+        self._btn_apply_noise.setToolTip(
+            "NaN geometry in le/re_df and/or left/right_eye_data for chosen "
+            "noise-epoch categories (confirmed write)."
+        )
+        noise_row.addWidget(self._led_catalog_status, stretch=1)
+        noise_row.addWidget(self._btn_apply_noise)
+        layout.addLayout(noise_row)
 
         params = QtWidgets.QFormLayout()
         self._jitter_max_distance = QtWidgets.QSpinBox()
@@ -436,6 +467,7 @@ class SyncTab(BaseTab):
         self._btn_correct_jitter.clicked.connect(self._run_correct_jitter)
         self._btn_preview_jitter.clicked.connect(self._run_preview_jitter)
         self._btn_apply_jitter.clicked.connect(self._run_apply_jitter_removal)
+        self._btn_apply_noise.clicked.connect(self._run_apply_selected_noise)
         self._btn_finalize_eye.clicked.connect(self._run_finalize_eye_data)
         return w
 
@@ -449,10 +481,12 @@ class SyncTab(BaseTab):
             self._block_info.setText("No block loaded")
             self._status("No block loaded.")
             self._refresh_dlc_combos(None)
+            self._refresh_led_catalog_status(None)
         else:
             self._block_info.setText(f"Active block: {block.display_label}\n{block.block_path}")
             self._status("Ready.")
             self._refresh_dlc_combos(block)
+            self._refresh_led_catalog_status(block)
         super().set_block(block)
 
     def status_signature(self, block: BlockHandle) -> list[Path]:
@@ -497,13 +531,19 @@ class SyncTab(BaseTab):
         for eye_key, label in (("left", "Left eye"), ("right", "Right eye")):
             stats = report.get(eye_key, {})
             dlc_name = Path(stats.get("dlc_csv", "")).name or "?"
+            peri_n = stats.get("n_keypoints_masked_by_perimeter", 0)
+            peri_bit = (
+                f", perimeter_masked={peri_n}"
+                if peri_n
+                else ""
+            )
             lines.append(
                 f"{label} ({dlc_name}): "
                 f"yield {stats.get('yield_pct', float('nan')):.1f}% "
                 f"({stats.get('n_fitted', 0)}/{stats.get('n_frames', 0)} frames), "
                 f"mean likelihood all={stats.get('mean_likelihood_all', float('nan')):.3f}, "
                 f"used={stats.get('mean_likelihood_used', float('nan')):.3f}, "
-                f"fit_failed={stats.get('n_fit_failed', 0)}"
+                f"fit_failed={stats.get('n_fit_failed', 0)}{peri_bit}"
             )
         return "\n".join(lines)
 
@@ -987,7 +1027,18 @@ class SyncTab(BaseTab):
                     "Check 'Overwrite existing' to recompute."
                 )
             else:
-                self._status("Read DLC and fitted ellipses.")
+                peri_bits = []
+                for side in ("left", "right"):
+                    side_rep = (report or {}).get(side) or {}
+                    n_mask = side_rep.get("n_keypoints_masked_by_perimeter")
+                    if n_mask:
+                        peri_bits.append(f"{side[0].upper()}={n_mask} pts")
+                peri_note = (
+                    f" Perimeter mask: {', '.join(peri_bits)}."
+                    if peri_bits
+                    else ""
+                )
+                self._status(f"Read DLC and fitted ellipses.{peri_note}")
                 self._show_dlc_fit_report(report)
             self._worker = None
             worker.deleteLater()
@@ -1066,6 +1117,46 @@ class SyncTab(BaseTab):
                 f"from likelihood histogram."
             )
 
+    def _refresh_led_catalog_status(self, block: BlockHandle | None) -> None:
+        if not hasattr(self, "_led_catalog_status"):
+            return
+        if block is None:
+            self._led_catalog_status.setText("LED blinks: (no block)")
+            return
+        parts: list[str] = []
+        for eye, label in (("left", "L"), ("right", "R")):
+            ep = read_noise_epochs(block.block_path, eye)
+            led = ep[ep["category"] == CATEGORY_LED_BLINK] if not ep.empty else ep
+            if led is None or led.empty:
+                parts.append(f"{label}=0 frames / 0 epochs")
+            else:
+                n_frames = int(
+                    (led["end_frame"].astype(int) - led["start_frame"].astype(int) + 1).sum()
+                )
+                parts.append(f"{label}={n_frames} frames / {len(led)} epochs")
+        self._led_catalog_status.setText(
+            "LED blinks: " + ", ".join(parts) + " (catalogued, not applied)"
+        )
+
+    @staticmethod
+    def _catalog_led_blinks(blocksync: BlockSync) -> dict[str, tuple[int, int]]:
+        """Append led_blink epochs for both eyes; return {eye: (n_frames, n_epochs)}."""
+        out: dict[str, tuple[int, int]] = {}
+        block_path = Path(blocksync.block_path)
+        for eye, attr in (("left", "led_blink_frames_l"), ("right", "led_blink_frames_r")):
+            frames = getattr(blocksync, attr, None)
+            if frames is None:
+                frames = []
+            _, n_frames, n_epochs = append_epochs(
+                block_path,
+                eye,
+                category=CATEGORY_LED_BLINK,
+                frames=frames,
+                replace_category=True,
+            )
+            out[eye] = (n_frames, n_epochs)
+        return out
+
     def _run_correct_jitter(self) -> None:
         def work():
             b = self._require_blocksync()
@@ -1073,13 +1164,130 @@ class SyncTab(BaseTab):
             self._ensure_eye_tracking_dfs(b)
             b.correct_jitter()
             b.find_led_blink_frames(plot=False)
-            b.remove_led_blinks_from_eye_df(export=True)
+            return self._catalog_led_blinks(b)
 
-        self._run_async(
-            work,
-            "Corrected jitter and removed LED blinks.",
-            "Correcting jitter and removing LED blinks…",
+        if self._worker is not None and self._worker.isRunning():
+            QtWidgets.QMessageBox.information(
+                self, "Sync tab", "A background job is already running."
+            )
+            return
+
+        self._set_phase2_busy(True, "Correcting jitter and cataloguing LED blinks…")
+        worker = CallableWorker(work, self)
+
+        def on_ok(result=None) -> None:
+            self._set_phase2_busy(False)
+            msg = "Corrected jitter; LED blinks catalogued (not applied to eye data)."
+            if isinstance(result, dict):
+                l_n, l_e = result.get("left", (0, 0))
+                r_n, r_e = result.get("right", (0, 0))
+                msg = (
+                    f"Corrected jitter. LED blinks catalogued: "
+                    f"L={l_n} frames / {l_e} epochs, R={r_n} frames / {r_e} epochs "
+                    "(not applied)."
+                )
+            self._status(msg)
+            if self._block is not None:
+                self._refresh_led_catalog_status(self._block)
+            self._worker = None
+            worker.deleteLater()
+
+        def on_fail(msg: str) -> None:
+            self._set_phase2_busy(False)
+            self._status(f"Error: {msg}")
+            QtWidgets.QMessageBox.warning(self, "Sync tab", msg)
+            self._worker = None
+            worker.deleteLater()
+
+        worker.finished_ok.connect(on_ok)
+        worker.failed.connect(on_fail)
+        self._worker = worker
+        worker.start()
+
+    def _run_apply_selected_noise(self) -> None:
+        if self._block is None:
+            QtWidgets.QMessageBox.information(self, "Sync tab", "Load a block first.")
+            return
+        cats = list_categories(self._block.block_path)
+        if not cats:
+            QtWidgets.QMessageBox.information(
+                self,
+                "Apply noise",
+                "No noise-epoch categories found. Commit perimeter bad points "
+                "or run Correct jitter & catalog LED blinks first.",
+            )
+            return
+
+        dlg = QtWidgets.QDialog(self)
+        dlg.setWindowTitle("Apply selected noise to eye data")
+        lay = QtWidgets.QVBoxLayout(dlg)
+        lay.addWidget(
+            QtWidgets.QLabel(
+                "NaN ellipse geometry for frames covered by the selected categories.\n"
+                "This writes le_df/re_df and left/right_eye_data.csv when present."
+            )
         )
+        checks: dict[str, QtWidgets.QCheckBox] = {}
+        for cat in cats:
+            cb = QtWidgets.QCheckBox(cat)
+            checks[cat] = cb
+            lay.addWidget(cb)
+        buttons = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.StandardButton.Ok
+            | QtWidgets.QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        lay.addWidget(buttons)
+        if dlg.exec() != QtWidgets.QDialog.DialogCode.Accepted:
+            return
+        selected = [c for c, cb in checks.items() if cb.isChecked()]
+        if not selected:
+            QtWidgets.QMessageBox.information(
+                self, "Apply noise", "No categories selected."
+            )
+            return
+        confirm = QtWidgets.QMessageBox.question(
+            self,
+            "Confirm apply",
+            f"NaN geometry for categories: {', '.join(selected)}?\n"
+            "This modifies on-disk eye CSVs.",
+        )
+        if confirm != QtWidgets.QMessageBox.StandardButton.Yes:
+            return
+        try:
+            report = apply_noise_epochs_to_block_csvs(
+                self._block.block_path, categories=selected
+            )
+            # Refresh in-memory dfs if loaded
+            try:
+                b = self._require_blocksync()
+                le = Path(b.analysis_path) / "le_df.csv"
+                re = Path(b.analysis_path) / "re_df.csv"
+                if le.is_file():
+                    b.le_df = load_eye_tracking_df_csv(le)
+                if re.is_file():
+                    b.re_df = load_eye_tracking_df_csv(re)
+            except Exception:
+                pass
+            bits = []
+            for eye, info in report.get("eyes", {}).items():
+                files = info.get("files") or {}
+                if files:
+                    bits.append(
+                        f"{eye}: "
+                        + ", ".join(f"{k}={v}" for k, v in files.items())
+                    )
+            detail = "; ".join(bits) if bits else "no matching rows / files"
+            self._status(f"Applied noise categories {selected}: {detail}")
+            QtWidgets.QMessageBox.information(
+                self,
+                "Noise applied",
+                f"Categories: {', '.join(selected)}\n{detail}",
+            )
+        except Exception as e:
+            self._status(f"Error: {e}")
+            QtWidgets.QMessageBox.warning(self, "Sync tab", str(e))
 
     def _run_preview_jitter(self) -> None:
         try:
@@ -1285,8 +1493,13 @@ class SyncTab(BaseTab):
             raise RuntimeError("jitter report missing — run Compute jitter report first")
         b.correct_jitter()
         b.find_led_blink_frames(plot=False)
-        b.remove_led_blinks_from_eye_df(export=True)
-        return "jitter corrected, LED blinks removed"
+        catalog = SyncTab._catalog_led_blinks(b)
+        l_n, l_e = catalog.get("left", (0, 0))
+        r_n, r_e = catalog.get("right", (0, 0))
+        return (
+            f"jitter corrected; LED blinks catalogued "
+            f"L={l_n}/{l_e}, R={r_n}/{r_e} (not applied)"
+        )
 
     @staticmethod
     def _led_samples_from_blocksync(blocksync: BlockSync):

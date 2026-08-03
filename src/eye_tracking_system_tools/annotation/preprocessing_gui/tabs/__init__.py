@@ -6,8 +6,10 @@ Each tab subclasses :class:`BaseTab` and declares:
 * ``tab_label`` (display name)
 * ``status_signature(block)`` (list of files whose existence implies done)
 
-Phase 0 ships skeletons only; the actual controls land in Phases 1-7.
-Explore (Data Exploration) is a post-sync inspection tab added later.
+Explore (Data Exploration) is a post-sync inspection tab.
+Calibration writes ``LR_pix_size.csv``.
+Saccades (after Kerr) covers velocity thresholding, detection, and finalize
+to ``analysis/saccades/``.
 """
 
 from eye_tracking_system_tools.annotation.preprocessing_gui.tabs.base import BaseTab
@@ -16,6 +18,12 @@ from eye_tracking_system_tools.annotation.preprocessing_gui.tabs.verify_tab impo
     VerifyTab,
 )
 from eye_tracking_system_tools.annotation.preprocessing_gui.tabs.kerr_tab import KerrTab
+from eye_tracking_system_tools.annotation.preprocessing_gui.tabs.calibration_tab import (
+    CalibrationTab,
+)
+from eye_tracking_system_tools.annotation.preprocessing_gui.tabs.saccades_tab import (
+    SaccadesTab,
+)
 from eye_tracking_system_tools.annotation.preprocessing_gui.tabs.behavior_tab import (
     BehaviorTab,
 )
@@ -31,6 +39,8 @@ __all__ = [
     "SyncTab",
     "VerifyTab",
     "KerrTab",
+    "CalibrationTab",
+    "SaccadesTab",
     "BehaviorTab",
     "SyncFreeTab",
     "ExploreTab",

@@ -2103,14 +2103,28 @@ class BlockSync:
         return filtered_data
 
     @staticmethod
-    def eye_tracking_analysis(dlc_video_analysis_csv, uncertainty_thr, *, fit_report=None):
+    def eye_tracking_analysis(
+        dlc_video_analysis_csv,
+        uncertainty_thr,
+        *,
+        fit_report=None,
+        perimeter=None,
+    ):
         """
         :param dlc_video_analysis_csv: the csv output of a dlc analysis of one video, already read by pandas with header=1
         :param uncertainty_thr: The confidence P value to use as a threshold for datapoint validity in the analysis
         :param fit_report: optional dict populated in-place with yield/likelihood stats
+        :param perimeter: optional pupil physiological bound ``{"shape":"rect"|"circle", …}``
+            in raw video coordinates; Pupil keypoints outside are dropped before the fit
         :returns ellipse_df: a DataFrame of ellipses parameters (center, width, height, phi, size) for each video frame
 
         """
+        from eye_tracking_system_tools.preprocessing.pupil_perimeter import (
+            mask_pupil_keypoints_outside_perimeter,
+            normalize_perimeter,
+            perimeter_summary,
+        )
+
         # import the dataframe and convert it to floats
         data = dlc_video_analysis_csv
         data = data.iloc[1:].apply(pd.to_numeric)
@@ -2136,6 +2150,17 @@ class BlockSync:
         good_points = pupil_ps > uncertainty_thr
         pupil_xs = pupil_xs[good_points]
         pupil_ys = pupil_ys[good_points]
+
+        peri = normalize_perimeter(perimeter)
+        n_perim_masked = 0
+        if peri is not None:
+            pupil_xs, pupil_ys, n_perim_masked = mask_pupil_keypoints_outside_perimeter(
+                pupil_xs, pupil_ys, peri
+            )
+            print(
+                f"pupil perimeter filter ({perimeter_summary(peri)}): "
+                f"masked {n_perim_masked} keypoint(s)"
+            )
 
         # Do the same for the edges
         edge_elements = np.array([x for x in data.columns if 'edge' in x])
@@ -2172,6 +2197,9 @@ class BlockSync:
             fit_report["mean_likelihood_used"] = (
                 float(np.mean(used_values)) if used_values.size else float("nan")
             )
+        if fit_report is not None:
+            fit_report["perimeter"] = peri
+            fit_report["n_keypoints_masked_by_perimeter"] = int(n_perim_masked)
 
         # work row by row to figure out the ellipses
         ellipses = []
@@ -2297,13 +2325,39 @@ class BlockSync:
         self.le_csv = pd.read_csv(le_path, header=1, low_memory=False)
         self.re_csv = pd.read_csv(re_path, header=1, low_memory=False)
 
+        from eye_tracking_system_tools.preprocessing.pupil_perimeter import (
+            perimeter_summary,
+            read_pupil_perimeters,
+        )
+
+        # analysis_path is ``block/analysis``; tolerate stub BlockSync objects in tests
+        block_root = getattr(self, "block_path", None)
+        if block_root is None and getattr(self, "analysis_path", None) is not None:
+            block_root = Path(self.analysis_path).parent
+        peri_l = peri_r = None
+        if block_root is not None:
+            perimeters = read_pupil_perimeters(block_root)
+            peri_l = perimeters.get("left")
+            peri_r = perimeters.get("right")
+            if peri_l is not None or peri_r is not None:
+                print(
+                    "Applying saved pupil perimeters on DLC fit: "
+                    f"L={perimeter_summary(peri_l)}; R={perimeter_summary(peri_r)}"
+                )
+
         le_stats: dict = {}
         re_stats: dict = {}
         self.le_ellipses = self.eye_tracking_analysis(
-            self.le_csv, threshold_to_use, fit_report=le_stats
+            self.le_csv,
+            threshold_to_use,
+            fit_report=le_stats,
+            perimeter=peri_l,
         )
         self.re_ellipses = self.eye_tracking_analysis(
-            self.re_csv, threshold_to_use, fit_report=re_stats
+            self.re_csv,
+            threshold_to_use,
+            fit_report=re_stats,
+            perimeter=peri_r,
         )
         self.dlc_ellipse_fit_report = {
             "left": {**le_stats, "dlc_csv": str(le_path)},
@@ -3111,7 +3165,12 @@ class BlockSync:
         self.remove_eye_datapoints_based_on_video_frames(eye, indices_to_nan=video_indices)
 
     def remove_led_blinks_from_eye_df(self, export=True):
-        """Basic function for removing the blink frames datapoints from le/re_df"""
+        """NaN LED-blink frames on le/re_df (notebook / explicit opt-in).
+
+        Prefer cataloguing via ``noise_epochs.append_epochs(..., category='led_blink')``
+        and ``apply_noise_epochs_to_block_csvs`` from the Sync GUI. This method remains
+        for backward compatibility with notebooks.
+        """
 
         columns_to_nan = ['center_x',
                           'center_y',

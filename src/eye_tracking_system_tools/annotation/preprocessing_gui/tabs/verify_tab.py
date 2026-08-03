@@ -1,4 +1,4 @@
-"""Stage 2 -- Data verification (Kerr-ref pick + ellipse review)."""
+"""Stage 2 -- Data verification (Kerr-ref pick + pupil perimeter + ellipse review)."""
 
 from __future__ import annotations
 
@@ -15,7 +15,6 @@ from eye_tracking_system_tools.annotation.preprocessing_gui.ellipse_verifier imp
 )
 from eye_tracking_system_tools.annotation.preprocessing_gui.models import BlockHandle
 from eye_tracking_system_tools.annotation.preprocessing_gui.tabs.base import BaseTab
-from eye_tracking_system_tools.preprocessing.BlockSync_class import BlockSync
 from eye_tracking_system_tools.preprocessing.data_verification_utils import (
     export_corrected_eye_data,
     export_current_kerr_refs,
@@ -23,6 +22,11 @@ from eye_tracking_system_tools.preprocessing.data_verification_utils import (
 )
 from eye_tracking_system_tools.preprocessing.calculate_kerr_angles import (
     load_self_kerr_refs,
+)
+from eye_tracking_system_tools.preprocessing.pupil_perimeter import (
+    PERIMETERS_FILENAME,
+    read_pupil_perimeters,
+    write_pupil_perimeters,
 )
 
 
@@ -64,7 +68,14 @@ class VerifyTab(BaseTab):
         self._stale_banner.hide()
         layout.addWidget(self._stale_banner)
 
-        self._info = QtWidgets.QLabel("Load a block to review ellipses and pick Kerr refs.")
+        self._info = QtWidgets.QLabel(
+            "Review ellipses, pick Kerr refs, and optionally draw a pupil perimeter "
+            "(physiological bound). Use Compute angles span on each eye to preview "
+            "φ/θ histograms for the current red-dot reference before saving. "
+            "Commit bad datapoints writes noise-epoch catalogs "
+            "(does not NaN eye CSVs). Zoom region + image filters are per-eye display "
+            "aids. Re-run Sync → Read DLC to refit with DLC keypoint masking."
+        )
         self._info.setWordWrap(True)
         layout.addWidget(self._info)
 
@@ -86,6 +97,7 @@ class VerifyTab(BaseTab):
         self._btn_save.clicked.connect(self._save_all)
 
     def status_signature(self, block: BlockHandle) -> list[Path]:
+        # Kerr refs remain the primary completion signal; perimeter is optional.
         return [block.analysis_path / "self_kerr_refs.csv"]
 
     def set_block(self, block: BlockHandle | None) -> None:
@@ -96,7 +108,12 @@ class VerifyTab(BaseTab):
             self._stale_banner.hide()
             self._status.setText("")
         else:
-            self._info.setText(f"Active block: {block.display_label}")
+            self._info.setText(
+                f"Active block: {block.display_label}. "
+                "Kerr / Perimeter / Zoom on each eye; Commit bad datapoints catalogs "
+                f"pupil_perimeter epochs. Save exports eye CSVs, self_kerr_refs.csv, "
+                f"and {PERIMETERS_FILENAME}."
+            )
             self._update_stale_banner(block)
             self._status.setText(
                 "Use 'Load prev analysis' when eye data exists on disk, "
@@ -111,7 +128,8 @@ class VerifyTab(BaseTab):
             self._load_verifiers(self._block)
             self._btn_save.setEnabled(True)
             self._status.setText(
-                "Loaded verification data. Adjust both eyes, then Save once."
+                "Loaded verification data. Adjust both eyes (Kerr / perimeter / zoom), "
+                "then Save once."
             )
         except Exception as e:
             self._info.setText(f"Cannot load verification data: {e}")
@@ -149,6 +167,7 @@ class VerifyTab(BaseTab):
         self._session.ensure_eye_videos(blocksync)
         load_eye_data(blocksync)
         load_self_kerr_refs(blocksync)
+        perimeters = read_pupil_perimeters(block.block_path)
 
         ref_l = None
         ref_r = None
@@ -171,6 +190,8 @@ class VerifyTab(BaseTab):
             "left",
             ref_point_xy=ref_l,
             parent=self,
+            perimeter=perimeters.get("left"),
+            block_path=block.block_path,
         )
         self._right_verifier = EllipseVerifierWidget(
             blocksync.right_eye_data,
@@ -178,6 +199,8 @@ class VerifyTab(BaseTab):
             "right",
             ref_point_xy=ref_r,
             parent=self,
+            perimeter=perimeters.get("right"),
+            block_path=block.block_path,
         )
         self._verifier_layout.addWidget(self._left_verifier)
         self._verifier_layout.addWidget(self._right_verifier)
@@ -203,6 +226,12 @@ class VerifyTab(BaseTab):
 
         export_corrected_eye_data(blocksync)
         export_current_kerr_refs(blocksync)
+        peri_path = write_pupil_perimeters(
+            Path(blocksync.block_path),
+            self._left_verifier.perimeter(),
+            self._right_verifier.perimeter(),
+        )
         self._status.setText(
-            "Saved both eyes and exported left/right_eye_data.csv + self_kerr_refs.csv."
+            "Saved both eyes → left/right_eye_data.csv, self_kerr_refs.csv, "
+            f"and {peri_path.name}."
         )

@@ -68,6 +68,54 @@ def test_ellipse_verifier_exposes_df_and_ref(qapp_session, tmp_path: Path):
     assert widget.ref_xy() == (12, widget.frame_height - 1 - 8)
 
 
+def test_ellipse_verifier_has_compute_angles_span_button(qapp_session, tmp_path: Path):
+    video = tmp_path / "tiny.mp4"
+    _write_tiny_video(video)
+    widget = EllipseVerifierWidget(_sample_eye_df(), video, "left")
+    assert hasattr(widget, "_btn_angles_span")
+    assert widget._btn_angles_span.text() == "Compute angles span"
+
+
+def test_kerr_angles_span_dialog_builds(qapp_session):
+    from eye_tracking_system_tools.annotation.preprocessing_gui.kerr_angles_span_dialog import (
+        KerrAnglesSpanDialog,
+    )
+    from eye_tracking_system_tools.preprocessing.calculate_kerr_angles import (
+        KerrAnglePreview,
+    )
+
+    preview = KerrAnglePreview(
+        phi=np.linspace(-5.0, 5.0, 50),
+        theta=np.linspace(-3.0, 4.0, 50),
+        f_z=120.0,
+        ref_x=100.0,
+        ref_y=80.0,
+        n_input=50,
+        n_finite=50,
+    )
+    eye_df = pd.DataFrame(
+        {
+            "eye_frame": np.arange(50),
+            "OE_timestamp": np.arange(50, dtype=np.int64),
+            "ms_axis": np.arange(50, dtype=float),
+            "center_x": 100.0 + np.linspace(-3, 3, 50),
+            "center_y": 80.0 + np.linspace(-2, 2, 50),
+            "width": np.full(50, 12.0),
+            "height": np.full(50, 10.0),
+            "phi": np.zeros(50),
+        }
+    )
+    dialog = KerrAnglesSpanDialog(preview, eye="left", eye_df=eye_df)
+    assert "Left" in dialog.windowTitle()
+    assert dialog._heat_plot is not None
+    assert dialog._btn_recompute.isEnabled()
+    dialog._spin_ref_x.setValue(101.0)
+    dialog._spin_ref_y.setValue(81.0)
+    dialog._on_recompute()
+    assert dialog.ref_xy() == (101, 81)
+    dialog.close()
+
+
 def test_eye_data_is_stale_detects_newer_final_sync(sample_block_path: Path, tmp_path: Path):
     analysis = sample_block_path / "analysis"
     if not (analysis / "left_eye_data.csv").is_file():

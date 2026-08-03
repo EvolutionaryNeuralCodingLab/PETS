@@ -309,6 +309,18 @@ SYNC_ARTIFACT_PROFILE = TabArtifactProfile(
             lambda b, c: [b.analysis_path / "right_eye_data.csv"],
             lambda s, bs, b, st, c: load_eye_data_verify(bs),
         ),
+        ArtifactSpec(
+            "noise_epochs_left",
+            "noise_epochs_left.csv",
+            lambda b, c: [b.analysis_path / "noise_epochs_left.csv"],
+            lambda s, bs, b, st, c: None,
+        ),
+        ArtifactSpec(
+            "noise_epochs_right",
+            "noise_epochs_right.csv",
+            lambda b, c: [b.analysis_path / "noise_epochs_right.csv"],
+            lambda s, bs, b, st, c: None,
+        ),
     ),
 )
 
@@ -333,6 +345,24 @@ VERIFY_ARTIFACT_PROFILE = TabArtifactProfile(
             "self_kerr_refs.csv",
             lambda b, c: [b.analysis_path / "self_kerr_refs.csv"],
             lambda s, bs, b, st, c: load_self_kerr_refs(bs),
+        ),
+        ArtifactSpec(
+            "pupil_perimeters",
+            "pupil_perimeters.yaml",
+            lambda b, c: [b.analysis_path / "pupil_perimeters.yaml"],
+            lambda s, bs, b, st, c: None,
+        ),
+        ArtifactSpec(
+            "noise_epochs_left",
+            "noise_epochs_left.csv",
+            lambda b, c: [b.analysis_path / "noise_epochs_left.csv"],
+            lambda s, bs, b, st, c: None,
+        ),
+        ArtifactSpec(
+            "noise_epochs_right",
+            "noise_epochs_right.csv",
+            lambda b, c: [b.analysis_path / "noise_epochs_right.csv"],
+            lambda s, bs, b, st, c: None,
         ),
     ),
 )
@@ -422,6 +452,54 @@ EXPLORE_ARTIFACT_PROFILE = TabArtifactProfile(
             "right_eye_data.csv",
             lambda b, c: [b.analysis_path / "right_eye_data.csv"],
             lambda s, bs, b, st, c: load_eye_data_verify(bs),
+        ),
+    ),
+)
+
+
+def _saccades_dir(block: BlockHandle) -> Path:
+    return block.analysis_path / "saccades"
+
+
+CALIBRATION_ARTIFACT_PROFILE = TabArtifactProfile(
+    tab_id="calibration",
+    artifacts=(
+        ArtifactSpec(
+            "pix_size",
+            "LR_pix_size.csv",
+            lambda b, c: [b.analysis_path / "LR_pix_size.csv"],
+            lambda s, bs, b, st, c: None,
+        ),
+    ),
+)
+
+
+SACCADES_ARTIFACT_PROFILE = TabArtifactProfile(
+    tab_id="saccades",
+    artifacts=(
+        ArtifactSpec(
+            "left_eye_data",
+            "left_eye_data*.csv (with Kerr angles)",
+            lambda b, c: list(b.analysis_path.glob("left_eye_data*.csv")),
+            lambda s, bs, b, st, c: None,
+        ),
+        ArtifactSpec(
+            "right_eye_data",
+            "right_eye_data*.csv (with Kerr angles)",
+            lambda b, c: list(b.analysis_path.glob("right_eye_data*.csv")),
+            lambda s, bs, b, st, c: None,
+        ),
+        ArtifactSpec(
+            "saccade_events",
+            "saccades/saccade_events.csv",
+            lambda b, c: [_saccades_dir(b) / "saccade_events.csv"],
+            lambda s, bs, b, st, c: None,
+        ),
+        ArtifactSpec(
+            "saccade_params",
+            "saccades/detection_params.yaml",
+            lambda b, c: [_saccades_dir(b) / "detection_params.yaml"],
+            lambda s, bs, b, st, c: None,
         ),
     ),
 )

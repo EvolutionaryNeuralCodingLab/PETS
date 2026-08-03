@@ -2,7 +2,8 @@
 
 Phase 0 ships:
 
-* MainWindow with a tabbed dashboard (Sync / Verify / Kerr / Behavior / Sync-free / Data Exploration).
+* MainWindow with a tabbed dashboard
+  (Sync / Verify / Kerr / Calibration / Saccades / Behavior / Sync-free / Data Exploration).
 * StartupDialog asking for experiment path, animal, block(s), output folder.
 * argparse + env-var support so the dialog can be skipped.
 * Per-tab status-icon plumbing via :class:`StatusBus`.
@@ -41,15 +42,26 @@ from eye_tracking_system_tools.annotation.preprocessing_gui.models import (
 from eye_tracking_system_tools.annotation.preprocessing_gui.status_bus import StatusBus
 from eye_tracking_system_tools.annotation.preprocessing_gui.tabs import (
     BehaviorTab,
+    CalibrationTab,
     ExploreTab,
     KerrTab,
+    SaccadesTab,
     SyncFreeTab,
     SyncTab,
     VerifyTab,
 )
 
 
-_TAB_CLASSES = (SyncTab, VerifyTab, KerrTab, BehaviorTab, SyncFreeTab, ExploreTab)
+_TAB_CLASSES = (
+    SyncTab,
+    VerifyTab,
+    KerrTab,
+    CalibrationTab,
+    SaccadesTab,
+    BehaviorTab,
+    SyncFreeTab,
+    ExploreTab,
+)
 
 
 _STATUS_DOTS = {
@@ -463,10 +475,14 @@ class PreprocessingGuiWindow(QtWidgets.QMainWindow):
             "<li><b>Read DLC + fit ellipses</b>: reads DeepLabCut CSVs and builds le/re ellipse tables "
             "(requires exported final_sync_df.csv).</li>"
             "<li><b>Compute jitter report</b>: long-running drift analysis saved to analysis folder.</li>"
-            "<li><b>Correct jitter & remove LED blinks</b>: applies jitter correction and LED-blink cleanup.</li>"
+            "<li><b>Correct jitter &amp; catalog LED blinks</b>: applies jitter correction and "
+            "writes <code>led_blink</code> rows to <code>noise_epochs_{left,right}.csv</code> "
+            "(does not NaN eye data).</li>"
+            "<li><b>Apply selected noise to eye data…</b>: confirmed write that NaNs geometry "
+            "for chosen noise-epoch categories.</li>"
             "<li><b>Preview outliers (both eyes)</b>: plots top_correlation_dist with flagged peaks in native pyqtgraph.</li>"
             "<li><b>Apply removal (both eyes)</b>: NaNs outlier frames using the previewed indices.</li>"
-            "<li><b>Finalize & export eye data</b>: writes left_eye_data.csv and right_eye_data.csv.</li>"
+            "<li><b>Finalize &amp; export eye data</b>: writes left_eye_data.csv and right_eye_data.csv.</li>"
             "</ul>"
             "<h4>Batch (bottom of Sync tab)</h4>"
             "<p>When you launched the GUI with multiple blocks (e.g. <code>015,016,017</code>), "
@@ -476,8 +492,13 @@ class PreprocessingGuiWindow(QtWidgets.QMainWindow):
             "after the current block finishes.</p>"
             "<h4>Other tabs (high-level)</h4>"
             "<ul>"
-            "<li><b>Verify</b>: interactive ellipse verification and Kerr reference picking.</li>"
-            "<li><b>Kerr</b>: calculates and exports Kerr angle CSV outputs.</li>"
+            "<li><b>Verify</b>: ellipse review, Kerr reference picking, pupil perimeter "
+            "(Commit bad datapoints → <code>pupil_perimeter</code> noise epochs; zoom + "
+            "contrast/saturation/gamma filters), Sync DLC re-fit masks DLC keypoints.</li>"
+            "<li><b>Kerr</b>: calculates and exports Kerr angle CSV outputs; optional "
+            "Exclude noise epochs checkbox masks selected categories in memory only.</li>"
+            "<li><b>Calibration</b>: landmark ROI / manual pixel-size → LR_pix_size.csv.</li>"
+            "<li><b>Saccades</b>: velocity threshold tuning (100 s windows), detect &amp; finalize events.</li>"
             "<li><b>Behavior</b>: threshold-based behavioral state extraction from lizMov data.</li>"
             "<li><b>Sync-free</b>: optional alternative ellipse-to-Kerr mapping pipeline.</li>"
             "</ul>"
@@ -519,6 +540,8 @@ def _upstream_tabs(tab_id: str) -> list[str]:
         "sync": [],
         "verify": ["sync"],
         "kerr": ["sync", "verify"],
+        "calibration": [],
+        "saccades": ["kerr"],
         "behavior": ["sync"],
         "syncfree": ["sync"],
         "explore": ["sync"],

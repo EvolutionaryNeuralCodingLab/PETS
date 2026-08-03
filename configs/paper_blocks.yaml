@@ -1,0 +1,40 @@
+# Lizard paper cohort (Fig 2c–2j / migration notebook).
+# NOTE: Absolute block paths are machine-local (lab mount). Edit every path
+# before running on a different machine or mount layout.
+# Provenance:
+#   - development/old_pipelines_for_ref/multiple_figures_pipeline_migration.ipynb
+#     animals = ['PV_106','PV_143','PV_62','PV_126','PV_57']
+#     block_lists = [[8,9,10,11,12],[1,2,3,4],[24,26,38],[7,8,9,10,11,12],[7,8,9,12,13]]
+#     experiment_path = Z:\Nimrod\experiments  →  /Volumes/Data-2/Nimrod/experiments
+#   - Cross-checked vs Fig_2_j/saccade_angles_data.pkl (same animals/blocks;
+#     synced n=15422 + non_synced n=12724 = 28146 events).
+# Eye CSVs: prefer *degrees_raw_verified* (present on all 23 blocks).
+animals:
+  PV_106:
+    - /Volumes/Data-2/Nimrod/experiments/PV_106/2025_08_06/block_008
+    - /Volumes/Data-2/Nimrod/experiments/PV_106/2025_08_06/block_009
+    - /Volumes/Data-2/Nimrod/experiments/PV_106/2025_08_06/block_010
+    - /Volumes/Data-2/Nimrod/experiments/PV_106/2025_08_06/block_011
+    - /Volumes/Data-2/Nimrod/experiments/PV_106/2025_08_06/block_012
+  PV_143:
+    - /Volumes/Data-2/Nimrod/experiments/PV_143/2025_08_25/block_001
+    - /Volumes/Data-2/Nimrod/experiments/PV_143/2025_08_25/block_002
+    - /Volumes/Data-2/Nimrod/experiments/PV_143/2025_08_25/block_003
+    - /Volumes/Data-2/Nimrod/experiments/PV_143/2025_08_25/block_004
+  PV_62:
+    - /Volumes/Data-2/Nimrod/experiments/PV_62/2023_04_27/block_024
+    - /Volumes/Data-2/Nimrod/experiments/PV_62/2023_04_27/block_026
+    - /Volumes/Data-2/Nimrod/experiments/PV_62/2023_05_01/block_038
+  PV_126:
+    - /Volumes/Data-2/Nimrod/experiments/PV_126/2024_07_18/block_007
+    - /Volumes/Data-2/Nimrod/experiments/PV_126/2024_07_18/block_008
+    - /Volumes/Data-2/Nimrod/experiments/PV_126/2024_07_18/block_009
+    - /Volumes/Data-2/Nimrod/experiments/PV_126/2024_07_18/block_010
+    - /Volumes/Data-2/Nimrod/experiments/PV_126/2024_08_13/block_011
+    - /Volumes/Data-2/Nimrod/experiments/PV_126/2024_08_13/block_012
+  PV_57:
+    - /Volumes/Data-2/Nimrod/experiments/PV_57/2024_11_25/block_007
+    - /Volumes/Data-2/Nimrod/experiments/PV_57/2024_11_25/block_008
+    - /Volumes/Data-2/Nimrod/experiments/PV_57/2024_11_25/block_009
+    - /Volumes/Data-2/Nimrod/experiments/PV_57/2024_12_01/block_012
+    - /Volumes/Data-2/Nimrod/experiments/PV_57/2024_12_01/block_013

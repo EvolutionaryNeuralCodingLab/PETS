@@ -1,0 +1,156 @@
+# Mouse M_002 mini–Fig 2 params (no state / head-movement filters).
+# Same saccade detection defaults as lizard paper; 2f without R3-1 lizard exclusions.
+
+saccade:
+  speed_threshold_deg_per_frame: 0.8
+  directional_delta_threshold_deg: 90.0
+  min_subsaccade_samples: 2
+  min_net_disp_deg: 0.5
+  speed_profile: true
+
+binocular:
+  sync_diff_ms: 34.0
+
+main_sequence:
+  amp_col: net_angular_disp
+  bin_width_deg: 5.0
+  min_amp_deg: 0.5
+  max_amp_pct: 99.5
+  min_events_per_bin: 10
+  frame_rate_fps: 60.0
+  t_window_ms: [-100.0, 100.0]
+  dt_ms: 2.0
+  bandwidth_ms: 10.0
+  min_events_per_bin_traces: 15
+  per_animal_max_bins: 8
+  plot_animals: null
+  bin_cmap: viridis
+  smoothing: true
+  subsample_peak: false
+  normalize_velocity_to_peak: false
+  normalize_position_to_amp: false
+  normalize_final_curve: false
+  align_to: peak
+  position_calc: mov_axis
+  velocity_unit: deg/sec
+  use_fixed_dt: false
+  framerate_hz: null
+  eye_filter: null
+
+figure_2f:
+  iqr_multiplier: 60.0
+  bins: 60
+  macro_range: [0.0, 0.5]
+  micro_range: [0.0, 0.1]
+  macro_tick_list: [0.0, 0.25, 0.5]
+  micro_tick_list: [0.0, 0.05, 0.1]
+  event_mode: All
+  require_head_stationary: false
+  exclude_animals: []
+  contra_event_window_ms: 100.0
+  contra_sample_ms: 51.0
+  also_export_s3: false
+
+figure_2g:
+  amp_bins: 40
+  amp_max_deg: 25.0
+
+figure_2h:
+  nbins: 200
+  global_min: -10.0
+  global_max: 10.0
+
+figure_2i:
+  num_bins: 36
+  baseline_prob: 0.005
+
+figure_3a_3c:
+  # Single-block vignettes. No paper-preferred block for mouse cohort -> first
+  # block in EventTables is used unless block_key is set.
+  block_key: null
+  figure_3a:
+    start_s: 210.0
+    end_s: 240.0
+    traces: [center_x, center_y]
+    figsize: [2.3, 1.8]
+    std_multiplier: 3
+    with_state: false
+  figure_3b:
+    start_s: 310.0
+    end_s: 340.0
+    traces: [center_x, center_y]
+    figsize: [2.3, 1.8]
+    std_multiplier: 3
+    with_state: false
+  figure_3c:
+    start_s: 200.0
+    end_s: 415.0
+    traces: [center_x, center_y, pupil_diameter, saccade_frequency]
+    figsize: [4.7, 3.7]
+    std_multiplier: 3.5
+    with_state: false  # M_002 has no behavior_state.csv
+    head_merge_ms: 20
+    plot_state_y: 20
+    x_zero_origin: true
+    pupil_ticks: [1.5, 2.0, 2.5]
+
+figure_3d:
+  # Shared across the log/linear panels below.
+  font_family: Arial
+  color_template: okabeito
+  combined_label: "All (combined)"
+  frame_ms_fallback: 16.67  # used only when tables.blocks has no ms_axis traces
+  log:
+    figure_size: [2.5, 2.2]
+    num_bins: 20
+    high_ms: 20000.0
+    pair_threshold_ms: 60.0
+    min_isi_ms: null  # null -> 0.75 * frame_ms
+    first_bin_factor: 0.5  # first real edge = first_bin_factor * frame_ms
+    add_leading_zero_bin: false
+    log_exponent: 1.0
+    xlim: [100.0, 20000.0]
+    ylim: [0.0, 0.15]
+    linewidth: 1.5
+    combined_linewidth: 2.0
+    combined_color: k
+    combined_linestyle: "-"
+    xlabel: "ISI [ms]"
+    ylabel: Probability
+  linear:
+    figure_size: [2.0, 1.5]
+    num_bins: 1176
+    low_ms: 10.0
+    high_ms: 20000.0
+    pair_threshold_ms: 60.0
+    min_isi_ms: null  # null -> 0.75 * frame_ms
+    add_leading_zero_bin: false
+    xlim: [10.0, 300.0]
+    xlim_policy: slice  # slice | conditional | fold
+    ylim: null
+    linewidth: 1.2
+    combined_linewidth: 2.0
+    combined_color: k
+    combined_linestyle: "-"
+    xlabel: "ISI [ms]"
+    ylabel: "Probability (per linear bin)"
+
+figure_3e:
+  num_bins: 40
+  x_range: [1.0, 2.35]
+  outlier_percentiles: [0.001, 99.999]
+  animals: [PV_62]
+  figsize: [2.2, 1.5]
+
+figure_3f:
+  num_bins: 15
+  x_range: [-3.0, 3.0]
+  outlier_percentiles: [0.1, 99.9]
+  exclude_animals: [PV_57]
+  figsize: [2.2, 1.7]
+
+species: mouse
+animal: M_002
+notes: >
+  No lizMov/head labels expected. No behavioral state annotations.
+  Eye CSVs are left/right_eye_data_raw_verified.csv (angles present; no degrees_ prefix).

@@ -1,0 +1,27 @@
+# Paper / flexible-figures block registry (animals → analyzed block paths).
+# NOTE: Absolute block paths are machine-local (lab mount). Edit every path
+# before running on a different machine or mount layout.
+# Produced by development/flexible_paper_figures_tool.ipynb (section 0.5)
+# or edited by hand. Each path must contain an analysis/ folder with eye CSVs.
+#
+animals:
+  PV_106:
+  - /Volumes/Data-2/Nimrod/experiments/PV_106/2025_09_04/block_014
+  - /Volumes/Data-2/Nimrod/experiments/PV_106/2025_09_04/block_015
+  - /Volumes/Data-2/Nimrod/experiments/PV_106/2025_09_04/block_016
+  PV_126:
+  - /Volumes/Data-2/Nimrod/experiments/PV_126/2024_08_13/block_011
+  - /Volumes/Data-2/Nimrod/experiments/PV_126/2024_08_13/block_012
+  - /Volumes/Data-2/Nimrod/experiments/PV_126/2024_08_13/block_013
+  - /Volumes/Data-2/Nimrod/experiments/PV_126/2024_08_13/block_014
+  - /Volumes/Data-2/Nimrod/experiments/PV_126/2024_08_13/block_015
+  PV_143:
+  - /Volumes/Data-2/Nimrod/experiments/PV_143/2025_08_25/block_001
+  - /Volumes/Data-2/Nimrod/experiments/PV_143/2025_08_25/block_002
+  - /Volumes/Data-2/Nimrod/experiments/PV_143/2025_08_25/block_003
+  - /Volumes/Data-2/Nimrod/experiments/PV_143/2025_08_25/block_004
+  PV_62:
+  - /Volumes/Data-2/Nimrod/experiments/PV_62/2023_05_01/block_038
+  - /Volumes/Data-2/Nimrod/experiments/PV_62/2023_05_01/block_039
+  - /Volumes/Data-2/Nimrod/experiments/PV_62/2023_05_01/block_040
+  - /Volumes/Data-2/Nimrod/experiments/PV_62/2023_05_01/block_041

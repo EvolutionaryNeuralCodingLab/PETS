@@ -1,0 +1,9 @@
+# M_002 mouse mini–Fig 2 registry (n=1 animal, 2 analyzed blocks).
+# NOTE: Absolute block paths are machine-local (lab mount). Edit every path
+# before running on a different machine or mount layout.
+# Prefer blocks with left/right_eye_data_raw_verified.csv containing k_phi/k_theta.
+# Inventory: outputs/phase2_mouse_M_002_inventory.md
+animals:
+  M_002:
+    - /Volumes/Data/Nimrod/experiments/M_002/2026_07_28/block_012
+    - /Volumes/Data/Nimrod/experiments/M_002/2026_07_28/block_013

@@ -1,0 +1,9 @@
+# Local Phase-1 validation registry (two animals, one block each).
+# NOTE: Absolute paths are machine-local (developer sample_data). Edit every
+# path before running on a different machine.
+# Paths are absolute so the pipeline does not depend on Z:\ server mounts.
+animals:
+  PV_143:
+    - /Users/nimi/sample_data/PV_143/2025_11_08/block_001
+  PV_288:
+    - /Users/nimi/sample_data/PV_288/2026_06_15/block_011

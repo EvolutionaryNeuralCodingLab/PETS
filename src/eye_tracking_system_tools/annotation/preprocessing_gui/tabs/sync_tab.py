@@ -14,14 +14,21 @@ from eye_tracking_system_tools.annotation.preprocessing_gui.analysis_artifacts i
 from eye_tracking_system_tools.annotation.preprocessing_gui.bokeh_launcher import (
     open_shift_plot,
 )
+from eye_tracking_system_tools.annotation.preprocessing_gui.manual_led_dialog import (
+    ManualLedDialog,
+    try_apply_saved_led_replacement,
+)
 from eye_tracking_system_tools.annotation.preprocessing_gui.manual_ttl_dialog import (
     ManualTtlDialog,
     parse_open_ephys_with_manual_override,
 )
 from eye_tracking_system_tools.annotation.preprocessing_gui.ttl_mapping import (
     effective_channeldict,
+    led_driver_is_ready,
     list_mapping_sources,
+    load_led_manual_replacement,
     load_ttl_sidecar,
+    oe_events_have_led_driver,
 )
 from eye_tracking_system_tools.annotation.preprocessing_gui.qt_roi_picker import (
     extract_brightness_with_roi_fallback,
@@ -115,7 +122,7 @@ class SyncTab(BaseTab):
         self._stack.addWidget(self._build_verify_panel())
         self._stack.addWidget(self._build_dlc_jitter_panel())
 
-        self._steps.currentRowChanged.connect(self._stack.setCurrentIndex)
+        self._steps.currentRowChanged.connect(self._on_sync_step_changed)
         self._steps.setCurrentRow(0)
 
         self._status_label = QtWidgets.QLabel("No block loaded.")
@@ -162,6 +169,7 @@ class SyncTab(BaseTab):
 
         btns = QtWidgets.QHBoxLayout()
         self._btn_prepare = QtWidgets.QPushButton("Prepare data (eye + arena)")
+        self._btn_convert_arena = QtWidgets.QPushButton("Convert arena videos to .mp4…")
         self._btn_parse_oe = QtWidgets.QPushButton("Parse OE events")
         self._btn_manual_ttl = QtWidgets.QPushButton("Manual TTL mapping…")
         self._btn_extract_brightness = QtWidgets.QPushButton("Extract brightness")
@@ -170,6 +178,7 @@ class SyncTab(BaseTab):
             "Re-run eye brightness with manual ROIs"
         )
         btns.addWidget(self._btn_prepare)
+        btns.addWidget(self._btn_convert_arena)
         btns.addWidget(self._btn_parse_oe)
         btns.addWidget(self._btn_manual_ttl)
         btns.addWidget(self._btn_extract_brightness)
@@ -178,16 +187,24 @@ class SyncTab(BaseTab):
         btns2 = QtWidgets.QHBoxLayout()
         btns2.addWidget(self._btn_preview_brightness)
         btns2.addWidget(self._btn_manual_roi)
+        self._btn_manual_led = QtWidgets.QPushButton("Manual LED blink replacement…")
+        btns2.addWidget(self._btn_manual_led)
         btns2.addStretch(1)
         layout.addLayout(btns2)
+
+        self._led_status = QtWidgets.QLabel("LED_driver: unknown")
+        self._led_status.setWordWrap(True)
+        layout.addWidget(self._led_status)
         layout.addStretch(1)
 
         self._btn_prepare.clicked.connect(self._run_prepare_data)
+        self._btn_convert_arena.clicked.connect(self._run_convert_arena_videos)
         self._btn_parse_oe.clicked.connect(self._run_parse_oe)
         self._btn_manual_ttl.clicked.connect(self._run_manual_ttl_override)
         self._btn_extract_brightness.clicked.connect(self._run_extract_brightness)
         self._btn_preview_brightness.clicked.connect(self._run_preview_brightness)
         self._btn_manual_roi.clicked.connect(self._run_manual_roi_override)
+        self._btn_manual_led.clicked.connect(self._run_manual_led_replacement)
         return w
 
     def _build_simple_sync_panel(self) -> QtWidgets.QWidget:
@@ -482,11 +499,13 @@ class SyncTab(BaseTab):
             self._status("No block loaded.")
             self._refresh_dlc_combos(None)
             self._refresh_led_catalog_status(None)
+            self._refresh_led_driver_status()
         else:
             self._block_info.setText(f"Active block: {block.display_label}\n{block.block_path}")
             self._status("Ready.")
             self._refresh_dlc_combos(block)
             self._refresh_led_catalog_status(block)
+            self._refresh_led_driver_status()
         super().set_block(block)
 
     def status_signature(self, block: BlockHandle) -> list[Path]:
@@ -620,11 +639,202 @@ class SyncTab(BaseTab):
         self._status(ok_msg)
 
     def _run_prepare_data(self) -> None:
+        from eye_tracking_system_tools.preprocessing.arena_video_io import (
+            ArenaVideosNeedConversion,
+        )
+
         def _do():
             b = self._require_blocksync()
             b.handle_eye_videos()
-            b.handle_arena_files()
+            try:
+                b.handle_arena_files(convert_non_mp4=False)
+            except ArenaVideosNeedConversion as need:
+                names = "\n".join(f"  • {p.name}" for p in need.convertible[:12])
+                more = (
+                    ""
+                    if len(need.convertible) <= 12
+                    else f"\n  … and {len(need.convertible) - 12} more"
+                )
+                reply = QtWidgets.QMessageBox.question(
+                    self,
+                    "Convert arena videos?",
+                    f"No .mp4 arena videos were found in:\n{need.arena_path}\n\n"
+                    f"Convertible file(s):\n{names}{more}\n\n"
+                    "Convert to .mp4 with ffmpeg now? (original files are kept)\n\n"
+                    "Watch the terminal for conversion progress.",
+                    QtWidgets.QMessageBox.StandardButton.Yes
+                    | QtWidgets.QMessageBox.StandardButton.No,
+                )
+                if reply != QtWidgets.QMessageBox.StandardButton.Yes:
+                    raise RuntimeError(
+                        "Prepare cancelled: arena .mp4 videos are required. "
+                        "Use “Convert arena videos to .mp4…” or convert manually."
+                    ) from need
+                self._status(
+                    "Converting arena videos with ffmpeg… (progress in the terminal)"
+                )
+                QtWidgets.QApplication.processEvents()
+                b.handle_arena_files(convert_non_mp4=True)
+
         self._run_guarded(_do, "Prepared eye/arena video metadata.")
+
+    def _run_convert_arena_videos(self) -> None:
+        from eye_tracking_system_tools.preprocessing.arena_video_io import (
+            list_convertible_arena_videos,
+            resolve_arena_path,
+        )
+
+        def _do():
+            b = self._require_blocksync()
+            arena_path = resolve_arena_path(b.block_path)
+            convertible = list_convertible_arena_videos(arena_path)
+            if not convertible:
+                # Still refresh lists — maybe mp4 already present
+                b.handle_arena_files(convert_non_mp4=False)
+                return
+            names = ", ".join(p.name for p in convertible[:8])
+            reply = QtWidgets.QMessageBox.question(
+                self,
+                "Convert arena videos?",
+                f"Convert {len(convertible)} file(s) under\n{arena_path}\n\n"
+                f"({names}{'…' if len(convertible) > 8 else ''})\n\n"
+                "to .mp4 with ffmpeg? Originals are kept.\n\n"
+                "Watch the terminal for conversion progress.",
+                QtWidgets.QMessageBox.StandardButton.Yes
+                | QtWidgets.QMessageBox.StandardButton.No,
+            )
+            if reply != QtWidgets.QMessageBox.StandardButton.Yes:
+                raise RuntimeError("Arena conversion cancelled.")
+            self._status(
+                "Converting arena videos with ffmpeg… (progress in the terminal)"
+            )
+            QtWidgets.QApplication.processEvents()
+            b.handle_arena_files(convert_non_mp4=True)
+
+        self._run_guarded(_do, "Converted arena videos and refreshed metadata.")
+
+    def _refresh_led_driver_status(self) -> None:
+        if not hasattr(self, "_led_status"):
+            return
+        if self._block is None:
+            self._led_status.setText("LED_driver: (no block)")
+            self._led_status.setStyleSheet("")
+            return
+        try:
+            b = self._session.get(self._block)
+        except Exception:
+            self._led_status.setText("LED_driver: unknown")
+            self._led_status.setStyleSheet("")
+            return
+
+        oe_dirname = getattr(b, "oe_dirname", None)
+        sidecar = load_ttl_sidecar(b.block_path, oe_dirname)
+        replacement = load_led_manual_replacement(b.block_path, oe_dirname)
+        if led_driver_is_ready(b):
+            if replacement is not None and (
+                sidecar is None or sidecar.get("led_driver_missing", False)
+            ):
+                self._led_status.setText("LED_driver: synthetic replacement applied")
+                self._led_status.setStyleSheet("color: #1a7f37;")
+            else:
+                self._led_status.setText("LED_driver: OK (mapped from OE)")
+                self._led_status.setStyleSheet("color: #1a7f37;")
+            return
+
+        if sidecar is not None and sidecar.get("led_driver_missing", False):
+            if replacement is not None:
+                self._led_status.setText(
+                    "LED_driver: MISSING — replacement sidecar saved but not applied to oe_events "
+                    "(re-open Manual LED or re-parse OE)."
+                )
+            else:
+                self._led_status.setText(
+                    "LED_driver: MISSING — use Manual LED blink replacement before leaving Setup + Prepare."
+                )
+            self._led_status.setStyleSheet("color: #a04000; font-weight: bold;")
+            return
+
+        if getattr(b, "oe_events", None) is None:
+            self._led_status.setText("LED_driver: unknown (Parse OE events first)")
+            self._led_status.setStyleSheet("")
+            return
+
+        self._led_status.setText(
+            "LED_driver: MISSING from oe_events — map it in Manual TTL or use Manual LED blink replacement."
+        )
+        self._led_status.setStyleSheet("color: #a04000; font-weight: bold;")
+
+    def _on_sync_step_changed(self, row: int) -> None:
+        if row > 0 and not self._ensure_led_ready_to_leave_prepare():
+            self._steps.blockSignals(True)
+            self._steps.setCurrentRow(0)
+            self._steps.blockSignals(False)
+            self._stack.setCurrentIndex(0)
+            return
+        self._stack.setCurrentIndex(row)
+
+    def _ensure_led_ready_to_leave_prepare(self) -> bool:
+        """Return True if LED_driver is ready; otherwise warn and optionally open the LED dialog."""
+        try:
+            b = self._require_blocksync()
+        except Exception as e:
+            QtWidgets.QMessageBox.warning(self, "Setup + Prepare", str(e))
+            return False
+
+        # Apply saved synthetic LED if present but not yet in memory
+        try_apply_saved_led_replacement(b)
+        if led_driver_is_ready(b):
+            self._refresh_led_driver_status()
+            return True
+
+        reply = QtWidgets.QMessageBox.warning(
+            self,
+            "LED_driver required",
+            "This block has no LED_driver signal in oe_events.\n\n"
+            "Map a real LED_driver line in Manual TTL mapping, or use "
+            "Manual LED blink replacement to synthesize the missing channel.\n\n"
+            "Open the Manual LED blink replacement dialog now?",
+            QtWidgets.QMessageBox.StandardButton.Yes
+            | QtWidgets.QMessageBox.StandardButton.No,
+        )
+        if reply == QtWidgets.QMessageBox.StandardButton.Yes:
+            if self._open_manual_led_dialog(b):
+                self._refresh_led_driver_status()
+                return led_driver_is_ready(b)
+        self._refresh_led_driver_status()
+        return False
+
+    def _open_manual_led_dialog(self, blocksync: BlockSync) -> bool:
+        try:
+            dlg = ManualLedDialog(blocksync, parent=self)
+        except Exception as e:
+            QtWidgets.QMessageBox.warning(self, "Manual LED blink replacement", str(e))
+            return False
+        if dlg.exec() != QtWidgets.QDialog.DialogCode.Accepted:
+            return False
+        return led_driver_is_ready(blocksync)
+
+    def _run_manual_led_replacement(self) -> None:
+        try:
+            b = self._require_blocksync()
+            if not self._open_manual_led_dialog(b):
+                self._status("Manual LED blink replacement cancelled.")
+                self._refresh_led_driver_status()
+                return
+            self._sanitize_blocksync_artifacts(b)
+            self._refresh_led_driver_status()
+            self._status("Applied manual LED blink replacement.")
+        except Exception as e:
+            self._status(f"Error: {e}")
+            QtWidgets.QMessageBox.warning(self, "Manual LED blink replacement", str(e))
+
+    def _after_parse_oe(self, blocksync: BlockSync) -> None:
+        """Re-apply synthetic LED sidecar when LED was marked missing / absent after parse."""
+        sidecar = load_ttl_sidecar(blocksync.block_path, blocksync.oe_dirname)
+        missing_flag = bool(sidecar and sidecar.get("led_driver_missing", False))
+        if missing_flag or not oe_events_have_led_driver(getattr(blocksync, "oe_events", None)):
+            try_apply_saved_led_replacement(blocksync)
+        self._refresh_led_driver_status()
 
     def _run_parse_oe(self) -> None:
         def _do():
@@ -653,6 +863,7 @@ class SyncTab(BaseTab):
                         raise auto_err
                     if not self._open_manual_ttl_dialog(b, overwrite=True):
                         raise RuntimeError("Manual TTL mapping cancelled.")
+            self._after_parse_oe(b)
             self._sanitize_blocksync_artifacts(b)
             self._session.remember_channeldict(effective_channeldict(b))
 
@@ -696,6 +907,7 @@ class SyncTab(BaseTab):
             arena_window,
             overwrite=overwrite,
         )
+        self._after_parse_oe(blocksync)
         self._session.remember_channeldict(effective_channeldict(blocksync))
         return True
 
@@ -705,6 +917,7 @@ class SyncTab(BaseTab):
             if not self._open_manual_ttl_dialog(b, overwrite=True):
                 raise RuntimeError("Manual TTL mapping cancelled.")
             self._sanitize_blocksync_artifacts(b)
+            self._refresh_led_driver_status()
 
         self._run_guarded(_do, "Applied manual TTL mapping and re-parsed events.")
 

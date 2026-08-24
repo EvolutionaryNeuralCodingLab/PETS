@@ -49,6 +49,7 @@ _ANGLE_ALIASES = {
 
 # Untagged base files use this sentinel tag.
 EYE_VERSION_BASE = ""
+RAW_VERIFIED_TAG = "raw_verified"
 
 # Default-on when available.
 DEFAULT_EYE_ENABLED = {EYE_PUPIL_SIZE, EYE_K_PHI, EYE_K_THETA}
@@ -230,6 +231,38 @@ def load_eye_data_version(
     le_df = load_eye_dataframe(version.left_path) if version.left_path else None
     re_df = load_eye_dataframe(version.right_path) if version.right_path else None
     return le_df, re_df, version.left_path, version.right_path
+
+
+def export_eye_data_tag(
+    analysis_path: Path,
+    tag: str,
+    le_df: pd.DataFrame | None,
+    re_df: pd.DataFrame | None,
+) -> list[Path]:
+    """
+    Write left/right eye dataframes as ``*_eye_data_{tag}.csv`` (overwrites).
+
+    Returns the list of paths written. Raises ``ValueError`` if both frames are
+    missing or ``tag`` is empty (base files are not written by this helper).
+    """
+    tag_s = str(tag).strip()
+    if not tag_s:
+        raise ValueError("tag must be a non-empty name_tag (not the base CSVs).")
+    if le_df is None and re_df is None:
+        raise ValueError("No eye dataframes to export.")
+
+    analysis = Path(analysis_path)
+    analysis.mkdir(parents=True, exist_ok=True)
+    written: list[Path] = []
+    if le_df is not None:
+        path = analysis / f"left_eye_data_{tag_s}.csv"
+        le_df.to_csv(path, index=False)
+        written.append(path)
+    if re_df is not None:
+        path = analysis / f"right_eye_data_{tag_s}.csv"
+        re_df.to_csv(path, index=False)
+        written.append(path)
+    return written
 
 
 def load_eye_dataframes(

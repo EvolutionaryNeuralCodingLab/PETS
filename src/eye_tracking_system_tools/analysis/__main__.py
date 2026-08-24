@@ -73,8 +73,8 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"params:   {args.params}")
     print(f"out:      {out_dir}")
-    print(f"  figures:  {out_dir / 'figures'}")
-    print(f"  metadata: {out_dir / 'metadata'}")
+    print(f"  plots:    {out_dir}/<plot_id>/plots/")
+    print(f"  metadata: {out_dir}/<plot_id>/metadata/  (event cache: {out_dir / 'metadata'})")
     if args.event_pickle is not None:
         print(f"event_pickle: {args.event_pickle}")
         written = run_from_event_pickle(

@@ -3,7 +3,7 @@
 Phase 0 ships:
 
 * MainWindow with a tabbed dashboard
-  (Sync / Verify / Kerr / Calibration / Saccades / Behavior / Sync-free / Data Exploration).
+  (Sync / Verify / Kerr / Calibration / Data Exploration / Saccades / Behavior / Sync-free).
 * StartupDialog asking for experiment path, animal, block(s), output folder.
 * argparse + env-var support so the dialog can be skipped.
 * Per-tab status-icon plumbing via :class:`StatusBus`.
@@ -57,10 +57,10 @@ _TAB_CLASSES = (
     VerifyTab,
     KerrTab,
     CalibrationTab,
+    ExploreTab,
     SaccadesTab,
     BehaviorTab,
     SyncFreeTab,
-    ExploreTab,
 )
 
 
@@ -494,7 +494,8 @@ class PreprocessingGuiWindow(QtWidgets.QMainWindow):
             "<ul>"
             "<li><b>Verify</b>: ellipse review, Kerr reference picking, pupil perimeter "
             "(Commit bad datapoints → <code>pupil_perimeter</code> noise epochs; zoom + "
-            "contrast/saturation/gamma filters), Sync DLC re-fit masks DLC keypoints.</li>"
+            "contrast/saturation/gamma filters; Measure ROI for pixel width/height), "
+            "Sync DLC re-fit masks DLC keypoints.</li>"
             "<li><b>Kerr</b>: calculates and exports Kerr angle CSV outputs; optional "
             "Exclude noise epochs checkbox masks selected categories in memory only.</li>"
             "<li><b>Calibration</b>: landmark ROI / manual pixel-size → LR_pix_size.csv.</li>"

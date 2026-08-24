@@ -42,6 +42,7 @@ MONOCULAR_CSV = "saccade_monocular.csv"
 EVENTS_PKL = "saccade_events.pkl"
 PARAMS_YAML = "detection_params.yaml"
 SUMMARY_YAML = "detection_summary.yaml"
+BAD_DETECTIONS_COL = "bad_detections"
 
 # Array-valued detector columns — kept in the pickle, dropped from CSV.
 _PROFILE_COLS = (
@@ -110,6 +111,169 @@ def finalized_paths(block_path: Path | str) -> dict[str, Path]:
         "params": d / PARAMS_YAML,
         "summary": d / SUMMARY_YAML,
     }
+
+
+# ---------------------------------------------------------------------------
+# Manual bad-detection tags (time-section filtering)
+# ---------------------------------------------------------------------------
+
+
+def _coerce_bool_series(values: pd.Series) -> pd.Series:
+    if values.dtype == bool:
+        return values.fillna(False)
+    if pd.api.types.is_numeric_dtype(values):
+        return values.fillna(0).astype(bool)
+    mapped = values.map(
+        lambda v: str(v).strip().lower() in {"true", "1", "yes", "y"}
+        if pd.notna(v)
+        else False
+    )
+    return mapped.astype(bool)
+
+
+def ensure_bad_detections_column(df: pd.DataFrame | None) -> pd.DataFrame:
+    """Guarantee a boolean ``bad_detections`` column (default False)."""
+    if df is None:
+        return pd.DataFrame(columns=[BAD_DETECTIONS_COL])
+    out = df.copy()
+    if BAD_DETECTIONS_COL not in out.columns:
+        out[BAD_DETECTIONS_COL] = False
+    else:
+        out[BAD_DETECTIONS_COL] = _coerce_bool_series(out[BAD_DETECTIONS_COL])
+    return out
+
+
+def tag_bad_detections_span(
+    df: pd.DataFrame | None,
+    t0_ms: float,
+    t1_ms: float,
+    *,
+    value: bool = True,
+    on_col: str = "saccade_on_ms",
+    off_col: str = "saccade_off_ms",
+) -> pd.DataFrame:
+    """Set ``bad_detections`` for events whose interval overlaps ``[t0, t1]`` ms."""
+    out = ensure_bad_detections_column(df)
+    if out.empty or on_col not in out.columns:
+        return out
+    t0, t1 = (float(min(t0_ms, t1_ms)), float(max(t0_ms, t1_ms)))
+    on = out[on_col].to_numpy(dtype=float)
+    if off_col in out.columns:
+        off = out[off_col].to_numpy(dtype=float)
+    else:
+        off = on
+    ok = np.isfinite(on) & np.isfinite(off)
+    mask = ok & (on <= t1) & (off >= t0)
+    out.loc[mask, BAD_DETECTIONS_COL] = bool(value)
+    return out
+
+
+def apply_bad_detection_spans(
+    df: pd.DataFrame | None,
+    spans: list[tuple[float, float]] | None,
+    *,
+    reset: bool = True,
+) -> pd.DataFrame:
+    """Apply one or more bad time spans. ``reset`` clears prior flags first."""
+    out = ensure_bad_detections_column(df)
+    if reset and not out.empty:
+        out[BAD_DETECTIONS_COL] = False
+    for span in spans or []:
+        if span is None or len(span) < 2:
+            continue
+        out = tag_bad_detections_span(out, float(span[0]), float(span[1]), value=True)
+    return out
+
+
+def parse_bad_detection_spans(params: dict[str, Any] | None) -> list[tuple[float, float]]:
+    raw = (params or {}).get("bad_detection_spans_ms") or []
+    spans: list[tuple[float, float]] = []
+    for item in raw:
+        try:
+            t0, t1 = float(item[0]), float(item[1])
+        except (TypeError, ValueError, IndexError, KeyError):
+            continue
+        if not (np.isfinite(t0) and np.isfinite(t1)):
+            continue
+        if t1 < t0:
+            t0, t1 = t1, t0
+        spans.append((t0, t1))
+    return spans
+
+
+def merge_time_spans(
+    spans: list[tuple[float, float]],
+    *,
+    new_span: tuple[float, float] | None = None,
+) -> list[tuple[float, float]]:
+    """Union-merge overlapping/adjacent spans (ms)."""
+    items = list(spans)
+    if new_span is not None:
+        items.append(new_span)
+    cleaned: list[tuple[float, float]] = []
+    for t0, t1 in items:
+        a, b = (float(min(t0, t1)), float(max(t0, t1)))
+        if np.isfinite(a) and np.isfinite(b) and b > a:
+            cleaned.append((a, b))
+    if not cleaned:
+        return []
+    cleaned.sort()
+    merged = [cleaned[0]]
+    for a, b in cleaned[1:]:
+        pa, pb = merged[-1]
+        if a <= pb:
+            merged[-1] = (pa, max(pb, b))
+        else:
+            merged.append((a, b))
+    return merged
+
+
+def propagate_bad_detections(
+    source: pd.DataFrame | None,
+    target: pd.DataFrame | None,
+    *,
+    eye_col: str = "eye",
+    on_col: str = "saccade_on_ms",
+) -> pd.DataFrame:
+    """Copy ``bad_detections`` from ``source`` onto matching rows of ``target``."""
+    target = ensure_bad_detections_column(target)
+    source = ensure_bad_detections_column(source)
+    if target.empty or source.empty:
+        return target
+    if eye_col not in source.columns or eye_col not in target.columns:
+        return target
+    if on_col not in source.columns or on_col not in target.columns:
+        return target
+    target[BAD_DETECTIONS_COL] = False
+    bad = source.loc[source[BAD_DETECTIONS_COL]]
+    if bad.empty:
+        return target
+    tgt_eye = target[eye_col].to_numpy()
+    tgt_on = target[on_col].to_numpy(dtype=float)
+    for _, row in bad.iterrows():
+        mask = (tgt_eye == row[eye_col]) & np.isclose(
+            tgt_on, float(row[on_col]), rtol=0.0, atol=1e-3
+        )
+        if np.any(mask):
+            target.loc[mask, BAD_DETECTIONS_COL] = True
+    return target
+
+
+def subtract_time_span(
+    spans: list[tuple[float, float]], t0_ms: float, t1_ms: float
+) -> list[tuple[float, float]]:
+    """Remove ``[t0, t1]`` from existing spans."""
+    cut0, cut1 = (float(min(t0_ms, t1_ms)), float(max(t0_ms, t1_ms)))
+    out: list[tuple[float, float]] = []
+    for a, b in spans:
+        if b <= cut0 or a >= cut1:
+            out.append((a, b))
+            continue
+        if a < cut0:
+            out.append((a, cut0))
+        if b > cut1:
+            out.append((cut1, b))
+    return [(a, b) for a, b in out if b > a]
 
 
 # ---------------------------------------------------------------------------
@@ -207,6 +371,11 @@ def detect_block_saccades(
     sync_diff_ms = float(params.get("binocular", {}).get("sync_diff_ms", 34.0))
     synced, non_synced = find_synced_saccades_ms(all_ev, sync_diff_ms=sync_diff_ms)
     all_ev = annotate_concurrency(all_ev, synced, non_synced)
+    all_ev = ensure_bad_detections_column(all_ev)
+    synced = ensure_bad_detections_column(synced)
+    non_synced = ensure_bad_detections_column(non_synced)
+    l_ev = ensure_bad_detections_column(l_ev)
+    r_ev = ensure_bad_detections_column(r_ev)
 
     empty = pd.DataFrame()
     result = DetectResult(
@@ -411,11 +580,13 @@ def write_finalized_saccades(
         raise FileExistsError(f"Finalized saccades already exist: {out_dir}")
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    all_ev = annotate_concurrency(
-        result.all_saccades, result.synced, result.non_synced
+    all_ev = ensure_bad_detections_column(
+        annotate_concurrency(result.all_saccades, result.synced, result.non_synced)
     )
-    synced = result.synced.copy() if result.synced is not None else pd.DataFrame()
-    non_synced = (
+    synced = ensure_bad_detections_column(
+        result.synced.copy() if result.synced is not None else pd.DataFrame()
+    )
+    non_synced = ensure_bad_detections_column(
         result.non_synced.copy() if result.non_synced is not None else pd.DataFrame()
     )
 
@@ -458,6 +629,10 @@ def write_finalized_saccades(
         "animal": result.spec.animal,
         "block_num": result.spec.block_num,
         "csv_meta": result.csv_meta,
+        "bad_detection_spans_ms": [
+            [float(a), float(b)]
+            for a, b in parse_bad_detection_spans(result.params)
+        ],
     }
     # Ensure detector keys are present even if caller passed a partial params dict.
     sp = saccade_params_from_dict(result.params)
@@ -517,9 +692,13 @@ def read_finalized_saccades(block_path: Path | str) -> FinalizedSaccades:
             payload = pickle.load(f)
         return FinalizedSaccades(
             block_path=block_path,
-            all_saccades=payload.get("all_saccades", pd.DataFrame()),
-            synced=payload.get("synced", pd.DataFrame()),
-            non_synced=payload.get("non_synced", pd.DataFrame()),
+            all_saccades=ensure_bad_detections_column(
+                payload.get("all_saccades", pd.DataFrame())
+            ),
+            synced=ensure_bad_detections_column(payload.get("synced", pd.DataFrame())),
+            non_synced=ensure_bad_detections_column(
+                payload.get("non_synced", pd.DataFrame())
+            ),
             params=params,
             summary=summary,
             source="pickle",
@@ -541,9 +720,9 @@ def read_finalized_saccades(block_path: Path | str) -> FinalizedSaccades:
         non_synced = all_ev[all_ev["concurrency"] != "concurrent"].copy()
     return FinalizedSaccades(
         block_path=block_path,
-        all_saccades=all_ev,
-        synced=synced,
-        non_synced=non_synced,
+        all_saccades=ensure_bad_detections_column(all_ev),
+        synced=ensure_bad_detections_column(synced),
+        non_synced=ensure_bad_detections_column(non_synced),
         params=params,
         summary=summary,
         source="csv",

@@ -198,12 +198,16 @@ class SaccadeFilter:
         Optional pandas ``DataFrame.query`` expression (after presets / equals).
     column_equals
         Column → required value (``True`` / ``False`` / scalar / ``None`` for NA).
+    exclude_bad
+        When True, drop events tagged ``verification_status=bad`` in per-block
+        ``analysis/saccade_verification/tags.csv`` (keeps ``good`` and ``unset``).
     """
 
     event_kind: str = "all"
     head_movement: bool | str | None = None
     query: str | None = None
     column_equals: dict[str, Any] | None = None
+    exclude_bad: bool = False
 
     def normalized_kind(self) -> str:
         kind = str(self.event_kind or "all").strip().lower()
@@ -246,6 +250,8 @@ class SaccadeFilter:
             return True
         if self.column_equals:
             return True
+        if bool(self.exclude_bad):
+            return True
         return False
 
     def to_dict(self) -> dict[str, Any]:
@@ -254,6 +260,7 @@ class SaccadeFilter:
             "head_movement": self.normalized_head(),
             "query": (str(self.query).strip() or None) if self.query else None,
             "column_equals": dict(self.column_equals) if self.column_equals else None,
+            "exclude_bad": bool(self.exclude_bad) or None,
         }
         return {k: v for k, v in out.items() if v is not None and v != {} and v != "all"}
 
@@ -272,6 +279,7 @@ class SaccadeFilter:
             head_movement=data.get("head_movement"),
             query=data.get("query"),
             column_equals=data.get("column_equals") or data.get("columns"),
+            exclude_bad=bool(data.get("exclude_bad", False)),
         )
 
     def describe(self) -> str:
@@ -286,6 +294,8 @@ class SaccadeFilter:
             parts.append("without head")
         elif hm == "labeled":
             parts.append("head labeled")
+        if self.exclude_bad:
+            parts.append("exclude verification-bad")
         for col, val in (self.column_equals or {}).items():
             parts.append(f"{col}={val!r}")
         q = str(self.query).strip() if self.query else ""
@@ -374,13 +384,45 @@ def _reslice_block_events(
     return out
 
 
+def _block_paths_map(tables: EventTables) -> dict[str, Path]:
+    return {b.spec.block_key: Path(b.spec.block_path) for b in tables.blocks}
+
+
+def _drop_incomplete_synced_pairs(synced: pd.DataFrame) -> pd.DataFrame:
+    """After dropping one eye of a pair, remove orphaned Main groups."""
+    if synced is None or synced.empty or "Main" not in synced.columns:
+        return synced if synced is not None else pd.DataFrame()
+    counts = synced.groupby("Main", sort=False).size()
+    keep = counts[counts >= 2].index
+    return synced.loc[synced["Main"].isin(keep)].reset_index(drop=True)
+
+
+def _apply_exclude_verification_bad(
+    df: pd.DataFrame,
+    block_paths: dict[str, Path],
+) -> pd.DataFrame:
+    """Drop rows tagged bad in per-block verification CSVs; keep good + unset."""
+    if df is None or df.empty:
+        return _empty_like(df)
+    from eye_tracking_system_tools.analysis.saccade_viewer.artifacts import (
+        merge_verification_tags,
+        verification_filter_good_only,
+    )
+
+    merged = merge_verification_tags(df, block_paths)
+    kept = verification_filter_good_only(merged)
+    if "Main" in kept.columns:
+        kept = _drop_incomplete_synced_pairs(kept)
+    return kept.reset_index(drop=True)
+
+
 def apply_saccade_filter(
     tables: EventTables,
     filt: SaccadeFilter | dict[str, Any] | None,
 ) -> EventTables:
     """
     Filter saccade rows by kind (concurrent / monocular), head-movement flag,
-    column equality, and/or a pandas query.
+    column equality, verification-bad exclusion, and/or a pandas query.
 
     Block list / traces / ``params`` are preserved; per-block event frames are
     re-sliced from the filtered ``all_saccades`` pool.
@@ -389,10 +431,19 @@ def apply_saccade_filter(
     if parsed is None or not parsed.is_active():
         return tables
 
+    synced = tables.synced
+    non_synced = tables.non_synced
+    all_saccades = tables.all_saccades
+    if parsed.exclude_bad:
+        paths = _block_paths_map(tables)
+        synced = _apply_exclude_verification_bad(synced, paths)
+        non_synced = _apply_exclude_verification_bad(non_synced, paths)
+        all_saccades = _apply_exclude_verification_bad(all_saccades, paths)
+
     kind = parsed.normalized_kind()
-    synced = _apply_row_predicates(tables.synced, parsed)
-    non_synced = _apply_row_predicates(tables.non_synced, parsed)
-    all_saccades = _apply_row_predicates(tables.all_saccades, parsed)
+    synced = _apply_row_predicates(synced, parsed)
+    non_synced = _apply_row_predicates(non_synced, parsed)
+    all_saccades = _apply_row_predicates(all_saccades, parsed)
 
     if kind == "concurrent":
         synced = synced.reset_index(drop=True)
@@ -650,20 +701,15 @@ def run_figure_exports(
     figures: list[str] | None = None,
     include_archived_2f: bool = False,
 ) -> dict[str, Path]:
-    """Export requested figure pickles/PDFs under ``out_dir/{figures,metadata}/``."""
-    from eye_tracking_system_tools.analysis import (
-        figures_2c_2e,
-        figures_2f_2h_2i,
-        figures_2g_2j,
-    )
-    from eye_tracking_system_tools.analysis.run_layout import resolve_figure_dirs
+    """Export requested figures as self-contained plot bundles under ``out_dir``."""
+    from eye_tracking_system_tools.analysis.figure_catalog import run_figure
 
     out_dir = Path(out_dir)
-    figures_dir, metadata_dir = resolve_figure_dirs(out_dir)
+    metadata_dir = out_dir / "metadata"
+    metadata_dir.mkdir(parents=True, exist_ok=True)
     wanted = set(figures or ["2c", "2d", "2e", "2f", "2g", "2h", "2i", "2j"])
     written: dict[str, Path] = {}
 
-    # Persist event tables once for reuse / inspection.
     events_pkl = metadata_dir / "event_tables.pkl"
     write_pickle_with_meta(
         {
@@ -683,28 +729,28 @@ def run_figure_exports(
     )
     written["event_tables"] = events_pkl
 
-    if wanted & {"2c", "2d"}:
-        p = figures_2c_2e.export_pos_vel_bundle(tables, out_dir)
-        written["2c_2d"] = p
-    if "2e" in wanted:
-        written["2e"] = figures_2c_2e.export_amplitude_velocity_fit(tables, out_dir)
-    if "2f" in wanted:
-        if include_archived_2f or not tables.blocks:
-            written["2f"] = figures_2f_2h_2i.export_archived_figure_2f(out_dir)
-        else:
-            written["2f"] = figures_2f_2h_2i.export_figure_2f(tables, out_dir)
-    if "2h" in wanted:
-        written["2h"] = figures_2f_2h_2i.export_figure_2h(tables, out_dir)
-    if "2i" in wanted:
-        written["2i"] = figures_2f_2h_2i.export_figure_2i(tables, out_dir)
-    if "2g" in wanted:
-        top, bot = figures_2g_2j.export_figure_2g(tables, out_dir)
-        written["2g_top"] = top
-        written["2g_bot"] = bot
-    if "2j" in wanted:
-        written["2j"] = figures_2g_2j.export_figure_2j(tables, out_dir)
+    id_map = {
+        "2c": "2c_2d",
+        "2d": "2c_2d",
+        "2c_2d": "2c_2d",
+        "s3": "s3",
+    }
+    fig_ids: list[str] = []
+    for token in sorted(wanted):
+        mapped = id_map.get(token, token)
+        if mapped not in fig_ids:
+            fig_ids.append(mapped)
 
-    written["_figures_dir"] = figures_dir
+    for fig_id in fig_ids:
+        kwargs: dict[str, Any] = {}
+        if fig_id == "2f" and include_archived_2f:
+            # Runner falls back when traces are missing; drop traces to force archive.
+            pass
+        try:
+            written[fig_id] = run_figure(fig_id, tables, out_dir, show=False, **kwargs)
+        except KeyError:
+            print(f"[run_figure_exports] skip unknown figure {fig_id!r}")
+    written["_run_dir"] = out_dir
     written["_metadata_dir"] = metadata_dir
     return written
 

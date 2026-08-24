@@ -22,6 +22,7 @@ def find_synced_saccades_ms(
         return empty, empty
 
     work = df.dropna(subset=[on_col, "eye"]).copy()
+    work = work.drop(columns=[c for c in ("Main", "Sub") if c in work.columns])
     l_df = work.query('eye == "L"')
     r_df = work.query('eye == "R"')
     if l_df.empty or r_df.empty:

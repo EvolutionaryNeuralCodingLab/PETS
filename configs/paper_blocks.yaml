@@ -11,30 +11,30 @@
 # Eye CSVs: prefer *degrees_raw_verified* (present on all 23 blocks).
 animals:
   PV_106:
-    - /Volumes/Data-2/Nimrod/experiments/PV_106/2025_08_06/block_008
-    - /Volumes/Data-2/Nimrod/experiments/PV_106/2025_08_06/block_009
-    - /Volumes/Data-2/Nimrod/experiments/PV_106/2025_08_06/block_010
-    - /Volumes/Data-2/Nimrod/experiments/PV_106/2025_08_06/block_011
-    - /Volumes/Data-2/Nimrod/experiments/PV_106/2025_08_06/block_012
+    - /Volumes/Data-1/Nimrod/experiments/PV_106/2025_08_06/block_008
+    - /Volumes/Data-1/Nimrod/experiments/PV_106/2025_08_06/block_009
+    - /Volumes/Data-1/Nimrod/experiments/PV_106/2025_08_06/block_010
+    - /Volumes/Data-1/Nimrod/experiments/PV_106/2025_08_06/block_011
+    - /Volumes/Data-1/Nimrod/experiments/PV_106/2025_08_06/block_012
   PV_143:
-    - /Volumes/Data-2/Nimrod/experiments/PV_143/2025_08_25/block_001
-    - /Volumes/Data-2/Nimrod/experiments/PV_143/2025_08_25/block_002
-    - /Volumes/Data-2/Nimrod/experiments/PV_143/2025_08_25/block_003
-    - /Volumes/Data-2/Nimrod/experiments/PV_143/2025_08_25/block_004
+    - /Volumes/Data-1/Nimrod/experiments/PV_143/2025_08_25/block_001
+    - /Volumes/Data-1/Nimrod/experiments/PV_143/2025_08_25/block_002
+    - /Volumes/Data-1/Nimrod/experiments/PV_143/2025_08_25/block_003
+    - /Volumes/Data-1/Nimrod/experiments/PV_143/2025_08_25/block_004
   PV_62:
-    - /Volumes/Data-2/Nimrod/experiments/PV_62/2023_04_27/block_024
-    - /Volumes/Data-2/Nimrod/experiments/PV_62/2023_04_27/block_026
-    - /Volumes/Data-2/Nimrod/experiments/PV_62/2023_05_01/block_038
+    - /Volumes/Data-1/Nimrod/experiments/PV_62/2023_04_27/block_024
+    - /Volumes/Data-1/Nimrod/experiments/PV_62/2023_04_27/block_026
+    - /Volumes/Data-1/Nimrod/experiments/PV_62/2023_05_01/block_038
   PV_126:
-    - /Volumes/Data-2/Nimrod/experiments/PV_126/2024_07_18/block_007
-    - /Volumes/Data-2/Nimrod/experiments/PV_126/2024_07_18/block_008
-    - /Volumes/Data-2/Nimrod/experiments/PV_126/2024_07_18/block_009
-    - /Volumes/Data-2/Nimrod/experiments/PV_126/2024_07_18/block_010
-    - /Volumes/Data-2/Nimrod/experiments/PV_126/2024_08_13/block_011
-    - /Volumes/Data-2/Nimrod/experiments/PV_126/2024_08_13/block_012
+    - /Volumes/Data-1/Nimrod/experiments/PV_126/2024_07_18/block_007
+    - /Volumes/Data-1/Nimrod/experiments/PV_126/2024_07_18/block_008
+    - /Volumes/Data-1/Nimrod/experiments/PV_126/2024_07_18/block_009
+    - /Volumes/Data-1/Nimrod/experiments/PV_126/2024_07_18/block_010
+    - /Volumes/Data-1/Nimrod/experiments/PV_126/2024_08_13/block_011
+    - /Volumes/Data-1/Nimrod/experiments/PV_126/2024_08_13/block_012
   PV_57:
-    - /Volumes/Data-2/Nimrod/experiments/PV_57/2024_11_25/block_007
-    - /Volumes/Data-2/Nimrod/experiments/PV_57/2024_11_25/block_008
-    - /Volumes/Data-2/Nimrod/experiments/PV_57/2024_11_25/block_009
-    - /Volumes/Data-2/Nimrod/experiments/PV_57/2024_12_01/block_012
-    - /Volumes/Data-2/Nimrod/experiments/PV_57/2024_12_01/block_013
+    - /Volumes/Data-1/Nimrod/experiments/PV_57/2024_11_25/block_007
+    - /Volumes/Data-1/Nimrod/experiments/PV_57/2024_11_25/block_008
+    - /Volumes/Data-1/Nimrod/experiments/PV_57/2024_11_25/block_009
+    - /Volumes/Data-1/Nimrod/experiments/PV_57/2024_12_01/block_012
+    - /Volumes/Data-1/Nimrod/experiments/PV_57/2024_12_01/block_013

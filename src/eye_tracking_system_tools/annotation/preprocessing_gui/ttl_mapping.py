@@ -60,9 +60,90 @@ def load_ttl_sidecar(block_path: Path, oe_dirname: str | None) -> dict[str, Any]
         return {
             "manual_line_map": {str(k): int(v) for k, v in manual_line_map.items()},
             "arena_window": {str(k): int(v) for k, v in arena_window.items()},
+            "led_driver_missing": bool(payload.get("led_driver_missing", False)),
         }
     except (OSError, json.JSONDecodeError, TypeError, ValueError):
         return None
+
+
+def led_manual_replacement_path(block_path: Path, oe_dirname: str | None) -> Path | None:
+    if not oe_dirname:
+        return None
+    return Path(block_path) / "oe_files" / oe_dirname / "led_manual_replacement.json"
+
+
+def load_led_manual_replacement(
+    block_path: Path, oe_dirname: str | None
+) -> dict[str, Any] | None:
+    """Load synthetic LED_driver replacement sidecar, if present."""
+    path = led_manual_replacement_path(block_path, oe_dirname)
+    if path is None or not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        on_samples = payload.get("on_samples")
+        fall_samples = payload.get("fall_samples")
+        if not isinstance(on_samples, list) or not isinstance(fall_samples, list):
+            return None
+        if len(on_samples) == 0:
+            return None
+        return {
+            "first_frame": int(payload.get("first_frame", 0)),
+            "interval_s": float(payload.get("interval_s", 60.0)),
+            "fps": float(payload.get("fps", 60.0)),
+            "on_samples": [int(x) for x in on_samples],
+            "fall_samples": [int(x) for x in fall_samples],
+            "source": str(payload.get("source", "manual_brightness")),
+        }
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return None
+
+
+def save_led_manual_replacement(
+    block_path: Path,
+    oe_dirname: str,
+    *,
+    first_frame: int,
+    interval_s: float,
+    fps: float,
+    on_samples: list[int],
+    fall_samples: list[int],
+    source: str = "manual_brightness",
+) -> Path:
+    path = led_manual_replacement_path(block_path, oe_dirname)
+    if path is None:
+        raise ValueError("oe_dirname is required to save LED manual replacement.")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "first_frame": int(first_frame),
+        "interval_s": float(interval_s),
+        "fps": float(fps),
+        "on_samples": [int(x) for x in on_samples],
+        "fall_samples": [int(x) for x in fall_samples],
+        "source": str(source),
+    }
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return path
+
+
+def oe_events_have_led_driver(oe_events: Any) -> bool:
+    """True when ``oe_events`` has usable LED_driver (+ fall) columns."""
+    if oe_events is None:
+        return False
+    try:
+        cols = oe_events.columns
+    except AttributeError:
+        return False
+    if "LED_driver" not in cols or "LED_driver_fall" not in cols:
+        return False
+    rise = oe_events["LED_driver"].dropna()
+    fall = oe_events["LED_driver_fall"].dropna()
+    return len(rise) > 0 and len(fall) > 0
+
+
+def led_driver_is_ready(blocksync: BlockSync) -> bool:
+    """True when ``blocksync.oe_events`` has usable LED_driver (+ fall) columns."""
+    return oe_events_have_led_driver(getattr(blocksync, "oe_events", None))
 
 
 def channeldict_from_line_map(manual_line_map: dict[str, int]) -> dict[int, str]:

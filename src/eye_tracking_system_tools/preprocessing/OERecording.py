@@ -976,7 +976,9 @@ class OERecording:
         for i in range(n_ch):  # iterate over channels
             data = np.zeros(p_rec_idx.shape, dtype=np.dtype('>i2'))  # Initialize the data array for a specific channel
             curr_rec = 0  # for this channel, initialize the record counter
-            c_file = self.oe_file_path / self.channel_files[channels[i] - 1]  # get path of current channel file
+            # Resolve by channel id via n2s (supports sparse/subset continuous files).
+            # n2s maps channel_number -> 1-based index into sorted channel_files.
+            c_file = self.oe_file_path / self.channel_files[self.n2s[channels[i]] - 1]
             with open(c_file, 'rb') as fid:  # open the file such that it will close when left alone
                 for j in range(n_windows):  # Iterate over sampling windows
                     # use seek to go to the appropriate position in the file
@@ -1128,7 +1130,8 @@ class OERecording:
         for i in range(n_ch):  # iterate over channels
             data = np.zeros(p_rec_idx.shape, dtype=np.dtype('>i2'))  # Initialize the data array for a specific channel
             curr_rec = 0  # for this channel, initialize the record counter
-            c_file = self.oe_file_path / self.analog_files[channels[i] - 1]  # get path of current channel file
+            # Resolve by channel id via n2sA (supports sparse/subset ADC continuous files).
+            c_file = self.oe_file_path / self.analog_files[self.n2sA[channels[i]] - 1]
             with open(c_file, 'rb') as fid:  # open the file such that it will close when left alone
                 for j in range(n_windows):  # Iterate over sampling windows
                     # use seek to go to the appropriate position in the file

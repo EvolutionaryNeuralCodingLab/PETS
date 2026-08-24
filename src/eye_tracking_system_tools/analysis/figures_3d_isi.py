@@ -42,6 +42,7 @@ from eye_tracking_system_tools.analysis.colors import build_color_map
 from eye_tracking_system_tools.analysis.export_meta import write_pickle_with_meta
 from eye_tracking_system_tools.analysis.figure_display import show_and_close
 from eye_tracking_system_tools.analysis.pipeline import EventTables
+from eye_tracking_system_tools.analysis.plot_bundle import begin_plot_bundle, finish_plot_bundle
 from eye_tracking_system_tools.analysis.run_layout import resolve_figure_dirs
 
 rcParams["pdf.fonttype"] = 42
@@ -623,3 +624,408 @@ def export_figure_3d(tables: EventTables, out_dir: Path, *, show: bool = False) 
     written["ISI_hist_linear_10_300ms_plotdata"] = lin_pickle
 
     return written
+
+
+def _epoch_index_for_times(state_df: pd.DataFrame, times_ms: np.ndarray) -> np.ndarray:
+    """Index of the behavior-state row containing each time, or -1 if none."""
+    out = np.full(times_ms.shape, -1, dtype=int)
+    if state_df is None or state_df.empty:
+        return out
+    starts = state_df["start_time"].to_numpy(dtype=float)
+    ends = state_df["end_time"].to_numpy(dtype=float)
+    for i, t in enumerate(times_ms):
+        if not np.isfinite(t):
+            continue
+        hit = np.where((starts <= t) & (t <= ends))[0]
+        if hit.size:
+            out[i] = int(hit[0])
+    return out
+
+
+def _compute_blockwise_isis_same_epoch(
+    dedup_df: pd.DataFrame,
+    tables: EventTables,
+    *,
+    min_isi_ms: float,
+    require_label: str | None,
+) -> dict[str, np.ndarray]:
+    """ISIs whose two bounding events fall in the same behavior-state epoch.
+
+    Cross-epoch intervals are dropped. ``require_label`` is ``'active'`` / ``'quiet'``
+    or None for all same-epoch ISIs.
+    """
+    from eye_tracking_system_tools.analysis.behavior_state import (
+        label_by_time,
+        normalize_label,
+        read_behavior_state,
+    )
+
+    isi_all: dict[str, list[np.ndarray]] = {}
+    block_map = tables.block_dict
+    for (animal, block), g in dedup_df.groupby(["animal", "block"], dropna=False):
+        t = np.sort(g["event_time_ms"].to_numpy(float))
+        if t.size < 2:
+            continue
+        key = f"{animal}_block_{''.join(c for c in str(block) if c.isdigit()).zfill(3)}"
+        bundle = block_map.get(key)
+        if bundle is None:
+            # tolerate unpadded block numbers
+            for cand, b in block_map.items():
+                if cand.startswith(f"{animal}_") and str(block) in cand:
+                    bundle = b
+                    break
+        if bundle is None:
+            continue
+        state_df = read_behavior_state(bundle.spec)
+        if state_df is None or state_df.empty:
+            continue
+        epoch_idx = _epoch_index_for_times(state_df, t)
+        labels = np.asarray(label_by_time(state_df, t), dtype=object)
+        keep: list[float] = []
+        for i in range(len(t) - 1):
+            dt = float(t[i + 1] - t[i])
+            if not np.isfinite(dt) or dt < min_isi_ms:
+                continue
+            if epoch_idx[i] < 0 or epoch_idx[i] != epoch_idx[i + 1]:
+                continue
+            lab = str(labels[i])
+            if require_label is not None and normalize_label(lab) != require_label:
+                continue
+            keep.append(dt)
+        if keep:
+            isi_all.setdefault(str(animal), []).append(np.asarray(keep, dtype=float))
+    return {a: np.concatenate(v) if v else np.array([], dtype=float) for a, v in isi_all.items()}
+
+
+def export_isi_by_state(tables: EventTables, out_dir: Path, *, show: bool = False) -> dict[str, Path]:
+    """Fig 3d plotters for all-ISI plus active-only and quiet-only (same bins)."""
+    bundle = begin_plot_bundle(
+        out_dir,
+        "ISI_by_state",
+        kind="ISI_by_state",
+        tables=tables,
+        logic_key="ISI_by_state",
+        params=dict(getattr(tables, "params", {}) or {}),
+    )
+    all_written = export_figure_3d(tables, bundle.bundle_dir, show=show)
+    cfg = dict(tables.params.get("figure_3d", {}))
+    shared = {**_DEFAULT_SHARED, **{k: cfg[k] for k in _DEFAULT_SHARED if k in cfg}}
+    log_cfg = {**_DEFAULT_LOG_PARAMS, **dict(cfg.get("log") or {})}
+    linear_cfg = {**_DEFAULT_LINEAR_PARAMS, **dict(cfg.get("linear") or {})}
+    figures_dir, metadata_dir = bundle.plots_dir, bundle.metadata_dir
+
+    events = _collect_events(tables)
+    animals = sorted(events["animal"].unique()) if not events.empty else []
+    frame_ms = _estimate_frame_ms(tables, fallback_ms=float(shared["frame_ms_fallback"]))
+    color_map = build_color_map(animals, template=shared["color_template"], order=animals)
+    font_family = _resolve_font_family(str(shared["font_family"]))
+    pair_ms = float(log_cfg["pair_threshold_ms"])
+    dedup = _dedupe_lr_pairs(events, pair_threshold_ms=pair_ms)
+    min_isi = 0.75 * frame_ms if log_cfg["min_isi_ms"] is None else float(log_cfg["min_isi_ms"])
+
+    low_ms = max(1e-6, float(log_cfg["first_bin_factor"]) * frame_ms)
+    log_bins = _snapped_log_bins(
+        int(log_cfg["num_bins"]),
+        frame_ms,
+        low_ms,
+        float(log_cfg["high_ms"]),
+        add_leading_zero_bin=bool(log_cfg["add_leading_zero_bin"]),
+        log_exponent=float(log_cfg["log_exponent"]),
+    )
+    log_xlim = tuple(log_cfg["xlim"]) if log_cfg["xlim"] is not None else None
+    lin_bins = _snapped_linear_bins(
+        int(linear_cfg["num_bins"]),
+        frame_ms,
+        float(linear_cfg["low_ms"]),
+        float(linear_cfg["high_ms"]),
+        add_leading_zero_bin=bool(linear_cfg["add_leading_zero_bin"]),
+    )
+    lin_xlim = tuple(linear_cfg["xlim"]) if linear_cfg["xlim"] is not None else None
+    renormalize = str(linear_cfg["xlim_policy"]) == "conditional"
+
+    written = dict(all_written)
+    for label, log_name, lin_name in (
+        ("active", "ISI_log_active.pdf", "ISI_linear_active.pdf"),
+        ("quiet", "ISI_log_quiet.pdf", "ISI_linear_quiet.pdf"),
+    ):
+        isi_all = _compute_blockwise_isis_same_epoch(
+            dedup, tables, min_isi_ms=min_isi, require_label=label
+        )
+        log_fig, *_rest = _plot_isi_traces(
+            bins=log_bins,
+            isi_all=isi_all,
+            animals=animals,
+            color_map=color_map,
+            fold_fn=lambda counts, edges: _fold_to_xlim_log(counts, edges, log_xlim),
+            figure_size=tuple(log_cfg["figure_size"]),
+            xscale="log",
+            xlim=log_xlim,
+            ylim=tuple(log_cfg["ylim"]) if log_cfg["ylim"] is not None else None,
+            xlabel=str(log_cfg["xlabel"]),
+            ylabel=str(log_cfg["ylabel"]),
+            linewidth=float(log_cfg["linewidth"]),
+            combined_linewidth=float(log_cfg["combined_linewidth"]),
+            combined_color=log_cfg["combined_color"],
+            combined_linestyle=str(log_cfg["combined_linestyle"]),
+            combined_label=str(shared["combined_label"]),
+            font_family=font_family,
+        )
+        log_pdf = figures_dir / log_name
+        log_fig.savefig(log_pdf, format="pdf", bbox_inches="tight", dpi=300)
+        show_and_close(log_fig, show)
+        written[log_name] = log_pdf
+
+        lin_fig, *_r2 = _plot_isi_traces(
+            bins=lin_bins,
+            isi_all=isi_all,
+            animals=animals,
+            color_map=color_map,
+            fold_fn=lambda counts, edges, _xlim=lin_xlim: _slice_to_xlim_linear(
+                counts, edges, _xlim, renormalize=renormalize
+            ),
+            figure_size=tuple(linear_cfg["figure_size"]),
+            xscale="linear",
+            xlim=lin_xlim,
+            ylim=tuple(linear_cfg["ylim"]) if linear_cfg["ylim"] is not None else None,
+            xlabel=str(linear_cfg["xlabel"]),
+            ylabel=str(linear_cfg["ylabel"]),
+            linewidth=float(linear_cfg["linewidth"]),
+            combined_linewidth=float(linear_cfg["combined_linewidth"]),
+            combined_color=linear_cfg["combined_color"],
+            combined_linestyle=str(linear_cfg["combined_linestyle"]),
+            combined_label=str(shared["combined_label"]),
+            font_family=font_family,
+        )
+        lin_pdf = figures_dir / lin_name
+        lin_fig.savefig(lin_pdf, format="pdf", bbox_inches="tight", dpi=300)
+        show_and_close(lin_fig, show)
+        written[lin_name] = lin_pdf
+    _ = metadata_dir
+    finish_plot_bundle(bundle)
+    return written
+
+
+EPOCH_DURATION_N_BINS = 30
+_EPOCH_DURATION_COLORS = {"active": "#D55E00", "quiet": "#0072B2"}
+
+
+def epoch_duration_bin_edges(
+    vals: np.ndarray,
+    *,
+    scale: str,
+    n_bins: int = EPOCH_DURATION_N_BINS,
+    xmin: float | None = None,
+) -> np.ndarray:
+    """Return histogram edges for epoch durations in seconds (``log`` or ``linear``)."""
+    vals = np.asarray(vals, dtype=float)
+    vals = vals[np.isfinite(vals) & (vals > 0)]
+    n_edges = int(n_bins) + 1
+    if vals.size == 0:
+        lo = 1e-2 if xmin is None else float(xmin)
+        hi = max(lo * 10.0, lo + 1.0)
+        if scale == "log":
+            lo = max(lo, 1e-2)
+            return np.logspace(np.log10(lo), np.log10(hi), n_edges)
+        return np.linspace(0.0 if xmin is None else float(xmin), hi, n_edges)
+    hi = float(np.nanmax(vals))
+    if scale == "log":
+        lo = max(float(np.nanmin(vals)), 1e-2)
+        if xmin is not None:
+            lo = max(lo, float(xmin))
+        if hi <= lo:
+            hi = lo * 10.0
+        return np.logspace(np.log10(lo), np.log10(hi), n_edges)
+    lo_lin = 0.0 if xmin is None else float(xmin)
+    if hi <= lo_lin:
+        hi = lo_lin + 1.0
+    return np.linspace(lo_lin, hi, n_edges)
+
+
+def _draw_epoch_duration_hist(
+    ax,
+    vals: np.ndarray,
+    *,
+    color: str,
+    title: str,
+    scale: str,
+    bins: np.ndarray,
+    xmin: float = 0.0,
+) -> None:
+    vals = np.asarray(vals, dtype=float)
+    if vals.size:
+        ax.hist(vals, bins=bins, color=color, edgecolor="black", alpha=0.8)
+        if scale == "log":
+            ax.set_xscale("log")
+        else:
+            right = float(bins[-1]) if bins.size else None
+            ax.set_xlim(float(xmin), right)
+    ax.set_xlabel("Epoch duration [s]", fontsize=8)
+    ax.set_ylabel("Count", fontsize=8)
+    ax.set_title(title, fontsize=8)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+
+
+def collect_epoch_durations(
+    tables: EventTables,
+    *,
+    smooth_state: bool = False,
+    min_duration_s: float = 0.0,
+    min_active_ms: float = 5000.0,
+    min_quiet_ms: float = 5000.0,
+    gap_bridge_ms: float = 3000.0,
+) -> dict[str, list[float]]:
+    """Per-state epoch lengths in seconds from behavior-state CSVs."""
+    from eye_tracking_system_tools.analysis.behavior_state import (
+        normalize_label,
+        read_behavior_state,
+        smooth_behavior_state,
+    )
+
+    durations = {"active": [], "quiet": []}
+    min_s = float(min_duration_s)
+    for block in tables.blocks:
+        state = read_behavior_state(block.spec)
+        if state is None or state.empty:
+            continue
+        if smooth_state:
+            state = smooth_behavior_state(
+                state,
+                min_active_ms=float(min_active_ms),
+                min_quiet_ms=float(min_quiet_ms),
+                gap_bridge_ms=float(gap_bridge_ms),
+            )
+        for _, row in state.iterrows():
+            lab = normalize_label(row["annotation"])
+            dur_s = (float(row["end_time"]) - float(row["start_time"])) / 1000.0
+            if np.isfinite(dur_s) and dur_s > 0 and lab in durations:
+                if dur_s >= min_s:
+                    durations[lab].append(dur_s)
+    return durations
+
+
+def export_epoch_durations(
+    tables: EventTables,
+    out_dir: Path,
+    *,
+    show: bool = False,
+    plot_id: str = "epoch_durations",
+    smooth_state: bool = False,
+    min_duration_s: float = 0.0,
+    linear_xmin_s: float | None = None,
+    min_active_ms: float = 5000.0,
+    min_quiet_ms: float = 5000.0,
+    gap_bridge_ms: float = 3000.0,
+) -> dict[str, Path]:
+    """Histograms of active/quiet epoch durations (log and linear x-axis)."""
+    bundle = begin_plot_bundle(
+        out_dir,
+        plot_id,
+        kind="epoch_durations",
+        tables=tables,
+        logic_key=plot_id if plot_id in {"epoch_durations", "epoch_durations_raw", "epoch_durations_smoothed"} else "epoch_durations",
+        params=dict(getattr(tables, "params", {}) or {}),
+        extra={
+            "smooth_state": bool(smooth_state),
+            "min_duration_s": float(min_duration_s),
+            "linear_xmin_s": linear_xmin_s,
+        },
+    )
+    figures_dir = bundle.plots_dir
+    for stale in figures_dir.glob("epoch_durations_*.pdf"):
+        stale.unlink()
+    durations = collect_epoch_durations(
+        tables,
+        smooth_state=smooth_state,
+        min_duration_s=min_duration_s,
+        min_active_ms=min_active_ms,
+        min_quiet_ms=min_quiet_ms,
+        gap_bridge_ms=gap_bridge_ms,
+    )
+    xmin = 0.0 if linear_xmin_s is None else float(linear_xmin_s)
+
+    written: dict[str, Path] = {}
+    bins_out: dict[str, dict[str, np.ndarray]] = {}
+    for lab, color in _EPOCH_DURATION_COLORS.items():
+        vals = np.asarray(durations[lab], dtype=float)
+        log_bins = epoch_duration_bin_edges(vals, scale="log", xmin=linear_xmin_s)
+        lin_bins = epoch_duration_bin_edges(vals, scale="linear", xmin=linear_xmin_s)
+        bins_out[lab] = {"log": log_bins, "linear": lin_bins}
+        for scale, bins in (("log", log_bins), ("linear", lin_bins)):
+            fig, ax = plt.subplots(figsize=(2.4, 1.8), dpi=300)
+            _draw_epoch_duration_hist(
+                ax,
+                vals,
+                color=color,
+                title=f"{lab} n={vals.size} ({scale})",
+                scale=scale,
+                bins=bins,
+                xmin=xmin,
+            )
+            out = figures_dir / f"epoch_durations_{lab}_{scale}.pdf"
+            fig.tight_layout()
+            fig.savefig(out, format="pdf", bbox_inches="tight")
+            show_and_close(fig, show)
+            written[out.name] = out
+    write_pickle_with_meta(
+        {
+            "active": np.asarray(durations["active"], dtype=float),
+            "quiet": np.asarray(durations["quiet"], dtype=float),
+            "bins": bins_out,
+            "n_bins": EPOCH_DURATION_N_BINS,
+            "smooth_state": bool(smooth_state),
+            "min_duration_s": float(min_duration_s),
+            "linear_xmin_s": linear_xmin_s,
+        },
+        bundle.metadata_dir / "epoch_durations.pkl",
+        meta={
+            "n_active": len(durations["active"]),
+            "n_quiet": len(durations["quiet"]),
+            "scales": ["log", "linear"],
+            "n_bins": EPOCH_DURATION_N_BINS,
+            "smooth_state": bool(smooth_state),
+            "min_duration_s": float(min_duration_s),
+            "plot_id": plot_id,
+        },
+        entrypoint="eye_tracking_system_tools.analysis.figures_3d_isi.export_epoch_durations",
+    )
+    finish_plot_bundle(bundle)
+    return written
+
+
+def export_epoch_durations_raw_and_smoothed(
+    tables: EventTables, out_dir: Path, *, show: bool = False
+) -> dict[str, Path]:
+    """Raw vs smoothed duration bundles (does not write ``epoch_durations/``)."""
+    written: dict[str, Path] = {}
+    written.update(
+        export_epoch_durations(
+            tables,
+            out_dir,
+            show=show,
+            plot_id="epoch_durations_raw",
+            smooth_state=False,
+        )
+    )
+    written.update(
+        export_epoch_durations(
+            tables,
+            out_dir,
+            show=show,
+            plot_id="epoch_durations_smoothed",
+            smooth_state=True,
+            min_duration_s=1.0,
+            linear_xmin_s=1.0,
+        )
+    )
+    return written
+
+
+def export_state_isi_and_epochs(
+    tables: EventTables, out_dir: Path, *, show: bool = False
+) -> dict[str, Path]:
+    """All-ISI Fig 3d copies, same-epoch active/quiet ISIs, and epoch-duration hists."""
+    written = export_isi_by_state(tables, out_dir, show=show)
+    written.update(export_epoch_durations(tables, out_dir, show=show))
+    return written
+

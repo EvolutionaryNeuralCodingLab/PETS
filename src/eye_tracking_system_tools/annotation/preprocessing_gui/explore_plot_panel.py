@@ -105,6 +105,7 @@ class ExplorePlotPanel(QtWidgets.QWidget):
     time_preview = QtCore.pyqtSignal(float)  # playhead drag (no video seek)
     refresh_requested = QtCore.pyqtSignal()
     eye_version_changed = QtCore.pyqtSignal(str)
+    finalize_eye_data_requested = QtCore.pyqtSignal()
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
@@ -128,6 +129,36 @@ class ExplorePlotPanel(QtWidgets.QWidget):
         chrome_lay = QtWidgets.QVBoxLayout(self._chrome)
         chrome_lay.setContentsMargins(0, 0, 0, 0)
         chrome_lay.setSpacing(4)
+
+        finalize_row = QtWidgets.QHBoxLayout()
+        self._btn_finalize_eye_data = QtWidgets.QPushButton("finalize_eye_data")
+        self._btn_finalize_eye_data.setObjectName("finalize_eye_data")
+        self._btn_finalize_eye_data.setToolTip(
+            "Overwrite left/right_eye_data_raw_verified.csv with the currently "
+            "displayed eye-data version (asks for confirmation)."
+        )
+        self._btn_finalize_eye_data.setEnabled(False)
+        self._btn_finalize_eye_data.setStyleSheet(
+            "QPushButton {"
+            " background-color: #c62828;"
+            " color: white;"
+            " font-weight: 600;"
+            " padding: 4px 10px;"
+            " border: 1px solid #8e0000;"
+            " border-radius: 4px;"
+            "}"
+            "QPushButton:disabled {"
+            " background-color: #ef9a9a;"
+            " color: #f5f5f5;"
+            " border-color: #e57373;"
+            "}"
+            "QPushButton:hover:!disabled {"
+            " background-color: #b71c1c;"
+            "}"
+        )
+        finalize_row.addWidget(self._btn_finalize_eye_data)
+        finalize_row.addStretch(1)
+        chrome_lay.addLayout(finalize_row)
 
         version_row = QtWidgets.QHBoxLayout()
         version_row.addWidget(QtWidgets.QLabel("Eye data:"))
@@ -228,6 +259,7 @@ class ExplorePlotPanel(QtWidgets.QWidget):
         self._plots_layout.addWidget(self._empty_label)
 
         self._version_combo.currentIndexChanged.connect(self._on_version_combo_changed)
+        self._btn_finalize_eye_data.clicked.connect(self.finalize_eye_data_requested.emit)
         self._downsample.valueChanged.connect(self._on_ep_controls_changed)
         self._box_zoom_btn.toggled.connect(self._apply_mouse_mode)
         self._zoom_all_btn.clicked.connect(self.zoom_to_all)
@@ -274,6 +306,15 @@ class ExplorePlotPanel(QtWidgets.QWidget):
         self._rebuild_ep_picker(prefer_checked=prev_ep or None)
         if catalog is not None and len(catalog.ms_axis):
             self._center_ms.setValue(float(self._playhead_ms or catalog.ms_axis[0]))
+        has_eye = bool(
+            catalog is not None
+            and (
+                catalog.le_csv_path is not None
+                or catalog.re_csv_path is not None
+                or bool(catalog.eye_metrics)
+            )
+        )
+        self._btn_finalize_eye_data.setEnabled(has_eye)
         self._redraw()
 
     def playhead_ms(self) -> float:

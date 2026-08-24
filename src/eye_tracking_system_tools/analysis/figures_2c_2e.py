@@ -18,6 +18,7 @@ import pandas as pd
 from matplotlib import rcParams
 from scipy import stats
 from scipy.ndimage import gaussian_filter1d
+from scipy.stats import gaussian_kde
 
 from eye_tracking_system_tools.analysis.colors import build_color_map
 from eye_tracking_system_tools.analysis.export_meta import write_pickle_with_meta
@@ -413,6 +414,8 @@ def export_pos_vel_bundle(tables: EventTables, out_dir: Path, *, show: bool = Fa
                         out=np.full(nb, np.nan),
                         where=v_den > 1e-6,
                     )
+                # Unsigned angular speed; Gaussian on sparse occupancy can undershoot 0.
+                vel_center = np.clip(vel_center, 0.0, None)
                 if normalize_velocity_to_peak:
                     v_peak = np.nanmax(vel_center)
                     if np.isfinite(v_peak) and v_peak > 0:
@@ -699,6 +702,10 @@ def _plot_pos_vel_pdfs(
                     canon_leg.write_bytes(legend_pdf_bytes)
                     written[canon_leg.name] = canon_leg
 
+            # Close the paper-sized fig before any notebook preview so inline
+            # flush_figures cannot emit a second copy alongside fig_show.
+            plt.close(fig)
+
             if show:
                 # Notebook view: larger axes + on-figure legend with n= counts.
                 fig_show, ax_show = plt.subplots(figsize=show_size, dpi=120)
@@ -732,33 +739,61 @@ def _plot_pos_vel_pdfs(
                 fig_show.tight_layout()
                 show_and_close(fig_show, True)
 
-            plt.close(fig)
-
     return written
 
 
-def export_amplitude_velocity_fit(tables: EventTables, out_dir: Path, *, show: bool = False) -> Path:
-    p = _ms_params(tables)
-    amp_col = p.get("amp_col", "net_angular_disp")
-    bin_width = float(p.get("bin_width_deg", 5.0))
-    min_amp = float(p.get("min_amp_deg", 0.5))
-    max_amp_pct = float(p.get("max_amp_pct", 99.5))
-    min_events = int(p.get("min_events_per_bin", 15))
-    frame_rate = float(p.get("frame_rate_fps", 60.0))
+def _empty_linear_fit(*, n: int = 0) -> dict[str, Any]:
+    return {
+        "n": int(n),
+        "slope": float("nan"),
+        "intercept": float("nan"),
+        "R2": float("nan"),
+        "r": float("nan"),
+        "se_slope": float("nan"),
+        "t_slope": float("nan"),
+        "p_slope": float("nan"),
+        "se_intercept": float("nan"),
+        "t_intercept": float("nan"),
+        "p_intercept": float("nan"),
+    }
 
-    figures_dir, metadata_dir = resolve_figure_dirs(out_dir)
 
-    df = tables.all_saccades.copy()
-    if df.empty:
-        raise ValueError("No saccades for 2e export")
-    df["peak_velocity"] = _peak_velocity_deg_per_ms(df, frame_rate)
-    df = df[np.isfinite(df[amp_col]) & np.isfinite(df["peak_velocity"]) & (df[amp_col] >= min_amp)]
-    amp_hi = float(np.nanpercentile(df[amp_col], max_amp_pct))
-    df = df[df[amp_col] <= amp_hi]
+def _linregress_fit(x: np.ndarray, y: np.ndarray) -> dict[str, Any]:
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    m = np.isfinite(x) & np.isfinite(y)
+    x, y = x[m], y[m]
+    if x.size < 3:
+        return _empty_linear_fit(n=int(x.size))
+    slope, intercept, r, pval, se = stats.linregress(x, y)
+    return {
+        "n": int(x.size),
+        "slope": float(slope),
+        "intercept": float(intercept),
+        "r": float(r),
+        "R2": float(r**2),
+        "se_slope": float(se),
+        "t_slope": float(slope / se) if se else float("nan"),
+        "p_slope": float(pval),
+        "se_intercept": float("nan"),
+        "t_intercept": float("nan"),
+        "p_intercept": float("nan"),
+    }
 
-    edges = np.arange(0.0, max(25.0, np.ceil(amp_hi / bin_width) * bin_width) + 1e-9, bin_width)
+
+def _main_sequence_stats(
+    df: pd.DataFrame,
+    *,
+    amp_col: str,
+    edges: np.ndarray,
+    min_events: int,
+) -> tuple[dict[str, pd.DataFrame], pd.DataFrame, dict[str, Any]]:
+    """Amp-binned per-animal means + per-animal and pooled linear fits."""
     per_animal_stats: dict[str, pd.DataFrame] = {}
-    linear_rows = []
+    linear_rows: list[dict[str, Any]] = []
+    if df is None or df.empty:
+        return per_animal_stats, pd.DataFrame(linear_rows), _empty_linear_fit(n=0)
+
     for animal, adf in df.groupby("animal"):
         rows = []
         for i in range(len(edges) - 1):
@@ -775,41 +810,329 @@ def export_amplitude_velocity_fit(tables: EventTables, out_dir: Path, *, show: b
                 }
             )
         per_animal_stats[str(animal)] = pd.DataFrame(rows)
-        if len(adf) >= 3:
-            slope, intercept, r, pval, se = stats.linregress(
-                adf[amp_col].to_numpy(float), adf["peak_velocity"].to_numpy(float)
-            )
-            linear_rows.append(
-                {
-                    "animal": str(animal),
-                    "n": int(len(adf)),
-                    "slope": float(slope),
-                    "se_slope": float(se),
-                    "t_slope": float(slope / se) if se else np.nan,
-                    "p_slope": float(pval),
-                    "intercept": float(intercept),
-                    "se_intercept": np.nan,
-                    "t_intercept": np.nan,
-                    "p_intercept": np.nan,
-                    "R2": float(r**2),
-                }
-            )
+        fit = _linregress_fit(adf[amp_col].to_numpy(float), adf["peak_velocity"].to_numpy(float))
+        if fit["n"] >= 3:
+            linear_rows.append({"animal": str(animal), **fit})
 
-    slope, intercept, r, pval, se = stats.linregress(
-        df[amp_col].to_numpy(float), df["peak_velocity"].to_numpy(float)
+    global_fit = _linregress_fit(df[amp_col].to_numpy(float), df["peak_velocity"].to_numpy(float))
+    return per_animal_stats, pd.DataFrame(linear_rows), global_fit
+
+
+def _serialize_color_map(color_map: dict[str, Any]) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for k, v in color_map.items():
+        if isinstance(v, str):
+            out[str(k)] = v
+            continue
+        arr = np.asarray(v, dtype=float).ravel()
+        if arr.size >= 3:
+            r, g, b = (float(arr[i]) for i in range(3))
+            if max(r, g, b) <= 1.0:
+                r, g, b = r * 255.0, g * 255.0, b * 255.0
+            out[str(k)] = f"#{int(round(r)):02x}{int(round(g)):02x}{int(round(b)):02x}"
+        else:
+            out[str(k)] = str(v)
+    return out
+
+
+def _annotate_linear_fit(ax, fit: dict[str, Any] | None, *, fontsize: int = 7) -> None:
+    """OLS slope and Pearson r for the dashed line (``scipy.stats.linregress``)."""
+    if not fit:
+        return
+    slope = fit.get("slope")
+    r = fit.get("r")
+    if r is None or not np.isfinite(r):
+        r2 = fit.get("R2")
+        r = float(np.sqrt(r2)) if r2 is not None and np.isfinite(r2) else float("nan")
+    if slope is None or not np.isfinite(slope) or not np.isfinite(r):
+        return
+    ax.text(
+        0.04,
+        0.97,
+        f"slope = {float(slope):.3f}\nPearson r = {float(r):.2f}",
+        transform=ax.transAxes,
+        va="top",
+        ha="left",
+        fontsize=fontsize,
+        color="0.1",
+        bbox={"boxstyle": "round,pad=0.2", "fc": "white", "ec": "none", "alpha": 0.8},
     )
-    global_fit = {
-        "n": int(len(df)),
-        "slope": float(slope),
-        "intercept": float(intercept),
-        "R2": float(r**2),
-        "se_slope": float(se),
-        "t_slope": float(slope / se) if se else np.nan,
-        "p_slope": float(pval),
-        "se_intercept": np.nan,
-        "t_intercept": np.nan,
-        "p_intercept": np.nan,
+
+
+def _gaussian_kde_likelihood(
+    x: np.ndarray,
+    y: np.ndarray,
+    *,
+    xlim,
+    ylim,
+    nbins: int = 200,
+) -> np.ndarray | None:
+    """Scott-bandwidth Gaussian KDE on a grid, normalized like Fig 2h (sum = 1)."""
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    m = np.isfinite(x) & np.isfinite(y)
+    x, y = x[m], y[m]
+    if x.size < 5:
+        return None
+    try:
+        kde = gaussian_kde(np.vstack([x, y]))
+    except Exception:
+        return None
+    x0, x1 = float(xlim[0]), float(xlim[1])
+    y0, y1 = float(ylim[0]), float(ylim[1])
+    nb = max(int(nbins), 2)
+    xi, yi = np.mgrid[x0:x1:nb * 1j, y0:y1:nb * 1j]
+    zi = kde(np.vstack([xi.ravel(), yi.ravel()])).reshape(xi.shape)
+    total = float(np.sum(zi))
+    if total > 0:
+        zi = zi / total
+    return zi.astype(np.float32)
+
+
+def _style_2e_axes(ax, *, xlim=None, ylim=None, labelsize: int = 8, ticksize: int = 7) -> None:
+    ax.set_xlabel("Amplitude [deg]", fontsize=labelsize)
+    ax.set_ylabel("Peak V [deg/ms]", fontsize=labelsize)
+    ax.tick_params(labelsize=ticksize)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    if xlim is not None:
+        ax.set_xlim(*xlim)
+    if ylim is not None:
+        ax.set_ylim(*ylim)
+
+
+def _plot_per_animal_means(
+    per_animal_stats: dict[str, pd.DataFrame],
+    global_fit: dict[str, Any],
+    *,
+    color_map: dict[str, Any],
+    animal_order: list[str],
+    params: dict[str, Any],
+    xlim=None,
+    ylim=None,
+    x_fit_span=None,
+    title: str | None = None,
+):
+    fig, ax = plt.subplots(figsize=params["figsize"], dpi=params["dpi"])
+    x_vals: list[float] = []
+    for animal in animal_order:
+        sdf = per_animal_stats.get(animal)
+        if sdf is None or getattr(sdf, "empty", True):
+            continue
+        x = (sdf["amp_lo"] + sdf["amp_hi"]) / 2
+        x_vals.extend(np.asarray(x, dtype=float).tolist())
+        ax.plot(
+            x,
+            sdf["mean_peak_v"],
+            "o-",
+            color=color_map.get(animal, "0.3"),
+            ms=3,
+            lw=params["lw"],
+            label=animal,
+        )
+    slope = global_fit.get("slope")
+    intercept = global_fit.get("intercept")
+    if (
+        slope is not None
+        and intercept is not None
+        and np.isfinite(slope)
+        and np.isfinite(intercept)
+    ):
+        if xlim is not None:
+            x0, x1 = float(xlim[0]), float(xlim[1])
+        elif x_fit_span is not None:
+            x0, x1 = float(x_fit_span[0]), float(x_fit_span[1])
+        elif x_vals:
+            x0, x1 = float(min(x_vals)), float(max(x_vals))
+        else:
+            x0, x1 = 0.0, 1.0
+        xs = np.linspace(x0, x1, 50)
+        ax.plot(xs, float(slope) * xs + float(intercept), "k--", lw=params["lw"])
+    if title:
+        ax.set_title(title, fontsize=7)
+    _style_2e_axes(ax, xlim=xlim, ylim=ylim)
+    _annotate_linear_fit(ax, global_fit, fontsize=6)
+    fig.tight_layout()
+    return fig, ax
+
+
+def _plot_2e_scatter(
+    amp: np.ndarray,
+    vel: np.ndarray,
+    *,
+    fit: dict[str, Any] | None,
+    params: dict[str, Any],
+    xlim,
+    ylim,
+    title: str,
+    out_pdf: Path,
+    show: bool,
+    figsize=None,
+    labelsize: int = 8,
+    ticksize: int = 7,
+    annot_size: int = 6,
+    title_size: int = 7,
+) -> None:
+    fig, ax = plt.subplots(figsize=figsize or params["figsize"], dpi=params["dpi"])
+    amp = np.asarray(amp, dtype=float)
+    vel = np.asarray(vel, dtype=float)
+    m = np.isfinite(amp) & np.isfinite(vel)
+    amp, vel = amp[m], vel[m]
+    if amp.size:
+        ax.scatter(
+            amp,
+            vel,
+            s=4,
+            alpha=0.12,
+            color="0.45",
+            edgecolors="none",
+            rasterized=True,
+        )
+    if fit is not None and np.isfinite(fit.get("slope", np.nan)) and amp.size >= 3:
+        xs = np.linspace(float(xlim[0]), float(xlim[1]), 50)
+        ax.plot(xs, float(fit["slope"]) * xs + float(fit["intercept"]), "k--", lw=params["lw"])
+    ax.set_title(title, fontsize=title_size)
+    _style_2e_axes(ax, xlim=xlim, ylim=ylim, labelsize=labelsize, ticksize=ticksize)
+    _annotate_linear_fit(ax, fit, fontsize=annot_size)
+    fig.tight_layout()
+    fig.savefig(out_pdf, format="pdf", bbox_inches="tight")
+    show_and_close(fig, show)
+
+
+def _plot_2e_density(
+    amp: np.ndarray,
+    vel: np.ndarray,
+    *,
+    fit: dict[str, Any] | None,
+    params: dict[str, Any],
+    xlim,
+    ylim,
+    title: str,
+    out_pdf: Path,
+    show: bool,
+    zi: np.ndarray | None = None,
+) -> np.ndarray | None:
+    """Gaussian-KDE likelihood heatmap (Fig 2h: Scott bandwidth, ``nbins=200``, turbo)."""
+    figsize = tuple(params.get("density_figsize", (3.8, 3.2)))
+    fig, ax = plt.subplots(figsize=figsize, dpi=params["dpi"])
+    amp = np.asarray(amp, dtype=float)
+    vel = np.asarray(vel, dtype=float)
+    m = np.isfinite(amp) & np.isfinite(vel)
+    amp, vel = amp[m], vel[m]
+    nbins = int(params.get("density_nbins", 200))
+    cmap = str(params.get("density_cmap", "turbo"))
+    if zi is None and amp.size:
+        zi = _gaussian_kde_likelihood(amp, vel, xlim=xlim, ylim=ylim, nbins=nbins)
+    if zi is not None:
+        im = ax.imshow(
+            np.asarray(zi).T,
+            extent=(float(xlim[0]), float(xlim[1]), float(ylim[0]), float(ylim[1])),
+            origin="lower",
+            cmap=cmap,
+            aspect="auto",
+            interpolation="bilinear",
+        )
+        cb = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        cb.set_label("Likelihood", fontsize=10)
+        cb.ax.tick_params(labelsize=9)
+    if fit is not None and np.isfinite(fit.get("slope", np.nan)) and amp.size >= 3:
+        xs = np.linspace(float(xlim[0]), float(xlim[1]), 50)
+        ax.plot(
+            xs,
+            float(fit["slope"]) * xs + float(fit["intercept"]),
+            "k--",
+            lw=max(float(params["lw"]), 1.2),
+        )
+    ax.set_title(title, fontsize=11)
+    _style_2e_axes(ax, xlim=xlim, ylim=ylim, labelsize=11, ticksize=9)
+    _annotate_linear_fit(ax, fit, fontsize=9)
+    fig.tight_layout()
+    fig.savefig(out_pdf, format="pdf", bbox_inches="tight")
+    show_and_close(fig, show)
+    return zi
+
+
+def _event_ids(df: pd.DataFrame) -> pd.Series:
+    return (
+        df["animal"].astype(str)
+        + "|"
+        + df["block"].astype(str)
+        + "|"
+        + df["eye"].astype(str)
+        + "|"
+        + df["saccade_on_ms"].astype(float).round(3).astype(str)
+    )
+
+
+def _subset_by_event_ids(filtered: pd.DataFrame, src: pd.DataFrame | None) -> pd.DataFrame:
+    if filtered is None or filtered.empty:
+        return filtered.iloc[0:0].copy() if filtered is not None else pd.DataFrame()
+    if src is None or src.empty:
+        return filtered.iloc[0:0].copy()
+    ids = set(_event_ids(src))
+    return filtered.loc[_event_ids(filtered).isin(ids)].copy()
+
+
+def _pool_pogona(df: pd.DataFrame) -> tuple[pd.DataFrame, str]:
+    """Keep *Pogona* (``PV_*``) animals when any are present; else keep the table as-is."""
+    if df is None or df.empty or "animal" not in df.columns:
+        return df, "all"
+    mask = df["animal"].astype(str).str.match(r"^PV_", case=False)
+    if bool(mask.any()):
+        return df.loc[mask].copy(), "pogona"
+    return df, "all"
+
+
+def export_amplitude_velocity_fit(tables: EventTables, out_dir: Path, *, show: bool = False) -> Path:
+    p = _ms_params(tables)
+    amp_col = p.get("amp_col", "net_angular_disp")
+    bin_width = float(p.get("bin_width_deg", 5.0))
+    min_amp = float(p.get("min_amp_deg", 0.5))
+    max_amp_pct = float(p.get("max_amp_pct", 99.5))
+    min_events = int(p.get("min_events_per_bin", 15))
+    frame_rate = float(p.get("frame_rate_fps", 60.0))
+    scatter_animal = p.get("scatter_animal")
+    if scatter_animal is not None:
+        scatter_animal = str(scatter_animal)
+    elif p.get("plot_animals"):
+        scatter_animal = str(list(p.get("plot_animals"))[0])
+
+    figures_dir, metadata_dir = resolve_figure_dirs(out_dir)
+
+    df = tables.all_saccades.copy()
+    if df.empty:
+        raise ValueError("No saccades for 2e export")
+    df["peak_velocity"] = _peak_velocity_deg_per_ms(df, frame_rate)
+    df = df[np.isfinite(df[amp_col]) & np.isfinite(df["peak_velocity"]) & (df[amp_col] >= min_amp)]
+    amp_hi = float(np.nanpercentile(df[amp_col], max_amp_pct))
+    df = df[df[amp_col] <= amp_hi].copy()
+
+    edges = np.arange(0.0, max(25.0, np.ceil(amp_hi / bin_width) * bin_width) + 1e-9, bin_width)
+    concurrent_df = _subset_by_event_ids(df, tables.synced)
+    monocular_df = _subset_by_event_ids(df, tables.non_synced)
+    class_frames = {
+        "all": df,
+        "concurrent": concurrent_df,
+        "monocular": monocular_df,
     }
+    class_stats: dict[str, dict[str, Any]] = {}
+    for label, sub in class_frames.items():
+        per_animal, linear_df, gfit = _main_sequence_stats(
+            sub, amp_col=amp_col, edges=edges, min_events=min_events
+        )
+        class_stats[label] = {
+            "per_animal_stats": per_animal,
+            "linear_stats_df": linear_df,
+            "global_fit": gfit,
+            "n": int(len(sub)),
+        }
+
+    all_stats = class_stats["all"]
+    per_animal_stats = all_stats["per_animal_stats"]
+    global_fit = all_stats["global_fit"]
+    linear_stats_df = all_stats["linear_stats_df"]
+    animals = list(per_animal_stats.keys())
+    color_map = build_color_map(animals, template="okabeito", order=animals)
     params = {
         "amp_col": amp_col,
         "bin_width_deg": bin_width,
@@ -817,49 +1140,246 @@ def export_amplitude_velocity_fit(tables: EventTables, out_dir: Path, *, show: b
         "max_amp_pct": max_amp_pct,
         "min_events_per_bin": min_events,
         "frame_rate_fps": frame_rate,
-        "figsize": (1.5, 1.7),
-        "dpi": 300,
-        "lw": 1.0,
+        "figsize": tuple(p.get("figsize", (1.5, 1.7))),
+        "dpi": int(p.get("dpi", 300)),
+        "lw": float(p.get("lw", 1.0)),
+        "density_nbins": int(p.get("density_nbins", 200)),
+        "density_cmap": str(p.get("density_cmap", "turbo")),
+        "density_figsize": tuple(p.get("density_figsize", (3.8, 3.2))),
+        "scatter_animal": scatter_animal,
     }
+
+    x_fit_span = (
+        (float(df[amp_col].min()), float(df[amp_col].max())) if not df.empty else None
+    )
+    fig, ax = _plot_per_animal_means(
+        per_animal_stats,
+        global_fit,
+        color_map=color_map,
+        animal_order=animals,
+        params=params,
+        x_fit_span=x_fit_span,
+    )
+    shared_xlim = ax.get_xlim()
+    shared_ylim = ax.get_ylim()
+    fig.savefig(figures_dir / "figure_2e_per_animal_means.pdf", format="pdf", bbox_inches="tight")
+    fig.savefig(figures_dir / "figure_2e.pdf", format="pdf", bbox_inches="tight")
+    show_and_close(fig, show)
+
+    for label, canon in (
+        ("concurrent", "figure_2e_per_animal_means_concurrent.pdf"),
+        ("monocular", "figure_2e_per_animal_means_monocular.pdf"),
+    ):
+        body = class_stats[label]
+        fig, _ = _plot_per_animal_means(
+            body["per_animal_stats"],
+            body["global_fit"],
+            color_map=color_map,
+            animal_order=animals,
+            params=params,
+            xlim=shared_xlim,
+            ylim=shared_ylim,
+            title=f"{label} n={body['n']}",
+        )
+        fig.savefig(figures_dir / canon, format="pdf", bbox_inches="tight")
+        show_and_close(fig, show)
+
+    pooled_df, pool_cohort = _pool_pogona(df)
+    pooled_amp = pooled_df[amp_col].to_numpy(float) if not pooled_df.empty else np.array([], dtype=float)
+    pooled_vel = (
+        pooled_df["peak_velocity"].to_numpy(float) if not pooled_df.empty else np.array([], dtype=float)
+    )
+    pooled_animals = (
+        pooled_df["animal"].astype(str).to_numpy() if not pooled_df.empty else np.array([], dtype=object)
+    )
+    conc_ids = set(_event_ids(concurrent_df)) if not concurrent_df.empty else set()
+    if pooled_df.empty:
+        pairing = np.array([], dtype=object)
+    else:
+        pairing = np.where(
+            _event_ids(pooled_df).isin(conc_ids).to_numpy(),
+            "concurrent",
+            "monocular",
+        )
+    pooled_fit = class_stats["all"]["global_fit"]
+    n_pooled = int(pooled_amp.size)
+    _plot_2e_scatter(
+        pooled_amp,
+        pooled_vel,
+        fit=pooled_fit,
+        params=params,
+        xlim=shared_xlim,
+        ylim=shared_ylim,
+        title=f"all animals ({pool_cohort}) n={n_pooled}",
+        out_pdf=figures_dir / "figure_2e_all_animals_scatter.pdf",
+        show=show,
+        figsize=params["density_figsize"],
+        labelsize=11,
+        ticksize=9,
+        annot_size=9,
+        title_size=11,
+    )
+    density_zi = _plot_2e_density(
+        pooled_amp,
+        pooled_vel,
+        fit=pooled_fit,
+        params=params,
+        xlim=shared_xlim,
+        ylim=shared_ylim,
+        title=f"all animals ({pool_cohort}) n={n_pooled}",
+        out_pdf=figures_dir / "figure_2e_all_animals_density.pdf",
+        show=show,
+    )
+
+    _export_2e_class_scatters(
+        tables,
+        df,
+        amp_col=amp_col,
+        figures_dir=figures_dir,
+        metadata_dir=metadata_dir,
+        figsize=params["figsize"],
+        dpi=params["dpi"],
+        lw=params["lw"],
+        xlim=shared_xlim,
+        ylim=shared_ylim,
+        scatter_animal=scatter_animal,
+        show=show,
+    )
+
+    for label, body in class_stats.items():
+        lin = body["linear_stats_df"]
+        suffix = "" if label == "all" else f"_{label}"
+        lin.to_csv(metadata_dir / f"amplitude_velocity_linear_stats{suffix}.csv", index=False)
+    pd.DataFrame(
+        [{"class": k, "n_events": v["n"], "n_animals": len(v["per_animal_stats"])} for k, v in class_stats.items()]
+    ).to_csv(metadata_dir / "figure_2e_class_counts.csv", index=False)
+
     bundle = {
         "params": params,
         "edges": edges,
+        "xlim": (float(shared_xlim[0]), float(shared_xlim[1])),
+        "ylim": (float(shared_ylim[0]), float(shared_ylim[1])),
+        "color_map": _serialize_color_map(color_map),
+        "animal_order": animals,
         "per_animal_stats": per_animal_stats,
         "global_fit": global_fit,
-        "linear_stats_df": pd.DataFrame(linear_rows),
+        "linear_stats_df": linear_stats_df,
+        "classes": class_stats,
+        "pooled": {
+            "amp": pooled_amp.astype(np.float32),
+            "vel": pooled_vel.astype(np.float32),
+            "animal": pooled_animals,
+            "pairing": pairing,
+            "n": n_pooled,
+            "cohort": pool_cohort,
+            "animals": sorted({str(a) for a in pooled_animals.tolist()}) if n_pooled else [],
+        },
+        "density": {
+            "zi": density_zi,
+            "nbins": int(params["density_nbins"]),
+            "cmap": str(params["density_cmap"]),
+            "method": "gaussian_kde",
+            "bw_method": "scott",
+            "extent": (
+                float(shared_xlim[0]),
+                float(shared_xlim[1]),
+                float(shared_ylim[0]),
+                float(shared_ylim[1]),
+            ),
+        },
     }
     pkl = metadata_dir / "amplitude_velocity_linear_fit_bundle.pkl"
     write_pickle_with_meta(
         bundle,
         pkl,
-        meta={"csv_choices": tables.csv_meta, "params": params, "figure": "2e", "n": global_fit["n"]},
+        meta={
+            "csv_choices": tables.csv_meta,
+            "params": params,
+            "figure": "2e",
+            "n": global_fit["n"],
+            "n_concurrent": class_stats["concurrent"]["n"],
+            "n_monocular": class_stats["monocular"]["n"],
+            "n_pooled": n_pooled,
+            "pooled_cohort": pool_cohort,
+            "slope": global_fit.get("slope"),
+            "pearson_r": global_fit.get("r"),
+            "R2": global_fit.get("R2"),
+            "density_method": "gaussian_kde",
+        },
         entrypoint="eye_tracking_system_tools.analysis.figures_2c_2e.export_amplitude_velocity_fit",
     )
-
-    animals = list(per_animal_stats.keys())
-    color_map = build_color_map(animals, template="okabeito", order=animals)
-    fig, ax = plt.subplots(figsize=params["figsize"], dpi=params["dpi"])
-    for animal, sdf in per_animal_stats.items():
-        if sdf.empty:
-            continue
-        x = (sdf["amp_lo"] + sdf["amp_hi"]) / 2
-        ax.plot(
-            x,
-            sdf["mean_peak_v"],
-            "o-",
-            color=color_map[animal],
-            ms=3,
-            lw=params["lw"],
-            label=animal,
-        )
-    x_fit = np.linspace(float(df[amp_col].min()), float(df[amp_col].max()), 50)
-    ax.plot(x_fit, slope * x_fit + intercept, "k--", lw=params["lw"])
-    ax.set_xlabel("Amplitude [deg]", fontsize=8)
-    ax.set_ylabel("Peak V [deg/ms]", fontsize=8)
-    ax.tick_params(labelsize=7)
-    ax.spines["top"].set_visible(False)
-    ax.spines["right"].set_visible(False)
-    fig.tight_layout()
-    fig.savefig(figures_dir / "figure_2e.pdf", format="pdf", bbox_inches="tight")
-    show_and_close(fig, show)
     return pkl
+
+
+def _export_2e_class_scatters(
+    tables: EventTables,
+    filtered: pd.DataFrame,
+    *,
+    amp_col: str,
+    figures_dir: Path,
+    metadata_dir: Path,
+    figsize: tuple[float, float],
+    dpi: int,
+    lw: float,
+    xlim: tuple[float, float],
+    ylim: tuple[float, float],
+    scatter_animal: str | None,
+    show: bool,
+) -> None:
+    """Single-animal scatters on the same axes as the multi-animal means panel."""
+    present = [str(a) for a in filtered["animal"].dropna().unique()] if not filtered.empty else []
+    if scatter_animal is None or scatter_animal not in present:
+        scatter_animal = present[0] if present else None
+    animal_df = (
+        filtered.loc[filtered["animal"].astype(str) == scatter_animal].copy()
+        if scatter_animal
+        else filtered.iloc[0:0].copy()
+    )
+    pd.DataFrame(
+        [
+            {
+                "scatter_animal": scatter_animal,
+                "n_events": int(len(animal_df)),
+                "xlim_lo": float(xlim[0]),
+                "xlim_hi": float(xlim[1]),
+                "ylim_lo": float(ylim[0]),
+                "ylim_hi": float(ylim[1]),
+            }
+        ]
+    ).to_csv(metadata_dir / "figure_2e_scatter_limits.csv", index=False)
+
+    class_frames = [
+        ("all_events", animal_df, figures_dir / "figure_2e_all_events_scatter.pdf"),
+        (
+            "concurrent",
+            _subset_by_event_ids(animal_df, tables.synced),
+            figures_dir / "figure_2e_concurrent_scatter.pdf",
+        ),
+        (
+            "monocular",
+            _subset_by_event_ids(animal_df, tables.non_synced),
+            figures_dir / "figure_2e_monocular_scatter.pdf",
+        ),
+    ]
+    params = {"figsize": figsize, "dpi": dpi, "lw": lw}
+    for label, sub, out_pdf in class_frames:
+        fit = _linregress_fit(sub[amp_col].to_numpy(float), sub["peak_velocity"].to_numpy(float)) if not sub.empty else None
+        n = int(len(sub))
+        r2 = fit["R2"] if fit and np.isfinite(fit.get("R2", np.nan)) else float("nan")
+        title = (
+            f"{label} {scatter_animal} (empty)"
+            if n == 0
+            else (f"{label} {scatter_animal} n={n}  R²={r2:.2f}" if np.isfinite(r2) else f"{label} {scatter_animal} n={n}")
+        )
+        _plot_2e_scatter(
+            sub[amp_col].to_numpy(float) if n else np.array([], dtype=float),
+            sub["peak_velocity"].to_numpy(float) if n else np.array([], dtype=float),
+            fit=fit,
+            params=params,
+            xlim=xlim,
+            ylim=ylim,
+            title=title,
+            out_pdf=out_pdf,
+            show=show,
+        )
+

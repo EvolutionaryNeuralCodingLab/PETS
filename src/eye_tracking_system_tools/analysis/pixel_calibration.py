@@ -246,6 +246,8 @@ def manual_calibration(
     Fallback without video: give the measured landmark length in pixels per eye.
 
     Useful when the raw mp4s are offline but the landmark was measured elsewhere.
+    The stored scale is ``known_dist_mm / px`` (mm/px); see also
+    :func:`manual_calibration_um_per_px` when you already know the µm/px factors.
     """
     if left_px <= 0 or right_px <= 0:
         raise ValueError("Pixel distances must be positive")
@@ -258,6 +260,36 @@ def manual_calibration(
         known_dist_mm=known_dist_mm,
         method="manual_pixel_distance",
         extra_meta={"left_px": float(left_px), "right_px": float(right_px)},
+    )
+    return PixelSize(l_mm_per_px=left, r_mm_per_px=right)
+
+
+def manual_calibration_um_per_px(
+    block_path: Path | str,
+    *,
+    left_um_per_px: float,
+    right_um_per_px: float,
+) -> PixelSize:
+    """
+    Write a calibration from already-known µm-per-pixel factors.
+
+    The values you pass are exactly what the QC table and calibration list show
+    after refresh (``L_um_per_px`` / ``R_um_per_px``).
+    """
+    if left_um_per_px <= 0 or right_um_per_px <= 0:
+        raise ValueError("µm/px factors must be positive")
+    left = float(left_um_per_px) / MM_TO_UM
+    right = float(right_um_per_px) / MM_TO_UM
+    write_pixel_size(
+        block_path,
+        left,
+        right,
+        known_dist_mm=None,
+        method="manual_um_per_px",
+        extra_meta={
+            "left_um_per_px": float(left_um_per_px),
+            "right_um_per_px": float(right_um_per_px),
+        },
     )
     return PixelSize(l_mm_per_px=left, r_mm_per_px=right)
 

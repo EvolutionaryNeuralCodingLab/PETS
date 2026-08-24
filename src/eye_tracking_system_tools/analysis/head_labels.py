@@ -55,6 +55,22 @@ def load_lizmov_times_ms(mat_path: Path) -> np.ndarray:
     return t
 
 
+def load_lizmov_bout_onsets_ms(mat_path: Path) -> np.ndarray:
+    """Head-bout onsets: rising edges of ``movAll > 0`` (ms)."""
+    import h5py
+
+    with h5py.File(mat_path, "r") as mat:
+        t = np.asarray(mat["t_mov_ms"], dtype=float).reshape(-1)
+        mov = np.asarray(mat["movAll"], dtype=float).reshape(-1)
+    n = min(t.size, mov.size)
+    t, mov = t[:n], mov[:n]
+    on = np.isfinite(mov) & (mov > 0)
+    prev = np.concatenate([[False], on[:-1]])
+    rising = on & ~prev
+    out = t[rising]
+    return out[np.isfinite(out)]
+
+
 def _label_from_mov_times(events: pd.DataFrame, mov_times: np.ndarray) -> pd.Series:
     """True if any movement sample falls inside [saccade_on_ms, saccade_off_ms]."""
     if events.empty:

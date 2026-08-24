@@ -25,6 +25,7 @@ from matplotlib import rcParams
 from eye_tracking_system_tools.analysis.behavior_state import (
     has_behavior_state,
     read_behavior_state,
+    smooth_behavior_state,
 )
 from eye_tracking_system_tools.analysis.export_meta import write_pickle_with_meta
 from eye_tracking_system_tools.analysis.pipeline import BlockBundle, EventTables
@@ -57,6 +58,14 @@ _PLOT_KWARG_KEYS = (
 )
 
 _DEFAULTS: dict[str, dict[str, Any]] = {
+    "figure_2b": {
+        "start_s": 0.0,
+        "end_s": 8.0,
+        "traces": ["center_x", "center_y"],
+        "figsize": (2.3, 1.8),
+        "std_multiplier": 3,
+        "with_state": False,
+    },
     "figure_3a": {
         "start_s": 210.0,
         "end_s": 240.0,
@@ -84,6 +93,9 @@ _DEFAULTS: dict[str, dict[str, Any]] = {
         "plot_state_y": 20,
         "x_zero_origin": True,
         "pupil_ticks": [1.5, 2.0, 2.5],
+        "min_active_ms": 5000.0,
+        "min_quiet_ms": 5000.0,
+        "gap_bridge_ms": 3000.0,
     },
 }
 
@@ -158,6 +170,22 @@ def _head_movement_ms(bundle: BlockBundle) -> np.ndarray:
         return np.array([], dtype=float)
 
 
+def _behavior_state_for_plot(spec, cfg: dict[str, Any], *, smooth_state: bool) -> pd.DataFrame | None:
+    if not bool(cfg.get("with_state", False)) or not has_behavior_state(spec):
+        return None
+    state_df = read_behavior_state(spec)
+    if state_df is None or state_df.empty:
+        return None
+    if not smooth_state:
+        return state_df
+    return smooth_behavior_state(
+        state_df,
+        min_active_ms=float(cfg.get("min_active_ms", 5000.0)),
+        min_quiet_ms=float(cfg.get("min_quiet_ms", 5000.0)),
+        gap_bridge_ms=float(cfg.get("gap_bridge_ms", 3000.0)),
+    )
+
+
 def _export_vignette(
     tables: EventTables,
     out_dir: Path,
@@ -206,31 +234,49 @@ def _export_vignette(
         else np.array([], dtype=float)
     )
 
-    behavior_state_df = None
-    if bool(cfg.get("with_state", False)) and has_behavior_state(spec):
-        behavior_state_df = read_behavior_state(spec)
-
     head_ms = _head_movement_ms(bundle) if "saccade_frequency" in traces else np.array([], dtype=float)
 
     plot_kwargs = {k: cfg[k] for k in _PLOT_KWARG_KEYS if k in cfg}
 
-    out_pdf = figures_dir / f"{figure_name}.pdf"
-    plot_zoomed_in_with_head_rate(
-        start_time,
-        end_time,
-        traces=traces,
-        left_df=left_df,
-        right_df=right_df,
-        left_ms=left_ms,
-        right_ms=right_ms,
-        head_movements_ms=head_ms,
-        behavior_state_df=behavior_state_df,
-        behavior_time_unit="ms",
-        figure_size=tuple(cfg.get("figsize", (2.3, 1.8))),
-        export_path=out_pdf,
-        show=show,
-        **plot_kwargs,
-    )
+    def _draw(pdf_name: str, state_df: pd.DataFrame | None) -> Path:
+        out_pdf = figures_dir / pdf_name
+        plot_zoomed_in_with_head_rate(
+            start_time,
+            end_time,
+            traces=traces,
+            left_df=left_df,
+            right_df=right_df,
+            left_ms=left_ms,
+            right_ms=right_ms,
+            head_movements_ms=head_ms,
+            behavior_state_df=state_df,
+            behavior_time_unit="ms",
+            figure_size=tuple(cfg.get("figsize", (2.3, 1.8))),
+            export_path=out_pdf,
+            show=show,
+            **plot_kwargs,
+        )
+        return out_pdf
+
+    written: dict[str, Path] = {}
+    state_used: dict[str, int | None] = {}
+    if figure_name == "figure_3c" and bool(cfg.get("with_state", False)):
+        raw_state = _behavior_state_for_plot(spec, cfg, smooth_state=False)
+        sm_state = _behavior_state_for_plot(spec, cfg, smooth_state=True)
+        written["figure_3c_raw.pdf"] = _draw("figure_3c_raw.pdf", raw_state)
+        written["figure_3c_smoothed.pdf"] = _draw("figure_3c_smoothed.pdf", sm_state)
+        # Main catalog name: smoothed strip (overwrites the previous raw-only PDF).
+        written["figure_3c.pdf"] = _draw("figure_3c.pdf", sm_state)
+        state_used = {
+            "n_raw": None if raw_state is None else int(len(raw_state)),
+            "n_smoothed": None if sm_state is None else int(len(sm_state)),
+        }
+    else:
+        behavior_state_df = _behavior_state_for_plot(spec, cfg, smooth_state=False)
+        written[f"{figure_name}.pdf"] = _draw(f"{figure_name}.pdf", behavior_state_df)
+        state_used = {
+            "n_raw": None if behavior_state_df is None else int(len(behavior_state_df)),
+        }
 
     pkl = metadata_dir / f"{figure_name}_data.pickle"
     write_pickle_with_meta(
@@ -241,6 +287,7 @@ def _export_vignette(
             "end_s": end_time,
             "traces": traces,
             "params": cfg,
+            "state_variants": state_used,
         },
         pkl,
         meta={
@@ -248,11 +295,81 @@ def _export_vignette(
             "params": cfg,
             "figure": figure_name,
             "block_key": key,
+            **state_used,
         },
         entrypoint=f"eye_tracking_system_tools.analysis.figures_3a_3c_vignettes.export_{figure_name}",
     )
+    written[f"{figure_name}_data.pickle"] = pkl
+    return written
 
-    return {f"{figure_name}.pdf": out_pdf, f"{figure_name}_data.pickle": pkl}
+
+def export_figure_2b(
+    tables: EventTables,
+    out_dir: Path,
+    *,
+    show: bool = False,
+    block_key: str | None = None,
+    start_s: float | None = None,
+    end_s: float | None = None,
+) -> dict[str, Path]:
+    """Fig 2b time traces (φ/θ). Anatomical N/T/D/V live on the example trajectories."""
+    return _export_vignette(
+        tables, out_dir, figure_name="figure_2b", show=show,
+        block_key=block_key, start_s=start_s, end_s=end_s,
+    )
+
+
+def export_figure_2b_examples(
+    tables: EventTables,
+    out_dir: Path,
+    *,
+    show: bool = False,
+    pickle_path: Path | str | None = None,
+) -> dict[str, Path]:
+    """Replot archived Fig 2b saccade-example trajectories with N/T/D/V labels."""
+    import pickle
+
+    from eye_tracking_system_tools.figures.plotting_functions import plot_angle_mapping
+
+    figures_dir, metadata_dir = resolve_figure_dirs(out_dir)
+    if pickle_path is None:
+        repo = Path(__file__).resolve().parents[3]
+        pickle_path = (
+            repo
+            / "src"
+            / "eye_tracking_system_tools"
+            / "figures"
+            / "reproduction"
+            / "main_figures"
+            / "Fig_2_b"
+            / "saccade_examples.pickle"
+        )
+    pickle_path = Path(pickle_path)
+    written: dict[str, Path] = {}
+    if not pickle_path.is_file():
+        logger.warning("Fig 2b examples pickle missing: %s", pickle_path)
+        return written
+    with open(pickle_path, "rb") as f:
+        data = pickle.load(f)
+    examples = data.get("saccade_examples", [])
+    for i, example in enumerate(examples):
+        label = str(example.get("label", f"example_{i + 1}"))
+        start_time = example.get("start_time")
+        end_time = example.get("end_time")
+        left_df = pd.DataFrame(example.get("left_eye_data", {}))
+        right_df = pd.DataFrame(example.get("right_eye_data", {}))
+        out_pdf = figures_dir / f"saccade_example_{label}.pdf"
+        plot_angle_mapping(
+            start_time,
+            end_time,
+            left_df=left_df,
+            right_df=right_df,
+            figure_size=tuple(example.get("figure_size", (2.7, 1.7))),
+            export_path=out_pdf,
+            xy_span=example.get("xy_span", 10),
+        )
+        written[out_pdf.name] = out_pdf
+    return written
 
 
 def export_figure_3a(
@@ -296,7 +413,7 @@ def export_figure_3c(
     start_s: float | None = None,
     end_s: float | None = None,
 ) -> dict[str, Path]:
-    """Fig 3c: φ/θ/pupil/saccade-rate vignette with behavior-state strip (200–415 s)."""
+    """Fig 3c: φ/θ/pupil/saccade-rate vignette with raw and smoothed state strips."""
     return _export_vignette(
         tables, out_dir, figure_name="figure_3c", show=show,
         block_key=block_key, start_s=start_s, end_s=end_s,

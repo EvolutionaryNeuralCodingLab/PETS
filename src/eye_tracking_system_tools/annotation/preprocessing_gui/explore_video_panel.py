@@ -31,6 +31,46 @@ def _ellipse_frame_col(df: pd.DataFrame | None, preferred: str) -> str:
     return preferred
 
 
+def saccade_intervals_by_eye(
+    events: pd.DataFrame | None,
+    *,
+    eye_col: str = "eye",
+    on_col: str = "saccade_on_ms",
+    off_col: str = "saccade_off_ms",
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return ``(left, right)`` interval arrays shaped ``(N, 2)`` of ``[on, off]`` ms."""
+    empty = np.zeros((0, 2), dtype=float)
+    if events is None or events.empty:
+        return empty, empty
+    if on_col not in events.columns or off_col not in events.columns:
+        return empty, empty
+
+    def _for_eye(token: str) -> np.ndarray:
+        if eye_col in events.columns:
+            mask = events[eye_col].astype(str).str.upper().str.startswith(token)
+            sub = events.loc[mask]
+        else:
+            sub = events
+        if sub.empty:
+            return empty
+        on = sub[on_col].to_numpy(dtype=float)
+        off = sub[off_col].to_numpy(dtype=float)
+        ok = np.isfinite(on) & np.isfinite(off)
+        if not np.any(ok):
+            return empty
+        return np.column_stack([on[ok], off[ok]])
+
+    return _for_eye("L"), _for_eye("R")
+
+
+def ms_in_intervals(ms: float, intervals: np.ndarray) -> bool:
+    """True when ``ms`` falls inside any ``[on, off]`` row of ``intervals``."""
+    if intervals is None or len(intervals) == 0:
+        return False
+    t = float(ms)
+    return bool(np.any((intervals[:, 0] <= t) & (t <= intervals[:, 1])))
+
+
 class ExploreVideoPanel(QtWidgets.QWidget):
     """Three-way synced video with Annotator-style transport."""
 
@@ -47,6 +87,9 @@ class ExploreVideoPanel(QtWidgets.QWidget):
         self._original_re: list[Path] = []
         self._last_frame_ids: tuple[int | None, int | None, int | None] | None = None
         self._playhead_emit_counter = 0
+        self._saccade_l = np.zeros((0, 2), dtype=float)
+        self._saccade_r = np.zeros((0, 2), dtype=float)
+        self._last_saccade_flags: tuple[bool, bool] | None = None
 
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -153,6 +196,11 @@ class ExploreVideoPanel(QtWidgets.QWidget):
         self._original_arena = []
         self._original_le = []
         self._original_re = []
+        self._saccade_l = np.zeros((0, 2), dtype=float)
+        self._saccade_r = np.zeros((0, 2), dtype=float)
+        self._last_saccade_flags = None
+        self._left_panel.set_saccade_active(False)
+        self._right_panel.set_saccade_active(False)
         self._arena_panel.set_video(None)
         self._left_panel.set_video(None)
         self._right_panel.set_video(None)
@@ -161,6 +209,20 @@ class ExploreVideoPanel(QtWidgets.QWidget):
         self._hud.setText("—")
         self._placeholder.show()
         self._set_enabled(False)
+
+    def set_saccade_events(self, events: pd.DataFrame | None) -> None:
+        """Drive per-eye green-circle overlays from detected/finalized events."""
+        self._saccade_l, self._saccade_r = saccade_intervals_by_eye(events)
+        self._last_saccade_flags = None
+        self._last_frame_ids = None
+        if self._session is not None:
+            self._update_frame()
+        else:
+            self._left_panel.set_saccade_active(False)
+            self._right_panel.set_saccade_active(False)
+
+    def clear_saccade_events(self) -> None:
+        self.set_saccade_events(None)
 
     def load_block(
         self,
@@ -287,6 +349,7 @@ class ExploreVideoPanel(QtWidgets.QWidget):
 
     def _on_display_toggles(self, *_args) -> None:
         self._apply_display_options()
+        self._last_frame_ids = None
         self._update_frame()
 
     def _set_enabled(self, enabled: bool) -> None:
@@ -389,6 +452,7 @@ class ExploreVideoPanel(QtWidgets.QWidget):
         self._arena_index = index
         if self._session and 0 <= index < len(self._session.arena_videos):
             self._arena_panel.set_video(self._session.arena_videos[index])
+            self._last_frame_ids = None
             self._update_frame()
 
     def _on_index(self, index: int) -> None:
@@ -434,11 +498,26 @@ class ExploreVideoPanel(QtWidgets.QWidget):
         ms = self._session.ms_at(i)
         self._hud.setText(self._format_hud(i, ms, arena_f, le_f, re_f))
 
+        # Compute flags before the early-return so a flag flip forces a repaint
+        # even when OpenCV frame IDs are sticky across timeline ticks.
+        left_on = ms_in_intervals(ms, self._saccade_l)
+        right_on = ms_in_intervals(ms, self._saccade_r)
+        flags = (left_on, right_on)
+        flags_changed = flags != self._last_saccade_flags
+        if flags_changed:
+            self._left_panel.set_saccade_active(left_on)
+            self._right_panel.set_saccade_active(right_on)
+            self._last_saccade_flags = flags
+
         frame_ids = (arena_f, le_f, re_f)
         # During playback the timer can fire faster than frame IDs change; skip
         # the redundant decode. When paused/scrubbing always repaint so display
-        # toggles and resizes take effect.
-        if self._playback.playing and frame_ids == self._last_frame_ids:
+        # toggles and resizes take effect. Also repaint when saccade flags flip.
+        if (
+            self._playback.playing
+            and frame_ids == self._last_frame_ids
+            and not flags_changed
+        ):
             return
         self._last_frame_ids = frame_ids
         self._arena_panel.show_frame(arena_f, f"frame {arena_f}")

@@ -1,109 +1,108 @@
 # Jitter mount comparison registry.
-# NOTE: Absolute block_path values are machine-local (lab mount). Edit every
-# path before running on a different machine or mount layout.
 # Each block_path must already contain
 #   <block_path>/analysis/jitter_report_dict.pkl
 # (from the preprocessing GUI jitter step — this tool never recomputes from video).
 #
 # mount_type:
-#   modular | rigid  -> pooled into figures/jitter_modular_vs_rigid.pdf
-#   mouse            -> dedicated figures/jitter_mouse.pdf
+#   modular | rigid  -> figures/jitter_modular_vs_rigid.pdf (overlay)
+#                      + figures/jitter_modular.pdf / jitter_rigid.pdf (gray)
+#   mouse | turtle   -> figures/jitter_mouse.pdf / jitter_turtle.pdf (gray)
 #
 # Edit by hand, or populate with the notebook browser:
 #   development/jitter_mount_pipeline.ipynb
 blocks:
 - animal: PV_106
-  block_path: /Volumes/Data-2/Nimrod/experiments/PV_106/2025_08_06/block_008
+  block_path: /Volumes/Data-1/Nimrod/experiments/PV_106/2025_08_06/block_008
   mount_type: rigid
 - animal: PV_106
-  block_path: /Volumes/Data-2/Nimrod/experiments/PV_106/2025_08_06/block_009
+  block_path: /Volumes/Data-1/Nimrod/experiments/PV_106/2025_08_06/block_009
   mount_type: rigid
 - animal: PV_106
-  block_path: /Volumes/Data-2/Nimrod/experiments/PV_106/2025_08_06/block_010
+  block_path: /Volumes/Data-1/Nimrod/experiments/PV_106/2025_08_06/block_010
   mount_type: rigid
 - animal: PV_106
-  block_path: /Volumes/Data-2/Nimrod/experiments/PV_106/2025_08_06/block_011
+  block_path: /Volumes/Data-1/Nimrod/experiments/PV_106/2025_08_06/block_011
   mount_type: rigid
 - animal: PV_106
-  block_path: /Volumes/Data-2/Nimrod/experiments/PV_106/2025_08_06/block_012
+  block_path: /Volumes/Data-1/Nimrod/experiments/PV_106/2025_08_06/block_012
   mount_type: rigid
 - animal: PV_106
-  block_path: /Volumes/Data-2/Nimrod/experiments/PV_106/2025_08_06/block_013
+  block_path: /Volumes/Data-1/Nimrod/experiments/PV_106/2025_08_06/block_013
   mount_type: rigid
 - animal: PV_106
-  block_path: /Volumes/Data-2/Nimrod/experiments/PV_106/2025_09_04/block_014
+  block_path: /Volumes/Data-1/Nimrod/experiments/PV_106/2025_09_04/block_014
   mount_type: rigid
 - animal: PV_106
-  block_path: /Volumes/Data-2/Nimrod/experiments/PV_106/2025_09_04/block_015
+  block_path: /Volumes/Data-1/Nimrod/experiments/PV_106/2025_09_04/block_015
   mount_type: rigid
 - animal: PV_106
-  block_path: /Volumes/Data-2/Nimrod/experiments/PV_106/2025_09_04/block_016
+  block_path: /Volumes/Data-1/Nimrod/experiments/PV_106/2025_09_04/block_016
   mount_type: rigid
 - animal: PV_126
-  block_path: /Volumes/Data-2/Nimrod/experiments/PV_126/2024_07_18/block_006
+  block_path: /Volumes/Data-1/Nimrod/experiments/PV_126/2024_07_18/block_006
   mount_type: rigid
 - animal: PV_126
-  block_path: /Volumes/Data-2/Nimrod/experiments/PV_126/2024_07_18/block_007
+  block_path: /Volumes/Data-1/Nimrod/experiments/PV_126/2024_07_18/block_007
   mount_type: rigid
 - animal: PV_126
-  block_path: /Volumes/Data-2/Nimrod/experiments/PV_126/2024_07_18/block_008
+  block_path: /Volumes/Data-1/Nimrod/experiments/PV_126/2024_07_18/block_008
   mount_type: rigid
 - animal: PV_126
-  block_path: /Volumes/Data-2/Nimrod/experiments/PV_126/2024_07_18/block_009
+  block_path: /Volumes/Data-1/Nimrod/experiments/PV_126/2024_07_18/block_009
   mount_type: rigid
 - animal: PV_126
-  block_path: /Volumes/Data-2/Nimrod/experiments/PV_126/2024_07_18/block_010
+  block_path: /Volumes/Data-1/Nimrod/experiments/PV_126/2024_07_18/block_010
   mount_type: rigid
 - animal: PV_126
-  block_path: /Volumes/Data-2/Nimrod/experiments/PV_126/2024_08_13/block_011
+  block_path: /Volumes/Data-1/Nimrod/experiments/PV_126/2024_08_13/block_011
   mount_type: rigid
 - animal: PV_126
-  block_path: /Volumes/Data-2/Nimrod/experiments/PV_126/2024_08_13/block_012
+  block_path: /Volumes/Data-1/Nimrod/experiments/PV_126/2024_08_13/block_012
   mount_type: rigid
 - animal: PV_126
-  block_path: /Volumes/Data-2/Nimrod/experiments/PV_126/2024_08_13/block_013
+  block_path: /Volumes/Data-1/Nimrod/experiments/PV_126/2024_08_13/block_013
   mount_type: rigid
 - animal: PV_126
-  block_path: /Volumes/Data-2/Nimrod/experiments/PV_126/2024_08_13/block_014
+  block_path: /Volumes/Data-1/Nimrod/experiments/PV_126/2024_08_13/block_014
   mount_type: rigid
 - animal: PV_126
-  block_path: /Volumes/Data-2/Nimrod/experiments/PV_126/2024_08_13/block_015
+  block_path: /Volumes/Data-1/Nimrod/experiments/PV_126/2024_08_13/block_015
   mount_type: rigid
 - animal: PV_143
-  block_path: /Volumes/Data-2/Nimrod/experiments/PV_143/2025_08_25/block_001
+  block_path: /Volumes/Data-1/Nimrod/experiments/PV_143/2025_08_25/block_001
   mount_type: rigid
 - animal: PV_143
-  block_path: /Volumes/Data-2/Nimrod/experiments/PV_143/2025_08_25/block_002
+  block_path: /Volumes/Data-1/Nimrod/experiments/PV_143/2025_08_25/block_002
   mount_type: rigid
 - animal: PV_143
-  block_path: /Volumes/Data-2/Nimrod/experiments/PV_143/2025_08_25/block_003
+  block_path: /Volumes/Data-1/Nimrod/experiments/PV_143/2025_08_25/block_003
   mount_type: rigid
 - animal: PV_143
-  block_path: /Volumes/Data-2/Nimrod/experiments/PV_143/2025_08_25/block_004
+  block_path: /Volumes/Data-1/Nimrod/experiments/PV_143/2025_08_25/block_004
   mount_type: rigid
 - animal: PV_24
-  block_path: /Volumes/Data-2/Nimrod/experiments/PV_24/2021_12_27/block_012
+  block_path: /Volumes/Data-1/Nimrod/experiments/PV_24/2021_12_27/block_012
   mount_type: modular
 - animal: PV_24
-  block_path: /Volumes/Data-2/Nimrod/experiments/PV_24/2021_12_27/block_013
+  block_path: /Volumes/Data-1/Nimrod/experiments/PV_24/2021_12_27/block_013
   mount_type: modular
 - animal: PV_24
-  block_path: /Volumes/Data-2/Nimrod/experiments/PV_24/2021_12_30/block_034
+  block_path: /Volumes/Data-1/Nimrod/experiments/PV_24/2021_12_30/block_034
   mount_type: modular
 - animal: PV_62
-  block_path: /Volumes/Data-2/Nimrod/experiments/PV_62/2023_04_27/block_023
+  block_path: /Volumes/Data-1/Nimrod/experiments/PV_62/2023_04_27/block_023
   mount_type: modular
 - animal: PV_62
-  block_path: /Volumes/Data-2/Nimrod/experiments/PV_62/2023_04_27/block_024
+  block_path: /Volumes/Data-1/Nimrod/experiments/PV_62/2023_04_27/block_024
   mount_type: modular
 - animal: PV_62
-  block_path: /Volumes/Data-2/Nimrod/experiments/PV_62/2023_04_27/block_025
+  block_path: /Volumes/Data-1/Nimrod/experiments/PV_62/2023_04_27/block_025
   mount_type: modular
 - animal: PV_62
-  block_path: /Volumes/Data-2/Nimrod/experiments/PV_62/2023_04_27/block_026
+  block_path: /Volumes/Data-1/Nimrod/experiments/PV_62/2023_04_27/block_026
   mount_type: modular
 - animal: PV_62
-  block_path: /Volumes/Data-2/Nimrod/experiments/PV_62/2023_04_27/block_027
+  block_path: /Volumes/Data-1/Nimrod/experiments/PV_62/2023_04_27/block_027
   mount_type: modular
 - animal: M_002
   block_path: /Volumes/Data/Nimrod/experiments/M_002/2026_07_28/block_012
@@ -156,3 +155,6 @@ blocks:
 - animal: PV_228
   block_path: /Volumes/Data/Nimrod/experiments/PV_228/2026_06_17/block_020
   mount_type: rigid
+- animal: T_18
+  block_path: /Volumes/Data/Nimrod/experiments/T_18/block_001
+  mount_type: turtle

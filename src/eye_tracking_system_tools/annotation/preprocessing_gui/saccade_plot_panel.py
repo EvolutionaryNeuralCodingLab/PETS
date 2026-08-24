@@ -19,7 +19,10 @@ THR_COLOR = "#222222"
 RAW_BRUSH = pg.mkBrush(200, 200, 200, 60)
 CONCURRENT_BRUSH = pg.mkBrush(46, 139, 87, 80)
 MONOCULAR_BRUSH = pg.mkBrush(210, 105, 30, 70)
+BAD_EVENT_BRUSH = pg.mkBrush(176, 48, 48, 110)
+BAD_SPAN_BRUSH = pg.mkBrush(176, 48, 48, 35)
 ZOOM_BRUSH = pg.mkBrush(100, 100, 255, 40)
+BAD_SELECT_BRUSH = pg.mkBrush(176, 48, 48, 50)
 MAX_DRAW = 12_000
 DEFAULT_WINDOW_MS = 100_000.0  # 100 seconds
 
@@ -44,6 +47,11 @@ class SaccadeVelocityPanel(QtWidgets.QWidget):
     threshold_changed = QtCore.pyqtSignal(float)
     mode_changed = QtCore.pyqtSignal(str)  # "deg" | "px"
     window_nav_requested = QtCore.pyqtSignal(str)  # "prev" | "next" | "fit"
+    time_selected = QtCore.pyqtSignal(float)  # absolute ms — seek video
+    time_preview = QtCore.pyqtSignal(float)  # absolute ms — playhead drag
+    bad_span_tag_requested = QtCore.pyqtSignal(float, float)  # abs ms t0, t1
+    bad_span_untag_requested = QtCore.pyqtSignal(float, float)
+    bad_spans_clear_requested = QtCore.pyqtSignal()
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
@@ -54,11 +62,13 @@ class SaccadeVelocityPanel(QtWidgets.QWidget):
         self._spd_l = np.array([])
         self._spd_r = np.array([])
         self._t0 = 0.0  # absolute ms origin of current window (for overlays)
+        self._playhead_ms = 0.0  # absolute ms
         self._updating = False
         self._raw_regions: list[pg.LinearRegionItem] = []
         self._event_regions: list[pg.LinearRegionItem] = []
-        self._zoom_region: pg.LinearRegionItem | None = None
-        self._zoom_mode = False
+        self._bad_span_regions: list[pg.LinearRegionItem] = []
+        self._select_region: pg.LinearRegionItem | None = None
+        self._region_mode: str | None = None  # None | "zoom" | "bad"
 
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -108,6 +118,37 @@ class SaccadeVelocityPanel(QtWidgets.QWidget):
             toolbar.addWidget(b)
         layout.addLayout(toolbar)
 
+        bad_bar = QtWidgets.QHBoxLayout()
+        self._btn_mark_bad = QtWidgets.QPushButton("Mark bad region")
+        self._btn_mark_bad.setCheckable(True)
+        self._btn_mark_bad.setToolTip(
+            "Drag a time region, then Tag as bad to set bad_detections=True "
+            "on overlapping saccades (downstream: query bad_detections==False)."
+        )
+        self._btn_tag_bad = QtWidgets.QPushButton("Tag as bad")
+        self._btn_tag_bad.setEnabled(False)
+        self._btn_tag_bad.setToolTip(
+            "Flag saccades overlapping the selected region as bad_detections"
+        )
+        self._btn_untag_bad = QtWidgets.QPushButton("Untag region")
+        self._btn_untag_bad.setEnabled(False)
+        self._btn_untag_bad.setToolTip(
+            "Clear bad_detections for saccades overlapping the selected region"
+        )
+        self._btn_clear_bad = QtWidgets.QPushButton("Clear all bad tags")
+        self._btn_clear_bad.setToolTip("Set bad_detections=False on every event")
+        self._bad_label = QtWidgets.QLabel("bad_detections: 0")
+        for b in (
+            self._btn_mark_bad,
+            self._btn_tag_bad,
+            self._btn_untag_bad,
+            self._btn_clear_bad,
+        ):
+            bad_bar.addWidget(b)
+        bad_bar.addWidget(self._bad_label)
+        bad_bar.addStretch(1)
+        layout.addLayout(bad_bar)
+
         self._plot = pg.PlotWidget()
         self._plot.setLabel("bottom", "Time (ms)")
         self._plot.setLabel("left", "Speed (deg/frame)")
@@ -119,8 +160,8 @@ class SaccadeVelocityPanel(QtWidgets.QWidget):
         vb = self._plot.getViewBox()
         vb.setMouseMode(pg.ViewBox.PanMode)
         self._plot.setToolTip(
-            "Scroll to zoom · drag to pan · middle-drag for rect zoom · "
-            "or use Zoom to region"
+            "Scroll to zoom · drag to pan · click / drag vertical playhead to seek · "
+            "middle-drag for rect zoom · or use Zoom to region"
         )
         layout.addWidget(self._plot, stretch=1)
 
@@ -135,13 +176,30 @@ class SaccadeVelocityPanel(QtWidgets.QWidget):
             labelOpts={"position": 0.95, "color": THR_COLOR},
         )
         self._plot.addItem(self._thr_line)
+        self._playhead_line = pg.InfiniteLine(
+            pos=0.0,
+            angle=90,
+            movable=True,
+            pen=pg.mkPen("#333333", width=2),
+        )
+        self._playhead_line.setZValue(20)
+        self._plot.addItem(self._playhead_line)
 
         self._rb_deg.toggled.connect(self._on_mode_toggled)
         self._thr_line.sigPositionChanged.connect(self._on_thr_dragged)
+        self._playhead_line.sigPositionChanged.connect(self._on_playhead_dragged)
+        self._playhead_line.sigPositionChangeFinished.connect(
+            self._on_playhead_drag_finished
+        )
+        self._plot.scene().sigMouseClicked.connect(self._on_plot_clicked)
         self._btn_autoscale.clicked.connect(self._autoscale_y)
         self._btn_fit.clicked.connect(self._fit_window)
         self._btn_zoom_region.toggled.connect(self._on_zoom_region_toggled)
         self._btn_apply_zoom.clicked.connect(self._apply_zoom_region)
+        self._btn_mark_bad.toggled.connect(self._on_mark_bad_toggled)
+        self._btn_tag_bad.clicked.connect(self._emit_tag_bad)
+        self._btn_untag_bad.clicked.connect(self._emit_untag_bad)
+        self._btn_clear_bad.clicked.connect(self.bad_spans_clear_requested.emit)
         self._btn_prev.clicked.connect(lambda: self.window_nav_requested.emit("prev"))
         self._btn_next.clicked.connect(lambda: self.window_nav_requested.emit("next"))
 
@@ -152,6 +210,18 @@ class SaccadeVelocityPanel(QtWidgets.QWidget):
     @property
     def threshold(self) -> float:
         return float(self._threshold)
+
+    def playhead_ms(self) -> float:
+        return float(self._playhead_ms)
+
+    def set_playhead_ms(self, ms: float, *, emit: bool = False) -> None:
+        """Set playhead in absolute ms; X position is relative to the window origin."""
+        self._playhead_ms = float(ms)
+        self._updating = True
+        self._playhead_line.setPos(self._playhead_ms - self._t0)
+        self._updating = False
+        if emit:
+            self.time_selected.emit(self._playhead_ms)
 
     def set_nav_enabled(self, *, prev: bool, next_: bool) -> None:
         self._btn_prev.setEnabled(prev)
@@ -208,12 +278,20 @@ class SaccadeVelocityPanel(QtWidgets.QWidget):
             t0_candidates = [t[0] for t in (self._t_l, self._t_r) if len(t)]
             self._t0 = float(min(t0_candidates)) if t0_candidates else 0.0
 
-        self._clear_zoom_region()
+        self._clear_select_region()
+        self._btn_zoom_region.blockSignals(True)
+        self._btn_mark_bad.blockSignals(True)
         self._btn_zoom_region.setChecked(False)
+        self._btn_mark_bad.setChecked(False)
+        self._btn_zoom_region.blockSignals(False)
+        self._btn_mark_bad.blockSignals(False)
         self._redraw_curves()
         self._fit_window()
         self.clear_event_overlays()
         self.clear_raw_overlays()
+        self.clear_bad_span_overlays()
+        # Keep absolute playhead; re-map relative X after window origin changes.
+        self.set_playhead_ms(self._playhead_ms, emit=False)
 
     def _redraw_curves(self) -> None:
         if len(self._t_l):
@@ -252,38 +330,89 @@ class SaccadeVelocityPanel(QtWidgets.QWidget):
         self._autoscale_y()
 
     def _on_zoom_region_toggled(self, checked: bool) -> None:
-        self._zoom_mode = checked
-        self._btn_apply_zoom.setEnabled(checked)
-        if not checked:
-            self._clear_zoom_region()
+        if checked:
+            self._btn_mark_bad.blockSignals(True)
+            self._btn_mark_bad.setChecked(False)
+            self._btn_mark_bad.blockSignals(False)
+            self._enter_select_region("zoom")
             return
+        if self._region_mode == "zoom":
+            self._clear_select_region()
+
+    def _on_mark_bad_toggled(self, checked: bool) -> None:
+        if checked:
+            self._btn_zoom_region.blockSignals(True)
+            self._btn_zoom_region.setChecked(False)
+            self._btn_zoom_region.blockSignals(False)
+            self._enter_select_region("bad")
+            return
+        if self._region_mode == "bad":
+            self._clear_select_region()
+
+    def _enter_select_region(self, mode: str) -> None:
+        self._clear_select_region()
+        self._region_mode = mode
         x0, x1 = self._plot.viewRange()[0]
         mid = 0.5 * (x0 + x1)
         half = 0.15 * max(x1 - x0, 1.0)
-        self._zoom_region = pg.LinearRegionItem(
+        brush = ZOOM_BRUSH if mode == "zoom" else BAD_SELECT_BRUSH
+        self._select_region = pg.LinearRegionItem(
             values=(mid - half, mid + half),
             movable=True,
-            brush=ZOOM_BRUSH,
+            brush=brush,
         )
-        self._zoom_region.setZValue(10)
-        self._plot.addItem(self._zoom_region)
+        self._select_region.setZValue(10)
+        self._plot.addItem(self._select_region)
+        self._btn_apply_zoom.setEnabled(mode == "zoom")
+        self._btn_tag_bad.setEnabled(mode == "bad")
+        self._btn_untag_bad.setEnabled(mode == "bad")
 
-    def _clear_zoom_region(self) -> None:
-        if self._zoom_region is not None:
-            self._plot.removeItem(self._zoom_region)
-            self._zoom_region = None
+    def _clear_select_region(self) -> None:
+        if self._select_region is not None:
+            self._plot.removeItem(self._select_region)
+            self._select_region = None
+        self._region_mode = None
         self._btn_apply_zoom.setEnabled(False)
+        self._btn_tag_bad.setEnabled(False)
+        self._btn_untag_bad.setEnabled(False)
 
-    def _apply_zoom_region(self) -> None:
-        if self._zoom_region is None:
-            return
-        x0, x1 = self._zoom_region.getRegion()
+    def _selected_abs_span(self) -> tuple[float, float] | None:
+        if self._select_region is None:
+            return None
+        x0, x1 = self._select_region.getRegion()
         if x1 < x0:
             x0, x1 = x1, x0
         if x1 - x0 < 1.0:
+            return None
+        return float(x0) + self._t0, float(x1) + self._t0
+
+    def _apply_zoom_region(self) -> None:
+        span = self._selected_abs_span()
+        if span is None:
             return
-        self._plot.setXRange(float(x0), float(x1), padding=0)
+        t0, t1 = span
+        self._plot.setXRange(t0 - self._t0, t1 - self._t0, padding=0)
         self._btn_zoom_region.setChecked(False)
+
+    def _emit_tag_bad(self) -> None:
+        span = self._selected_abs_span()
+        if span is None:
+            return
+        self.bad_span_tag_requested.emit(*span)
+
+    def _emit_untag_bad(self) -> None:
+        span = self._selected_abs_span()
+        if span is None:
+            return
+        self.bad_span_untag_requested.emit(*span)
+
+    def set_bad_count(self, n_bad: int, n_total: int | None = None) -> None:
+        if n_total is None:
+            self._bad_label.setText(f"bad_detections: {int(n_bad)}")
+        else:
+            self._bad_label.setText(
+                f"bad_detections: {int(n_bad)} / {int(n_total)}"
+            )
 
     def clear_raw_overlays(self) -> None:
         for r in self._raw_regions:
@@ -294,6 +423,31 @@ class SaccadeVelocityPanel(QtWidgets.QWidget):
         for r in self._event_regions:
             self._plot.removeItem(r)
         self._event_regions.clear()
+
+    def clear_bad_span_overlays(self) -> None:
+        for r in self._bad_span_regions:
+            self._plot.removeItem(r)
+        self._bad_span_regions.clear()
+
+    def set_bad_spans(self, spans: list[tuple[float, float]]) -> None:
+        """Draw persistent bad time sections (absolute ms)."""
+        self.clear_bad_span_overlays()
+        t_end = self._t0
+        for t in (self._t_l, self._t_r):
+            if len(t):
+                t_end = max(t_end, float(np.nanmax(t)))
+        for on, off in spans or []:
+            if off < self._t0 or on > t_end:
+                continue
+            region = pg.LinearRegionItem(
+                values=(max(on, self._t0) - self._t0, min(off, t_end) - self._t0),
+                movable=False,
+                brush=BAD_SPAN_BRUSH,
+                pen=pg.mkPen(None),
+            )
+            region.setZValue(-15)
+            self._plot.addItem(region)
+            self._bad_span_regions.append(region)
 
     def set_raw_runs(self, runs: list[tuple[float, float]]) -> None:
         """``runs`` are absolute ms onsets/offsets; only those overlapping the window are drawn."""
@@ -342,8 +496,18 @@ class SaccadeVelocityPanel(QtWidgets.QWidget):
                 continue
             if off < self._t0 or on > t_end:
                 continue
-            conc = str(row[concurrency_col]) if concurrency_col in events.columns else "monocular"
-            brush = CONCURRENT_BRUSH if conc == "concurrent" else MONOCULAR_BRUSH
+            is_bad = False
+            if "bad_detections" in events.columns:
+                is_bad = bool(row["bad_detections"])
+            if is_bad:
+                brush = BAD_EVENT_BRUSH
+            else:
+                conc = (
+                    str(row[concurrency_col])
+                    if concurrency_col in events.columns
+                    else "monocular"
+                )
+                brush = CONCURRENT_BRUSH if conc == "concurrent" else MONOCULAR_BRUSH
             region = pg.LinearRegionItem(
                 values=(max(on, self._t0) - self._t0, min(off, t_end) - self._t0),
                 movable=False,
@@ -368,3 +532,25 @@ class SaccadeVelocityPanel(QtWidgets.QWidget):
             return
         self._threshold = float(self._thr_line.value())
         self.threshold_changed.emit(self._threshold)
+
+    def _on_playhead_dragged(self) -> None:
+        if self._updating:
+            return
+        rel = float(self._playhead_line.value())
+        self._playhead_ms = rel + self._t0
+        self.time_preview.emit(self._playhead_ms)
+
+    def _on_playhead_drag_finished(self) -> None:
+        if self._updating:
+            return
+        rel = float(self._playhead_line.value())
+        self.set_playhead_ms(rel + self._t0, emit=True)
+
+    def _on_plot_clicked(self, event) -> None:
+        if self._region_mode is not None:
+            return
+        if event.button() != QtCore.Qt.MouseButton.LeftButton:
+            return
+        if self._plot.sceneBoundingRect().contains(event.scenePos()):
+            mouse_point = self._plot.getViewBox().mapSceneToView(event.scenePos())
+            self.set_playhead_ms(float(mouse_point.x()) + self._t0, emit=True)

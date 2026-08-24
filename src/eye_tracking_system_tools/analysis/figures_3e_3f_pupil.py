@@ -31,7 +31,9 @@ from eye_tracking_system_tools.analysis.behavior_state import (
     has_behavior_state,
     normalize_label,
     read_behavior_state,
+    smooth_behavior_state,
 )
+from eye_tracking_system_tools.analysis.plot_bundle import begin_plot_bundle, finish_plot_bundle
 from eye_tracking_system_tools.analysis.colors import build_color_map
 from eye_tracking_system_tools.analysis.export_meta import write_pickle_with_meta
 from eye_tracking_system_tools.analysis.figure_display import show_and_close
@@ -70,6 +72,10 @@ def aggregate_pupil_mm_by_state(
     *,
     animals: Collection[str] | None = None,
     exclude_block_keys: Collection[str] | None = None,
+    smooth_state: bool = False,
+    min_active_ms: float = 5000.0,
+    min_quiet_ms: float = 5000.0,
+    gap_bridge_ms: float = 3000.0,
 ) -> dict[str, dict[str, list[float]]]:
     """Pool pupil diameter (mm, both eyes) into ``{animal: {'quiet': [...], 'active': [...]}}``.
 
@@ -82,9 +88,18 @@ def aggregate_pupil_mm_by_state(
     matching the notebook's slicing convention exactly (including the
     left/right asymmetry). Blocks without behavior state, pixel calibration,
     or loaded eye traces are skipped with a log message.
+
+    ``smooth_state`` applies :func:`smooth_behavior_state` in memory (does not
+    rewrite the CSV): A–B–A blips shorter than ``gap_bridge_ms`` are bridged,
+    then segments shorter than ``min_active_ms`` / ``min_quiet_ms`` are merged.
     """
     exclude = {str(k) for k in exclude_block_keys} if exclude_block_keys else set()
     animal_filter = {str(a) for a in animals} if animals is not None else None
+    smooth_kwargs = dict(
+        min_active_ms=float(min_active_ms),
+        min_quiet_ms=float(min_quiet_ms),
+        gap_bridge_ms=float(gap_bridge_ms),
+    )
 
     per_animal: dict[str, dict[str, list[float]]] = {}
     for bundle in tables.blocks:
@@ -99,6 +114,8 @@ def aggregate_pupil_mm_by_state(
         state_df = read_behavior_state(spec)
         if state_df is None or state_df.empty:
             continue
+        if smooth_state:
+            state_df = smooth_behavior_state(state_df, **smooth_kwargs)
 
         pix = read_pixel_size(spec.block_path)
         if pix is None:
@@ -191,7 +208,23 @@ def _compute_bin_edges(
     return bin_edges
 
 
-def export_figure_3e(tables: EventTables, out_dir: Path, *, show: bool = False) -> Path:
+def _state_smooth_kwargs(cfg: dict) -> dict[str, float]:
+    return {
+        "min_active_ms": float(cfg.get("min_active_ms", 5000.0)),
+        "min_quiet_ms": float(cfg.get("min_quiet_ms", 5000.0)),
+        "gap_bridge_ms": float(cfg.get("gap_bridge_ms", 3000.0)),
+    }
+
+
+def export_figure_3e(
+    tables: EventTables,
+    out_dir: Path,
+    *,
+    show: bool = False,
+    smooth_state: bool = False,
+    pdf_name: str = "figure_3e.pdf",
+    pickle_name: str = "figure_3e_data.pickle",
+) -> Path:
     """Quiet vs active pupil-diameter probability histogram (+ KDE overlay).
 
     Paper call site: ``animals: [PV_62]`` (block 038 is excluded implicitly —
@@ -206,6 +239,7 @@ def export_figure_3e(tables: EventTables, out_dir: Path, *, show: bool = False) 
     colors = {"quiet": cfg.get("color_quiet", "blue"), "active": cfg.get("color_active", "orange")}
     animals = cfg.get("animals")
     exclude_block_keys = cfg.get("exclude_block_keys") or cfg.get("exclude_blocks")
+    smooth_kwargs = _state_smooth_kwargs(cfg)
 
     # After per-figure block filtering, honour YAML ``animals`` only when those
     # animals are still present; otherwise fall back to the selected blocks.
@@ -222,7 +256,11 @@ def export_figure_3e(tables: EventTables, out_dir: Path, *, show: bool = False) 
     figures_dir, metadata_dir = resolve_figure_dirs(out_dir)
 
     per_animal = aggregate_pupil_mm_by_state(
-        tables, animals=animals, exclude_block_keys=exclude_block_keys
+        tables,
+        animals=animals,
+        exclude_block_keys=exclude_block_keys,
+        smooth_state=bool(smooth_state),
+        **smooth_kwargs,
     )
 
     combined: dict[str, list[float]] = {"quiet": [], "active": []}
@@ -282,11 +320,11 @@ def export_figure_3e(tables: EventTables, out_dir: Path, *, show: bool = False) 
             transform=ax.transAxes, ha="center", va="center", fontsize=8,
         )
 
-    out_pdf = figures_dir / "figure_3e.pdf"
+    out_pdf = figures_dir / pdf_name
     fig.savefig(out_pdf, format="pdf", bbox_inches="tight", dpi=300)
     show_and_close(fig, show)
 
-    pkl = metadata_dir / "figure_3e_data.pickle"
+    pkl = metadata_dir / pickle_name
     write_pickle_with_meta(
         {
             "figure_name": "figure_3e",
@@ -302,6 +340,9 @@ def export_figure_3e(tables: EventTables, out_dir: Path, *, show: bool = False) 
             "outlier_percentiles": outlier_percentiles,
             "colors": colors,
             "animals_filter": list(animals) if animals is not None else None,
+            "smooth_state": bool(smooth_state),
+            "smooth_params": smooth_kwargs if smooth_state else None,
+            "pdf_name": pdf_name,
         },
         pkl,
         meta={
@@ -309,13 +350,23 @@ def export_figure_3e(tables: EventTables, out_dir: Path, *, show: bool = False) 
             "params": cfg,
             "figure": "3e",
             "animals_used": sorted(per_animal.keys()),
+            "smooth_state": bool(smooth_state),
         },
         entrypoint="eye_tracking_system_tools.analysis.figures_3e_3f_pupil.export_figure_3e",
     )
     return pkl
 
 
-def export_figure_3f(tables: EventTables, out_dir: Path, *, show: bool = False) -> Path:
+def export_figure_3f(
+    tables: EventTables,
+    out_dir: Path,
+    *,
+    show: bool = False,
+    smooth_state: bool = False,
+    pdf_name: str = "figure_3f.pdf",
+    legend_name: str = "figure_3f_legend.pdf",
+    pickle_name: str = "figure_3f_data.pickle",
+) -> Path:
     """Per-animal z-scored (active - quiet) pupil-diameter probability difference."""
     cfg = dict(tables.params.get("figure_3f", {}))
     num_bins = int(cfg.get("num_bins", 15))
@@ -323,10 +374,13 @@ def export_figure_3f(tables: EventTables, out_dir: Path, *, show: bool = False) 
     outlier_percentiles = tuple(float(v) for v in cfg.get("outlier_percentiles", [0.1, 99.9]))
     figsize = tuple(float(v) for v in cfg.get("figsize", [2.2, 1.7]))
     exclude_animals = {str(a) for a in cfg.get("exclude_animals", ["PV_57"])}
+    smooth_kwargs = _state_smooth_kwargs(cfg)
 
     figures_dir, metadata_dir = resolve_figure_dirs(out_dir)
 
-    all_per_animal = aggregate_pupil_mm_by_state(tables, animals=None)
+    all_per_animal = aggregate_pupil_mm_by_state(
+        tables, animals=None, smooth_state=bool(smooth_state), **smooth_kwargs
+    )
     per_animal = {a: b for a, b in all_per_animal.items() if a not in exclude_animals}
 
     overall = np.asarray(
@@ -385,18 +439,18 @@ def export_figure_3f(tables: EventTables, out_dir: Path, *, show: bool = False) 
     ax.grid(False)
     fig.tight_layout()
 
-    out_pdf = figures_dir / "figure_3f.pdf"
+    out_pdf = figures_dir / pdf_name
     fig.savefig(out_pdf, format="pdf", bbox_inches="tight", dpi=300)
     show_and_close(fig, show)
 
-    legend_pdf = figures_dir / "figure_3f_legend.pdf"
+    legend_pdf = figures_dir / legend_name
     if legend_handles:
         fig_leg = plt.figure(figsize=(2.0, 0.28 * max(1, len(legend_labels)) + 0.4), dpi=300)
         fig_leg.legend(legend_handles, legend_labels, loc="center", frameon=False, ncol=1, prop={"size": 8})
         fig_leg.savefig(legend_pdf, format="pdf", bbox_inches="tight", dpi=300)
         show_and_close(fig_leg, show)
 
-    pkl = metadata_dir / "figure_3f_data.pickle"
+    pkl = metadata_dir / pickle_name
     write_pickle_with_meta(
         {
             "figure_name": "figure_3f",
@@ -408,6 +462,9 @@ def export_figure_3f(tables: EventTables, out_dir: Path, *, show: bool = False) 
             "x_range": x_range,
             "outlier_percentiles": outlier_percentiles,
             "exclude_animals": sorted(exclude_animals),
+            "smooth_state": bool(smooth_state),
+            "smooth_params": smooth_kwargs if smooth_state else None,
+            "pdf_name": pdf_name,
         },
         pkl,
         meta={
@@ -416,7 +473,56 @@ def export_figure_3f(tables: EventTables, out_dir: Path, *, show: bool = False) 
             "figure": "3f",
             "animals_used": animals,
             "exclude_animals": sorted(exclude_animals),
+            "smooth_state": bool(smooth_state),
         },
         entrypoint="eye_tracking_system_tools.analysis.figures_3e_3f_pupil.export_figure_3f",
     )
     return pkl
+
+
+def export_pupil_state_raw_and_smoothed(
+    tables: EventTables,
+    out_dir: Path,
+    *,
+    show: bool = False,
+) -> dict[str, Path]:
+    """Write ``figure_3e_{raw,smoothed}`` and ``figure_3f_{raw,smoothed}`` bundles.
+
+    Does not write into the catalog folders ``figure_3e`` / ``figure_3f``.
+    """
+    written: dict[str, Path] = {}
+    variants = (
+        ("raw", False),
+        ("smoothed", True),
+    )
+    for suffix, smooth in variants:
+        for fig_id, exporter, pdf_kwargs in (
+            (
+                "3e",
+                export_figure_3e,
+                {"pdf_name": f"figure_3e_{suffix}.pdf", "pickle_name": f"figure_3e_{suffix}.pickle"},
+            ),
+            (
+                "3f",
+                export_figure_3f,
+                {
+                    "pdf_name": f"figure_3f_{suffix}.pdf",
+                    "legend_name": f"figure_3f_{suffix}_legend.pdf",
+                    "pickle_name": f"figure_3f_{suffix}.pickle",
+                },
+            ),
+        ):
+            plot_id = f"figure_{fig_id}_{suffix}"
+            bundle = begin_plot_bundle(
+                out_dir,
+                plot_id,
+                kind="generic_pickle",
+                tables=tables,
+                logic_key=plot_id,
+                params=dict(getattr(tables, "params", {}) or {}),
+                extra={"smooth_state": smooth, "variant": suffix, "paper_fig": fig_id},
+            )
+            pkl = exporter(tables, bundle.bundle_dir, show=show, smooth_state=smooth, **pdf_kwargs)
+            finish_plot_bundle(bundle)
+            written[plot_id] = Path(pkl)
+    return written

@@ -5,7 +5,7 @@ Finalize a jitter mount comparison into a self-contained, dated deliverable.
 
     jitter_comparison_figures_<tag>_<YYYYmmdd>_<HH>_<MM>/
         jitter_modular_vs_rigid.pdf
-        jitter_mouse.pdf                 (when mouse blocks were pooled)
+        jitter_modular.pdf / jitter_rigid.pdf / jitter_mouse.pdf / jitter_turtle.pdf
         jitter_comparison_data.pickle    (everything needed to redraw / re-edit)
         epochs_table.csv                 (the same inventory, minus the arrays)
         manifest.yaml                    (human-readable provenance)
@@ -31,10 +31,11 @@ import yaml
 
 from eye_tracking_system_tools.analysis.jitter_epochs import (
     EpochRecord,
+    JITTER_SINGLE_MOUNT_PLOTS,
     JitterBlockSpec,
     collect_epoch_records,
     figure_modular_vs_rigid,
-    figure_mouse_histogram,
+    figure_mount_histogram,
     infer_date,
     unit_label,
 )
@@ -45,7 +46,7 @@ BUNDLE_NAME = "jitter_comparison_data.pickle"
 EPOCHS_CSV = "epochs_table.csv"
 MANIFEST_NAME = "manifest.yaml"
 FOLDER_PREFIX = "jitter_comparison_figures"
-MOUNT_TYPES = ("modular", "rigid", "mouse")
+MOUNT_TYPES = ("modular", "rigid", "mouse", "turtle")
 
 # Identity + provenance columns; ``frames`` / ``values`` carry the data itself.
 EPOCH_COLUMNS = [
@@ -206,10 +207,12 @@ def bundle_samples_long(
 
 
 def _figure_paths(out_dir: Path, suffix: str = "") -> dict[str, Path]:
-    return {
+    paths = {
         "modular_vs_rigid": out_dir / f"jitter_modular_vs_rigid{suffix}.pdf",
-        "mouse": out_dir / f"jitter_mouse{suffix}.pdf",
     }
+    for mount in JITTER_SINGLE_MOUNT_PLOTS:
+        paths[mount] = out_dir / f"jitter_{mount}{suffix}.pdf"
+    return paths
 
 
 def _draw(
@@ -222,14 +225,21 @@ def _draw(
     show: bool,
     suffix: str = "",
 ) -> tuple[dict[str, Path], dict[str, Any]]:
-    """Draw both histograms, saving when ``out_dir`` is given."""
+    """Draw comparison + single-mount histograms, saving when ``out_dir`` is given."""
     paths = _figure_paths(out_dir, suffix) if out_dir is not None else {}
     written: dict[str, Path] = {}
     figures: dict[str, Any] = {}
-    specs = [
+    specs: list[tuple[str, Any, bool]] = [
         ("modular_vs_rigid", figure_modular_vs_rigid, pools["modular"].size or pools["rigid"].size),
-        ("mouse", figure_mouse_histogram, pools["mouse"].size),
     ]
+    for mount in JITTER_SINGLE_MOUNT_PLOTS:
+        specs.append(
+            (
+                mount,
+                lambda p, m=mount, **kw: figure_mount_histogram(p, m, **kw),
+                pools[mount].size,
+            )
+        )
     for name, builder, has_data in specs:
         if not has_data:
             continue

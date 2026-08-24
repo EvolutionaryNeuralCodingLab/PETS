@@ -74,7 +74,8 @@ class VerifyTab(BaseTab):
             "φ/θ histograms for the current red-dot reference before saving. "
             "Commit bad datapoints writes noise-epoch catalogs "
             "(does not NaN eye CSVs). Zoom region + image filters are per-eye display "
-            "aids. Re-run Sync → Read DLC to refit with DLC keypoint masking."
+            "aids. Measure ROI drag-selects a rectangle and labels width × height in "
+            "pixels along the box. Re-run Sync → Read DLC to refit with DLC keypoint masking."
         )
         self._info.setWordWrap(True)
         layout.addWidget(self._info)
@@ -110,7 +111,7 @@ class VerifyTab(BaseTab):
         else:
             self._info.setText(
                 f"Active block: {block.display_label}. "
-                "Kerr / Perimeter / Zoom on each eye; Commit bad datapoints catalogs "
+                "Kerr / Perimeter / Zoom / Measure ROI on each eye; Commit bad datapoints catalogs "
                 f"pupil_perimeter epochs. Save exports eye CSVs, self_kerr_refs.csv, "
                 f"and {PERIMETERS_FILENAME}."
             )
@@ -204,6 +205,8 @@ class VerifyTab(BaseTab):
         )
         self._verifier_layout.addWidget(self._left_verifier)
         self._verifier_layout.addWidget(self._right_verifier)
+        self._left_verifier.set_peer_verifier(self._right_verifier)
+        self._right_verifier.set_peer_verifier(self._left_verifier)
 
     def _save_all(self) -> None:
         if self._left_verifier is None or self._right_verifier is None:

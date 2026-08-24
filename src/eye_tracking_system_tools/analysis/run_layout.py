@@ -59,22 +59,28 @@ def resolve_run_name(
 
 def resolve_figure_dirs(out_dir: Path | str) -> tuple[Path, Path]:
     """
-    Return ``(figures_dir, metadata_dir)`` for a run root or either child.
+    Return ``(plots_dir, metadata_dir)`` for a plot bundle or run root.
 
-    Creates ``figures/`` and ``metadata/`` under a run root when needed.
+    Plot bundles use ``plots/`` (not ``figures/``). Passing a directory named
+    ``figures`` still writes there for older run folders.
     """
     out_dir = Path(out_dir)
-    if out_dir.name == "figures":
-        figures_dir, metadata_dir = out_dir, out_dir.parent / "metadata"
+    if out_dir.name == "plots":
+        plots_dir, metadata_dir = out_dir, out_dir.parent / "metadata"
+    elif out_dir.name == "figures":
+        plots_dir, metadata_dir = out_dir, out_dir.parent / "metadata"
     elif out_dir.name == "metadata":
-        figures_dir, metadata_dir = out_dir.parent / "figures", out_dir
+        sibling_plots = out_dir.parent / "plots"
+        sibling_figures = out_dir.parent / "figures"
+        plots_dir = sibling_plots if sibling_plots.exists() or not sibling_figures.exists() else sibling_figures
+        metadata_dir = out_dir
     else:
-        figures_dir, metadata_dir = out_dir / "figures", out_dir / "metadata"
-    figures_dir.mkdir(parents=True, exist_ok=True)
+        plots_dir, metadata_dir = out_dir / "plots", out_dir / "metadata"
+    plots_dir.mkdir(parents=True, exist_ok=True)
     metadata_dir.mkdir(parents=True, exist_ok=True)
-    assert_not_reproduction(figures_dir)
+    assert_not_reproduction(plots_dir)
     assert_not_reproduction(metadata_dir)
-    return figures_dir, metadata_dir
+    return plots_dir, metadata_dir
 
 
 def resolve_run_dir(

@@ -6,7 +6,7 @@ Paradigm
 1. Load existing ``block/analysis/jitter_report_dict.pkl`` (no video recompute).
 2. Extract amplitude trace (``top_correlation_dist``) for manual epoch selection.
 3. Persist epochs to ``metadata/jitter_epochs/*.yaml``.
-4. Pool samples inside epochs → modular-vs-rigid hist + dedicated mouse hist.
+4. Pool samples inside epochs → modular-vs-rigid overlay plus gray single-mount hists.
 
 Displacements are reported in µm by default, scaling each eye's pixel trace by that
 block's ``analysis/LR_pix_size.csv`` (see :mod:`..pixel_calibration`); pass
@@ -30,13 +30,29 @@ import yaml
 from matplotlib import rcParams
 from matplotlib.widgets import SpanSelector
 
+from eye_tracking_system_tools.analysis.export_meta import write_pickle_with_meta
+from eye_tracking_system_tools.analysis.plot_bundle import begin_plot_bundle, finish_plot_bundle
 from eye_tracking_system_tools.analysis.run_layout import resolve_run_dir
 
 rcParams["pdf.fonttype"] = 42
 rcParams["ps.fonttype"] = 42
 
-MountType = Literal["modular", "rigid", "mouse"]
+MountType = Literal["modular", "rigid", "mouse", "turtle"]
 EyeName = Literal["left_eye", "right_eye", "both"]
+VALID_MOUNT_TYPES = frozenset({"modular", "rigid", "mouse", "turtle"})
+# Every registered mount type gets its own gray histogram; modular+rigid also overlay.
+JITTER_POOL_MOUNT_TYPES = ("modular", "rigid", "mouse", "turtle")
+# Single-mount gray PDFs (comparison overlay is separate).
+JITTER_SINGLE_MOUNT_PLOTS = ("modular", "rigid", "mouse", "turtle")
+UNIFIED_JITTER_PLOT_ID = "unified jitter quantification across animals"
+UNIFIED_JITTER_PDF = "unified_jitter_quantification.pdf"
+# (mount_type, panel label, color) — lizard colors match modular-vs-rigid overlay.
+UNIFIED_JITTER_PANELS: tuple[tuple[str, str, str], ...] = (
+    ("rigid", "rigid lizard", "#D55E00"),
+    ("modular", "modular lizard", "#0072B2"),
+    ("mouse", "modular mouse", "#009E73"),
+    ("turtle", "modular turtle", "#CC79A7"),
+)
 
 
 @dataclass
@@ -94,8 +110,13 @@ def infer_date(block_path: Path | str) -> str:
 
 
 def guess_mount_type(animal: str) -> MountType:
-    """Mouse animals (``M_002``) default to the dedicated mouse group."""
-    return "mouse" if re.match(r"^M_\d", str(animal)) else "modular"
+    """Guess mount/system condition from animal name prefix."""
+    name = str(animal)
+    if re.match(r"^M_\d", name, flags=re.IGNORECASE):
+        return "mouse"
+    if re.match(r"^Turtle_\d", name, flags=re.IGNORECASE):
+        return "turtle"
+    return "modular"
 
 
 def find_blocks_with_reports(
@@ -133,8 +154,9 @@ REGISTRY_HEADER = """# Jitter mount comparison registry.
 # (from the preprocessing GUI jitter step — this tool never recomputes from video).
 #
 # mount_type:
-#   modular | rigid  -> pooled into figures/jitter_modular_vs_rigid.pdf
-#   mouse            -> dedicated figures/jitter_mouse.pdf
+#   modular | rigid  -> figures/jitter_modular_vs_rigid.pdf (overlay)
+#                      + figures/jitter_modular.pdf / jitter_rigid.pdf (gray)
+#   mouse | turtle   -> figures/jitter_mouse.pdf / jitter_turtle.pdf (gray)
 #
 # Edit by hand, or populate with the notebook browser:
 #   development/jitter_mount_pipeline.ipynb
@@ -153,8 +175,11 @@ def read_registry_blocks(path: Path | str) -> list[JitterBlockSpec]:
         if not isinstance(row, dict) or "block_path" not in row:
             continue
         mt = str(row.get("mount_type", "modular")).strip().lower()
-        if mt not in {"modular", "rigid", "mouse"}:
-            raise ValueError(f"Invalid mount_type={mt!r} (expected modular|rigid|mouse)")
+        if mt not in VALID_MOUNT_TYPES:
+            raise ValueError(
+                f"Invalid mount_type={mt!r} "
+                f"(expected {'|'.join(sorted(VALID_MOUNT_TYPES))})"
+            )
         out.append(
             JitterBlockSpec(
                 animal=str(row.get("animal") or infer_animal(row["block_path"])),
@@ -622,9 +647,11 @@ def pool_block_samples(
         if unknown:
             raise KeyError(f"Unknown block key(s): {sorted(unknown)}")
 
-    pools: dict[str, list[np.ndarray]] = {"modular": [], "rigid": [], "mouse": []}
+    pools: dict[str, list[np.ndarray]] = {m: [] for m in JITTER_POOL_MOUNT_TYPES}
     for bs in block_samples:
         if keys is not None and bs.block_key not in keys:
+            continue
+        if bs.mount_type not in pools:
             continue
         for samp in bs.samples.values():
             if samp.size:
@@ -707,7 +734,7 @@ def figure_modular_vs_rigid(
         alpha=0.55,
         label=f"rigid (n={rig.size})",
     )
-    ax.set_xlabel(f"Displacement [{unit_label(units)}]", fontsize=10)
+    ax.set_xlabel(f"Displacement [{unit_label(units)}] (eye plane)", fontsize=10)
     ax.set_ylabel("% frames", fontsize=10)
     ax.tick_params(labelsize=8)
     ax.spines["top"].set_visible(False)
@@ -716,6 +743,121 @@ def figure_modular_vs_rigid(
     ax.legend(fontsize=6, frameon=False)
     fig.tight_layout()
     return fig
+
+
+def figure_mount_histogram(
+    pools: dict[str, np.ndarray],
+    mount: str,
+    *,
+    xmax: float | None = None,
+    n_bins: int = 15,
+    units: str = "um",
+    color: str = "gray",
+):
+    """Gray single-mount jitter histogram (modular / rigid / mouse / turtle)."""
+    values = pools.get(mount, np.array([]))
+    values = values[np.isfinite(values)]
+    if values.size == 0:
+        raise ValueError(f"No {mount} epoch samples to plot")
+    xmax = float(xmax) if xmax is not None else float(np.nanpercentile(values, 99.5))
+    xmax = max(xmax, 1e-6)
+    bins = np.linspace(0, xmax, n_bins + 1)
+    x, y = _hist_percent_frames(values, bins=bins)
+
+    fig, ax = plt.subplots(1, 1, figsize=(2, 1.6), dpi=150)
+    ax.bar(
+        x,
+        y,
+        width=np.diff(bins),
+        align="edge",
+        color=color,
+        edgecolor="black",
+        label=f"{mount} (n={values.size})",
+    )
+    ax.set_xlabel(f"Displacement [{unit_label(units)}] (eye plane)", fontsize=10)
+    ax.set_ylabel("% frames", fontsize=10)
+    ax.tick_params(labelsize=8)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.set_xlim(0, xmax)
+    ax.legend(fontsize=6, frameon=False)
+    fig.tight_layout()
+    return fig
+
+
+def shared_jitter_xmax(
+    pools: dict[str, np.ndarray],
+    *,
+    percentile: float = 99.5,
+) -> tuple[float, str | None]:
+    """Xmax that fits the 99.5th-percentile bin of the most jittery mount.
+
+    Returns ``(xmax, mount_that_set_it)``. Empty pools yield ``(1e-6, None)``.
+    """
+    best = 1e-6
+    source: str | None = None
+    for mount, arr in pools.items():
+        values = np.asarray(arr, dtype=float)
+        values = values[np.isfinite(values)]
+        if values.size == 0:
+            continue
+        xmax = float(np.nanpercentile(values, percentile))
+        if xmax >= best:
+            best = xmax
+            source = str(mount)
+    return max(best, 1e-6), source
+
+
+def figure_unified_jitter(
+    pools: dict[str, np.ndarray],
+    *,
+    xmax: float | None = None,
+    n_bins: int = 15,
+    units: str = "um",
+):
+    """2×2 histograms with a shared x-limit from the most jittery mount."""
+    if xmax is None:
+        xmax, _ = shared_jitter_xmax(pools)
+    xmax = max(float(xmax), 1e-6)
+    bins = np.linspace(0, xmax, int(n_bins) + 1)
+    fig, axes = plt.subplots(2, 2, figsize=(4.8, 3.8), dpi=150, sharex=True)
+    for ax, (mount, label, color) in zip(axes.ravel(), UNIFIED_JITTER_PANELS):
+        values = np.asarray(pools.get(mount, np.array([])), dtype=float)
+        n = int(np.isfinite(values).sum()) if values.size else 0
+        x, y = _hist_percent_frames(values, bins=bins)
+        ax.bar(
+            x,
+            y,
+            width=np.diff(bins),
+            align="edge",
+            color=color,
+            edgecolor="black",
+            alpha=0.7,
+        )
+        ax.set_xlim(0, xmax)
+        ax.set_title(f"{label} (n={n})", fontsize=8)
+        ax.set_ylabel("% frames", fontsize=8)
+        ax.tick_params(labelsize=7)
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+    xlabel = f"Displacement [{unit_label(units)}] (eye plane)"
+    for ax in axes[1]:
+        ax.set_xlabel(xlabel, fontsize=8)
+    fig.tight_layout()
+    return fig
+
+
+def plot_unified_jitter(
+    pools: dict[str, np.ndarray],
+    out_pdf: Path,
+    *,
+    xmax: float | None = None,
+    n_bins: int = 15,
+    units: str = "um",
+    show: bool = False,
+) -> Path:
+    fig = figure_unified_jitter(pools, xmax=xmax, n_bins=n_bins, units=units)
+    return _save_figure(fig, out_pdf, show=show)
 
 
 def figure_mouse_histogram(
@@ -726,34 +868,22 @@ def figure_mouse_histogram(
     units: str = "um",
 ):
     """Dedicated mouse jitter histogram. Returns the figure."""
-    mouse = pools.get("mouse", np.array([]))
-    mouse = mouse[np.isfinite(mouse)]
-    if mouse.size == 0:
-        raise ValueError("No mouse epoch samples to plot")
-    xmax = float(xmax) if xmax is not None else float(np.nanpercentile(mouse, 99.5))
-    xmax = max(xmax, 1e-6)
-    bins = np.linspace(0, xmax, n_bins + 1)
-    x, y = _hist_percent_frames(mouse, bins=bins)
-
-    fig, ax = plt.subplots(1, 1, figsize=(2, 1.6), dpi=150)
-    ax.bar(
-        x,
-        y,
-        width=np.diff(bins),
-        align="edge",
-        color="gray",
-        edgecolor="black",
-        label=f"mouse (n={mouse.size})",
+    return figure_mount_histogram(
+        pools, "mouse", xmax=xmax, n_bins=n_bins, units=units
     )
-    ax.set_xlabel(f"Displacement [{unit_label(units)}]", fontsize=10)
-    ax.set_ylabel("% frames", fontsize=10)
-    ax.tick_params(labelsize=8)
-    ax.spines["top"].set_visible(False)
-    ax.spines["right"].set_visible(False)
-    ax.set_xlim(0, xmax)
-    ax.legend(fontsize=6, frameon=False)
-    fig.tight_layout()
-    return fig
+
+
+def figure_turtle_histogram(
+    pools: dict[str, np.ndarray],
+    *,
+    xmax: float | None = None,
+    n_bins: int = 15,
+    units: str = "um",
+):
+    """Dedicated turtle jitter histogram. Returns the figure."""
+    return figure_mount_histogram(
+        pools, "turtle", xmax=xmax, n_bins=n_bins, units=units
+    )
 
 
 def _save_figure(fig, out_pdf: Path, *, show: bool = False) -> Path:
@@ -790,6 +920,20 @@ def plot_mouse_histogram(
     show: bool = False,
 ) -> Path:
     fig = figure_mouse_histogram(pools, xmax=xmax, n_bins=n_bins, units=units)
+    return _save_figure(fig, out_pdf, show=show)
+
+
+def plot_mount_histogram(
+    pools: dict[str, np.ndarray],
+    mount: str,
+    out_pdf: Path,
+    *,
+    xmax: float | None = None,
+    n_bins: int = 15,
+    units: str = "um",
+    show: bool = False,
+) -> Path:
+    fig = figure_mount_histogram(pools, mount, xmax=xmax, n_bins=n_bins, units=units)
     return _save_figure(fig, out_pdf, show=show)
 
 
@@ -922,35 +1066,214 @@ def run_plot_pooled(
     ]
     print(f"pooling {len(used)}/{len(collected)} block(s): {[bs.block_key for bs in used]}")
 
+    run_dir = Path(figures_dir)
+    if run_dir.name in {"figures", "plots"}:
+        run_dir = run_dir.parent
+
+    def _write_hist_bundle(
+        plot_id: str,
+        pdf_name: str,
+        values: np.ndarray,
+        *,
+        mount_type: str,
+        draw,
+    ) -> Path:
+        mounts = {"modular", "rigid"} if mount_type == "modular_vs_rigid" else {mount_type}
+        keys = [bs.block_key for bs in used if bs.mount_type in mounts]
+        animals = sorted({bs.spec.animal for bs in used if bs.mount_type in mounts})
+        bundle = begin_plot_bundle(
+            run_dir,
+            plot_id,
+            kind="jitter_histogram",
+            logic_key="jitter_histogram",
+            cohort={
+                "cohort": mount_type,
+                "animals": animals,
+                "block_keys": keys,
+                "rule": "registry_mount_type",
+                "mount_type": mount_type,
+            },
+            extra={"units": units, "n_bins": n_bins},
+        )
+        pdf = draw(bundle.plots_dir / pdf_name)
+        payload = {
+            "values": np.asarray(values, dtype=float),
+            "n_bins": int(n_bins),
+            "units": units,
+            "pdf_name": pdf_name,
+            "mount_type": mount_type,
+        }
+        write_pickle_with_meta(
+            payload,
+            bundle.metadata_dir / "jitter_values.pkl",
+            meta={"mount_type": mount_type, "n": int(np.isfinite(values).sum())},
+            entrypoint="eye_tracking_system_tools.analysis.jitter_epochs.run_plot_pooled",
+        )
+        arr = np.asarray(values, dtype=float)
+        arr = arr[np.isfinite(arr)]
+        slice_summary = {
+            "mount_type": mount_type,
+            "units": units,
+            "n_samples": int(arr.size),
+            "mean": float(np.mean(arr)) if arr.size else None,
+            "median": float(np.median(arr)) if arr.size else None,
+            "p95": float(np.percentile(arr, 95)) if arr.size else None,
+            "block_keys": keys,
+        }
+        with open(bundle.metadata_dir / "jitter_pool_summary.yaml", "w", encoding="utf-8") as f:
+            yaml.safe_dump(slice_summary, f, sort_keys=False)
+        finish_plot_bundle(bundle)
+        return pdf
+
     out: dict[str, Path] = {}
     out["summary"] = write_pool_summary(pools, metadata_dir, units=units, blocks=used)
     if pools["modular"].size or pools["rigid"].size:
-        out["modular_vs_rigid"] = plot_modular_vs_rigid(
-            pools,
-            figures_dir / "jitter_modular_vs_rigid.pdf",
-            n_bins=n_bins,
-            units=units,
-            show=show,
+        combined = np.concatenate(
+            [a[np.isfinite(a)] for a in (pools["modular"], pools["rigid"]) if a.size]
+        )
+        out["modular_vs_rigid"] = _write_hist_bundle(
+            "jitter_modular_vs_rigid",
+            "jitter_modular_vs_rigid.pdf",
+            combined,
+            mount_type="modular_vs_rigid",
+            draw=lambda p: plot_modular_vs_rigid(
+                pools, p, n_bins=n_bins, units=units, show=show
+            ),
         )
     else:
         print("[warn] no modular/rigid samples — skip comparison hist")
-    if pools["mouse"].size:
-        out["mouse"] = plot_mouse_histogram(
-            pools,
-            figures_dir / "jitter_mouse.pdf",
-            n_bins=n_bins,
-            units=units,
-            show=show,
-        )
-    else:
-        print("[warn] no mouse samples — skip mouse hist")
+    for mount in JITTER_SINGLE_MOUNT_PLOTS:
+        if pools[mount].size:
+            out[mount] = _write_hist_bundle(
+                f"jitter_{mount}",
+                f"jitter_{mount}.pdf",
+                pools[mount],
+                mount_type=mount,
+                draw=lambda p, m=mount: plot_mount_histogram(
+                    pools, m, p, n_bins=n_bins, units=units, show=show
+                ),
+            )
+        else:
+            print(f"[warn] no {mount} samples — skip {mount} hist")
     return out
+
+
+def export_unified_jitter(
+    specs: list[JitterBlockSpec],
+    figures_dir: Path,
+    metadata_dir: Path,
+    *,
+    units: str = "um",
+    n_bins: int = 15,
+    show: bool = False,
+    include: Collection[str] | None = None,
+    block_samples: list[BlockSamples] | None = None,
+) -> dict[str, Path]:
+    """Four-panel jitter comparison with a shared x-limit (most jittery mount)."""
+    collected = (
+        block_samples
+        if block_samples is not None
+        else collect_block_samples(specs, metadata_dir, units=units)
+    )
+    pools = pool_block_samples(collected, include=include)
+    used = [
+        bs
+        for bs in collected
+        if bs.values.size and (include is None or bs.block_key in set(include))
+    ]
+    missing = [
+        mount
+        for mount, _label, _color in UNIFIED_JITTER_PANELS
+        if not np.asarray(pools.get(mount, []), dtype=float).size
+    ]
+    if missing:
+        print(f"[warn] unified jitter missing samples for: {missing}")
+
+    xmax, xmax_source = shared_jitter_xmax(pools)
+    run_dir = Path(figures_dir)
+    if run_dir.name in {"figures", "plots"}:
+        run_dir = run_dir.parent
+
+    animals = sorted({bs.spec.animal for bs in used})
+    keys = [bs.block_key for bs in used]
+    bundle = begin_plot_bundle(
+        run_dir,
+        UNIFIED_JITTER_PLOT_ID,
+        kind="unified_jitter",
+        logic_key="unified_jitter",
+        cohort={
+            "cohort": "multi",
+            "animals": animals,
+            "block_keys": keys,
+            "rule": "registry_mount_type",
+            "mount_type": "all",
+        },
+        extra={
+            "units": units,
+            "n_bins": n_bins,
+            "xmax": xmax,
+            "xmax_source": xmax_source,
+            "xmax_percentile": 99.5,
+        },
+    )
+    pdf = plot_unified_jitter(
+        pools,
+        bundle.plots_dir / UNIFIED_JITTER_PDF,
+        xmax=xmax,
+        n_bins=n_bins,
+        units=units,
+        show=show,
+    )
+    payload = {
+        "pools": {k: np.asarray(v, dtype=float) for k, v in pools.items()},
+        "n_bins": int(n_bins),
+        "units": units,
+        "xmax": float(xmax),
+        "xmax_source": xmax_source,
+        "pdf_name": UNIFIED_JITTER_PDF,
+        "panels": [list(p) for p in UNIFIED_JITTER_PANELS],
+    }
+    write_pickle_with_meta(
+        payload,
+        bundle.metadata_dir / "unified_jitter.pkl",
+        meta={
+            "xmax": float(xmax),
+            "xmax_source": xmax_source,
+            "n_bins": int(n_bins),
+            "n_blocks": len(used),
+        },
+        entrypoint="eye_tracking_system_tools.analysis.jitter_epochs.export_unified_jitter",
+    )
+    summary = {
+        "units": units,
+        "n_bins": int(n_bins),
+        "xmax": float(xmax),
+        "xmax_source": xmax_source,
+        "xmax_percentile": 99.5,
+        "block_keys": keys,
+        "mounts": {},
+    }
+    for mount, label, _color in UNIFIED_JITTER_PANELS:
+        arr = np.asarray(pools.get(mount, []), dtype=float)
+        arr = arr[np.isfinite(arr)]
+        summary["mounts"][mount] = {
+            "label": label,
+            "n_samples": int(arr.size),
+            "mean": float(np.mean(arr)) if arr.size else None,
+            "median": float(np.median(arr)) if arr.size else None,
+            "p95": float(np.percentile(arr, 95)) if arr.size else None,
+            "p99_5": float(np.percentile(arr, 99.5)) if arr.size else None,
+        }
+    with open(bundle.metadata_dir / "unified_jitter_summary.yaml", "w", encoding="utf-8") as f:
+        yaml.safe_dump(summary, f, sort_keys=False)
+    finish_plot_bundle(bundle)
+    return {"unified": pdf, "summary": bundle.metadata_dir / "unified_jitter_summary.yaml"}
 
 
 def main(argv: list[str] | None = None) -> int:
     repo = Path(__file__).resolve().parents[3]
     parser = argparse.ArgumentParser(
-        description="Jitter epoch picker + pooled modular/rigid/mouse histograms."
+        description="Jitter epoch picker + pooled modular/rigid/mouse/turtle histograms."
     )
     parser.add_argument(
         "--registry",

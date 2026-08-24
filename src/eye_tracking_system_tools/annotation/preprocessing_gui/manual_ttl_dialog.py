@@ -179,7 +179,8 @@ def build_manual_ttl_payload(
     arena_line: int,
     l_eye_line: int,
     r_eye_line: int,
-    led_driver_line: int,
+    led_driver_line: int | None = None,
+    led_driver_missing: bool = False,
     extra_roles: dict[str, int] | None = None,
     window_mode: str = "i",
     start_index: int | str = 0,
@@ -193,8 +194,11 @@ def build_manual_ttl_payload(
         arena_channel_name: int(arena_line),
         "L_eye_TTL": int(l_eye_line),
         "R_eye_TTL": int(r_eye_line),
-        "LED_driver": int(led_driver_line),
     }
+    if not led_driver_missing:
+        if led_driver_line is None:
+            raise ValueError("led_driver_line is required unless led_driver_missing=True.")
+        manual_line_map["LED_driver"] = int(led_driver_line)
     if extra_roles:
         manual_line_map.update({str(k): int(v) for k, v in extra_roles.items()})
 
@@ -224,6 +228,8 @@ def save_ttl_manual_sidecar(
     blocksync: BlockSync,
     manual_line_map: dict[str, int],
     arena_window: dict[str, int],
+    *,
+    led_driver_missing: bool = False,
 ) -> Path:
     sidecar = events_csv_path.parent / "ttl_manual_mapping.json"
     payload = {
@@ -232,6 +238,7 @@ def save_ttl_manual_sidecar(
         "sample_rate": float(blocksync.sample_rate),
         "manual_line_map": manual_line_map,
         "arena_window": arena_window,
+        "led_driver_missing": bool(led_driver_missing),
     }
     sidecar.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     return sidecar
@@ -295,11 +302,17 @@ class ManualTtlDialog(QtWidgets.QDialog):
         self._mapping_sources = list(mapping_sources or [])
         self._manual_line_map: dict[str, int] | None = None
         self._arena_window: dict[str, int] | None = None
+        self._led_driver_missing: bool = False
 
         self.setWindowTitle(f"Manual TTL mapping — block {blocksync.block_num}")
-        self.resize(920, 720)
+        self.resize(960, 860)
         self._build_ui()
         self._populate_summary()
+        # Defer probing so dialog opens immediately; ffprobe can be slow on large files.
+        self._reporter_status.setText(
+            "Click “Refresh video reporter” to probe frame counts (ffprobe, timed)."
+        )
+        QtCore.QTimer.singleShot(0, self._refresh_video_reporter)
 
     def _build_ui(self) -> None:
         root = QtWidgets.QVBoxLayout(self)
@@ -319,6 +332,31 @@ class ManualTtlDialog(QtWidgets.QDialog):
         self._btn_browser_raster = QtWidgets.QPushButton("Open raster\nin browser")
         raster_row.addWidget(self._btn_browser_raster)
         root.addLayout(raster_row)
+
+        reporter_box = QtWidgets.QGroupBox("Video reporter")
+        reporter_layout = QtWidgets.QVBoxLayout(reporter_box)
+        reporter_hint = QtWidgets.QLabel(
+            "Frame counts (ffprobe) vs TTL rising-edge counts — use as clues when "
+            "assigning Arena / eye / extra channels."
+        )
+        reporter_hint.setWordWrap(True)
+        reporter_layout.addWidget(reporter_hint)
+        self._video_reporter = QtWidgets.QTableWidget(0, 6)
+        self._video_reporter.setHorizontalHeaderLabels(
+            ["source", "path", "n_frames", "closest TTL line", "TTL n_rising", "Δ"]
+        )
+        self._video_reporter.horizontalHeader().setStretchLastSection(True)
+        self._video_reporter.setMinimumHeight(120)
+        reporter_layout.addWidget(self._video_reporter)
+        reporter_btns = QtWidgets.QHBoxLayout()
+        self._btn_refresh_reporter = QtWidgets.QPushButton("Refresh video reporter")
+        reporter_btns.addWidget(self._btn_refresh_reporter)
+        reporter_btns.addStretch(1)
+        reporter_layout.addLayout(reporter_btns)
+        self._reporter_status = QtWidgets.QLabel("")
+        self._reporter_status.setWordWrap(True)
+        reporter_layout.addWidget(self._reporter_status)
+        root.addWidget(reporter_box)
 
         if self._mapping_sources:
             leech_row = QtWidgets.QHBoxLayout()
@@ -353,6 +391,17 @@ class ManualTtlDialog(QtWidgets.QDialog):
         auto_row.addWidget(self._eye_b)
         auto_row.addWidget(self._btn_auto_eye)
         form.addRow(f"{self._arena_channel_name} line:", self._arena_line)
+        self._led_missing = QtWidgets.QCheckBox(
+            "LED_driver channel missing (use Manual LED blink replacement after Parse OE)"
+        )
+        form.addRow(self._led_missing)
+        self._led_missing_warn = QtWidgets.QLabel(
+            "Warning: without a real or synthetic LED_driver you cannot leave Setup + Prepare."
+        )
+        self._led_missing_warn.setWordWrap(True)
+        self._led_missing_warn.setStyleSheet("color: #a04000;")
+        self._led_missing_warn.setVisible(False)
+        form.addRow(self._led_missing_warn)
         form.addRow("LED_driver line:", self._led_driver_line)
         form.addRow("L_eye_TTL line:", self._l_eye_line)
         form.addRow("R_eye_TTL line:", self._r_eye_line)
@@ -422,6 +471,8 @@ class ManualTtlDialog(QtWidgets.QDialog):
 
         self._btn_auto_eye.clicked.connect(self._on_auto_assign_eyes)
         self._btn_browser_raster.clicked.connect(self._on_open_browser_raster)
+        self._btn_refresh_reporter.clicked.connect(self._refresh_video_reporter)
+        self._led_missing.toggled.connect(self._on_led_missing_toggled)
         if self._mapping_sources:
             self._btn_leech_apply.clicked.connect(self._on_apply_leech_mapping)
         self._btn_add_extra.clicked.connect(self._add_extra_channel_row)
@@ -432,6 +483,55 @@ class ManualTtlDialog(QtWidgets.QDialog):
         self._mode_sample.toggled.connect(self._refresh_mode_enabled)
         self._mode_auto.toggled.connect(self._refresh_mode_enabled)
         self._refresh_mode_enabled()
+        self._on_led_missing_toggled(False)
+
+    def _on_led_missing_toggled(self, checked: bool) -> None:
+        self._led_driver_line.setEnabled(not checked)
+        self._led_missing_warn.setVisible(bool(checked))
+
+    def _refresh_video_reporter(self) -> None:
+        from eye_tracking_system_tools.annotation.preprocessing_gui.video_frame_reporter import (
+            build_video_reporter_rows,
+        )
+
+        self._video_reporter.setRowCount(0)
+        self._reporter_status.setText("")
+        try:
+            rows = build_video_reporter_rows(self._blocksync, self._events_csv_path)
+        except Exception as e:
+            self._reporter_status.setText(f"Video reporter unavailable: {e}")
+            return
+
+        if not rows:
+            self._reporter_status.setText(
+                "No eye/arena .mp4 videos found. Run Prepare data first, or check block folders."
+            )
+            return
+
+        self._video_reporter.setRowCount(len(rows))
+        for row, rec in enumerate(rows):
+            path_text = str(rec.path)
+            if len(path_text) > 80:
+                path_text = "…" + path_text[-79:]
+            values = [
+                rec.source,
+                path_text,
+                "" if rec.n_frames is None else str(rec.n_frames),
+                "" if rec.closest_ttl_line is None else str(rec.closest_ttl_line),
+                "" if rec.ttl_n_rising is None else str(rec.ttl_n_rising),
+                "" if rec.delta is None else str(rec.delta),
+            ]
+            if rec.error:
+                values[2] = f"error: {rec.error}"
+            for col, text in enumerate(values):
+                self._video_reporter.setItem(row, col, QtWidgets.QTableWidgetItem(text))
+        err_n = sum(1 for r in rows if r.error)
+        if err_n:
+            self._reporter_status.setText(
+                f"Reported {len(rows)} source(s); {err_n} failed frame count(s)."
+            )
+        else:
+            self._reporter_status.setText(f"Reported {len(rows)} video source(s).")
 
     def _add_extra_channel_row(self, role: str = "", line: int = 0) -> None:
         row = self._extra_table.rowCount()
@@ -553,6 +653,23 @@ class ManualTtlDialog(QtWidgets.QDialog):
                 self._eye_a.setValue(unused[0])
                 self._eye_b.setValue(unused[1])
         self._populate_extra_channels()
+        self._restore_led_missing_from_sidecar()
+
+    def _restore_led_missing_from_sidecar(self) -> None:
+        sidecar = self._events_csv_path.parent / "ttl_manual_mapping.json"
+        if not sidecar.is_file():
+            return
+        try:
+            payload = json.loads(sidecar.read_text(encoding="utf-8"))
+            missing = bool(payload.get("led_driver_missing", False))
+            self._led_missing.setChecked(missing)
+            if missing and "LED_driver" not in (payload.get("manual_line_map") or {}):
+                # keep spinbox value as hint only
+                pass
+            elif "LED_driver" in (payload.get("manual_line_map") or {}):
+                self._led_driver_line.setValue(int(payload["manual_line_map"]["LED_driver"]))
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            pass
 
     def apply_line_map(self, manual_line_map: dict[str, int]) -> None:
         """Fill role spinboxes and extra channels from a role→line map (not arena window)."""
@@ -560,7 +677,11 @@ class ManualTtlDialog(QtWidgets.QDialog):
         if arena_role in manual_line_map:
             self._arena_line.setValue(int(manual_line_map[arena_role]))
         if "LED_driver" in manual_line_map:
+            self._led_missing.setChecked(False)
             self._led_driver_line.setValue(int(manual_line_map["LED_driver"]))
+        else:
+            # Copied map may omit LED when source block also had it missing.
+            self._led_missing.setChecked(True)
         if "L_eye_TTL" in manual_line_map:
             self._l_eye_line.setValue(int(manual_line_map["L_eye_TTL"]))
         if "R_eye_TTL" in manual_line_map:
@@ -615,13 +736,15 @@ class ManualTtlDialog(QtWidgets.QDialog):
 
     def build_payload(self) -> tuple[dict[str, int], dict[str, int]]:
         """Validate current widget state and return mapping dicts (no side effects)."""
+        led_missing = bool(self._led_missing.isChecked())
         return build_manual_ttl_payload(
             self._blocksync,
             self._events_csv_path,
             arena_line=int(self._arena_line.value()),
             l_eye_line=int(self._l_eye_line.value()),
             r_eye_line=int(self._r_eye_line.value()),
-            led_driver_line=int(self._led_driver_line.value()),
+            led_driver_line=None if led_missing else int(self._led_driver_line.value()),
+            led_driver_missing=led_missing,
             extra_roles=self._extra_roles_from_table(),
             window_mode=self._window_mode(),
             start_index=self._start_index.text().strip() or "0",
@@ -639,6 +762,7 @@ class ManualTtlDialog(QtWidgets.QDialog):
         l_eye_line: int,
         r_eye_line: int,
         led_driver_line: int = 4,
+        led_driver_missing: bool = False,
         window_mode: str = "i",
         start_index: str = "0",
         end_index: str = "-1",
@@ -651,6 +775,7 @@ class ManualTtlDialog(QtWidgets.QDialog):
         self._l_eye_line.setValue(int(l_eye_line))
         self._r_eye_line.setValue(int(r_eye_line))
         self._led_driver_line.setValue(int(led_driver_line))
+        self._led_missing.setChecked(bool(led_driver_missing))
         self._start_index.setText(str(start_index))
         self._end_index.setText(str(end_index))
         self._start_sample.setValue(int(start_sample))
@@ -666,20 +791,38 @@ class ManualTtlDialog(QtWidgets.QDialog):
     def payload(self) -> tuple[dict[str, int], dict[str, int]] | None:
         return self._manual_line_map, self._arena_window
 
+    def led_driver_missing(self) -> bool:
+        return bool(self._led_driver_missing)
+
     def _on_accept(self) -> None:
         try:
             manual_line_map, arena_window = self.build_payload()
         except Exception as e:
             QtWidgets.QMessageBox.warning(self, "Manual TTL mapping", str(e))
             return
+        led_missing = bool(self._led_missing.isChecked())
+        if led_missing:
+            reply = QtWidgets.QMessageBox.warning(
+                self,
+                "LED_driver missing",
+                "LED_driver is marked missing. After Parse OE, use "
+                "“Manual LED blink replacement…” before leaving Setup + Prepare.\n\n"
+                "Continue with this mapping?",
+                QtWidgets.QMessageBox.StandardButton.Yes
+                | QtWidgets.QMessageBox.StandardButton.No,
+            )
+            if reply != QtWidgets.QMessageBox.StandardButton.Yes:
+                return
         save_ttl_manual_sidecar(
             self._events_csv_path,
             self._blocksync,
             manual_line_map,
             arena_window,
+            led_driver_missing=led_missing,
         )
         self._manual_line_map = manual_line_map
         self._arena_window = arena_window
+        self._led_driver_missing = led_missing
         self.accept()
 
 

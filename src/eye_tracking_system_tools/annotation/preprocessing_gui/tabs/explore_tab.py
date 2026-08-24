@@ -18,8 +18,10 @@ from eye_tracking_system_tools.annotation.preprocessing_gui.explore_plot_panel i
 )
 from eye_tracking_system_tools.annotation.preprocessing_gui.explore_series import (
     EYE_VERSION_BASE,
+    RAW_VERIFIED_TAG,
     build_explore_catalog,
     discover_eye_data_versions,
+    export_eye_data_tag,
     eye_csvs_are_stale,
     load_eye_data_version,
     prefer_eye_data_version,
@@ -35,28 +37,11 @@ from eye_tracking_system_tools.annotation.preprocessing_gui.explore_video_panel 
 )
 from eye_tracking_system_tools.annotation.preprocessing_gui.explore_video_window import (
     ExploreVideoWindow,
+    VideoLoadWorker,
 )
 from eye_tracking_system_tools.annotation.preprocessing_gui.models import BlockHandle
 from eye_tracking_system_tools.annotation.preprocessing_gui.tabs.base import BaseTab
 from eye_tracking_system_tools.preprocessing.block_sync_core import load_final_sync_df
-
-
-class _VideoLoadWorker(QtCore.QThread):
-    """Load BlockSession + bind videos off the UI thread where possible."""
-
-    finished_ok = QtCore.pyqtSignal(object)  # BlockSession-like result via panel API
-    failed = QtCore.pyqtSignal(str)
-
-    def __init__(self, load_fn, parent=None):
-        super().__init__(parent)
-        self._load_fn = load_fn
-
-    def run(self) -> None:
-        try:
-            result = self._load_fn()
-            self.finished_ok.emit(result)
-        except Exception as exc:  # noqa: BLE001
-            self.failed.emit(str(exc))
 
 
 class ExploreTab(BaseTab):
@@ -76,7 +61,7 @@ class ExploreTab(BaseTab):
         self._stale_banner: QtWidgets.QLabel | None = None
         self._info: QtWidgets.QLabel | None = None
         self._syncing_time = False
-        self._video_load_worker: _VideoLoadWorker | None = None
+        self._video_load_worker: VideoLoadWorker | None = None
         super().__init__(state, config, parent)
 
     @property
@@ -153,6 +138,7 @@ class ExploreTab(BaseTab):
         self._plot.time_preview.connect(self._set_time_label)
         self._plot.refresh_requested.connect(self._reload_catalog_into_plot)
         self._plot.eye_version_changed.connect(self._on_eye_version_changed)
+        self._plot.finalize_eye_data_requested.connect(self._on_finalize_eye_data)
         self._btn_open_video.clicked.connect(self._open_video_window)
         self._btn_cache_videos.clicked.connect(self._cache_videos_locally)
 
@@ -288,7 +274,7 @@ class ExploreTab(BaseTab):
                 session.re_ellipse_df = re_df
             return session
 
-        worker = _VideoLoadWorker(load_fn, self)
+        worker = VideoLoadWorker(load_fn, self)
         self._video_load_worker = worker
 
         def on_ok(session) -> None:
@@ -395,6 +381,94 @@ class ExploreTab(BaseTab):
         except Exception as exc:
             if self._info is not None:
                 self._info.setText(f"Cannot load eye_data version: {exc}")
+
+    def _on_finalize_eye_data(self) -> None:
+        if self._block is None or self._plot is None:
+            QtWidgets.QMessageBox.information(
+                self, "finalize_eye_data", "Load a block and eye data first."
+            )
+            return
+
+        le_df = self._pending_le_df
+        re_df = self._pending_re_df
+        if le_df is None and re_df is None:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "finalize_eye_data",
+                "No eye-data traces are currently loaded. "
+                "Use Load prev analysis / pick an Eye data version first.",
+            )
+            return
+
+        analysis = self._block.analysis_path
+        source_tag = self._plot.current_eye_version_tag()
+        source_label = (
+            "base (left/right_eye_data.csv)"
+            if source_tag == EYE_VERSION_BASE
+            else source_tag
+        )
+        targets: list[Path] = []
+        if le_df is not None:
+            targets.append(analysis / f"left_eye_data_{RAW_VERIFIED_TAG}.csv")
+        if re_df is not None:
+            targets.append(analysis / f"right_eye_data_{RAW_VERIFIED_TAG}.csv")
+        existing = [p.name for p in targets if p.is_file()]
+        overwrite_note = (
+            f"\n\nExisting file(s) will be overwritten:\n  • "
+            + "\n  • ".join(existing)
+            if existing
+            else "\n\nThese files do not exist yet and will be created."
+        )
+        target_lines = "\n".join(f"  • {p.name}" for p in targets)
+        answer = QtWidgets.QMessageBox.warning(
+            self,
+            "finalize_eye_data — confirm overwrite",
+            "This will save the currently displayed eye-data traces "
+            f"(version: {source_label}) as:\n"
+            f"{target_lines}\n"
+            f"{overwrite_note}\n\n"
+            "Downstream tools prefer the raw_verified tag. Continue?",
+            QtWidgets.QMessageBox.StandardButton.Yes
+            | QtWidgets.QMessageBox.StandardButton.No,
+            QtWidgets.QMessageBox.StandardButton.No,
+        )
+        if answer != QtWidgets.QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            written = export_eye_data_tag(
+                analysis, RAW_VERIFIED_TAG, le_df, re_df
+            )
+        except Exception as exc:
+            QtWidgets.QMessageBox.warning(
+                self, "finalize_eye_data", f"Export failed:\n{exc}"
+            )
+            return
+
+        # Keep showing the same traces, now under the raw_verified tag.
+        self._plot.set_eye_versions(
+            discover_eye_data_versions(analysis),
+            selected_tag=RAW_VERIFIED_TAG,
+        )
+        try:
+            self._reload_catalog_into_plot()
+        except Exception as exc:
+            if self._info is not None:
+                self._info.setText(
+                    f"Wrote raw_verified, but reload failed: {exc}"
+                )
+            return
+
+        names = ", ".join(p.name for p in written)
+        if self._info is not None:
+            self._info.setText(
+                f"Saved currently displayed eye data → {names}."
+            )
+        QtWidgets.QMessageBox.information(
+            self,
+            "finalize_eye_data",
+            f"Wrote:\n" + "\n".join(f"  • {p}" for p in written),
+        )
 
     def _ensure_final_sync(self):
         blocksync = self._require_blocksync()

@@ -240,6 +240,8 @@ class SyncFreeTab(BaseTab):
         )
         self._verifier_layout.addWidget(self._left_verifier)
         self._verifier_layout.addWidget(self._right_verifier)
+        self._left_verifier.set_peer_verifier(self._right_verifier)
+        self._right_verifier.set_peer_verifier(self._left_verifier)
         self._btn_save_draft.setEnabled(True)
         self._btn_finalize.setEnabled(True)
 

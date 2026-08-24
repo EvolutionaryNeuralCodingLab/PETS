@@ -20,10 +20,14 @@ main_sequence:
   frame_rate_fps: 60.0
   t_window_ms: [-100.0, 100.0]
   dt_ms: 2.0
-  bandwidth_ms: 10.0
+  bandwidth_ms: 10.0  # match lizard paper Gaussian kernel (was 6 ms)
   min_events_per_bin_traces: 15
   per_animal_max_bins: 8
   plot_animals: null
+  scatter_animal: M_002
+  density_nbins: 200
+  density_cmap: turbo
+  density_figsize: [3.8, 3.2]
   bin_cmap: viridis
   smoothing: true
   subsample_peak: false
@@ -40,15 +44,20 @@ main_sequence:
 figure_2f:
   iqr_multiplier: 60.0
   bins: 60
-  macro_range: [0.0, 0.5]
-  micro_range: [0.0, 0.1]
-  macro_tick_list: [0.0, 0.25, 0.5]
-  micro_tick_list: [0.0, 0.05, 0.1]
+  # Mouse peak speeds exceed the lizard 0–0.5 / 0–0.1 crop. Auto xmax is the
+  # 99.5th percentile of the plotted L/R speeds (rounded up); micro zooms the
+  # origin to 20% of that, which covers the slower/near-threshold cloud.
+  auto_view_limits: true
+  macro_pct: 99.5
+  micro_frac_of_macro: 0.2
+  macro_range: auto
+  micro_range: auto
   event_mode: All
   require_head_stationary: false
   exclude_animals: []
   contra_event_window_ms: 100.0
   contra_sample_ms: 51.0
+  sample_mode: contra_window
   also_export_s3: false
 
 figure_2g:

@@ -53,11 +53,11 @@ from eye_tracking_system_tools.analysis.pixel_calibration import (
     DEFAULT_KNOWN_DIST_MM,
     calibrate_block,
     find_eye_videos,
-    manual_calibration,
+    manual_calibration_um_per_px,
     read_pixel_size,
 )
 
-MOUNT_TYPES: tuple[str, ...] = ("modular", "rigid", "mouse")
+MOUNT_TYPES: tuple[str, ...] = ("modular", "rigid", "mouse", "turtle")
 RequireKind = Literal["jitter", "eye"]
 
 
@@ -193,7 +193,7 @@ class JitterBlockBrowser:
         )
         self.auto_mouse = widgets.Checkbox(
             value=True,
-            description="auto-tag M_* as mouse",
+            description="auto-tag M_*/Turtle_*",
             indent=False,
             layout=widgets.Layout(width="200px"),
         )
@@ -326,8 +326,10 @@ class JitterBlockBrowser:
         )
 
     def _mount_for(self, animal: str) -> MountType:
-        if self.auto_mouse.value and guess_mount_type(animal) == "mouse":
-            return "mouse"
+        if self.auto_mouse.value:
+            guessed = guess_mount_type(animal)
+            if guessed in ("mouse", "turtle"):
+                return guessed
         return self.mount_dd.value  # type: ignore[return-value]
 
     def _stage(self, block_path: Path) -> tuple[bool, str]:
@@ -445,7 +447,8 @@ class JitterBlockBrowser:
         counts = {m: sum(1 for s in specs if s.mount_type == m) for m in MOUNT_TYPES}
         self._set_status(
             f"Saved {len(specs)} block(s) → {target} "
-            f"(modular={counts['modular']}, rigid={counts['rigid']}, mouse={counts['mouse']})",
+            f"(modular={counts['modular']}, rigid={counts['rigid']}, "
+            f"mouse={counts['mouse']}, turtle={counts['turtle']})",
             level="ok",
         )
         return target
@@ -810,7 +813,7 @@ class PixelCalibrationPanel:
     **Calibrate selected** opens an OpenCV window per eye (drag the ROI diagonal
     across the known distance, Enter to accept) and writes the CSV that BlockSync
     and the jitter histograms both read. When the raw videos are offline, the
-    manual row converts a measured landmark length in pixels instead.
+    manual row writes the same µm/px factors shown after refresh.
     """
 
     def __init__(
@@ -843,15 +846,15 @@ class PixelCalibrationPanel:
         )
         self.show_missing = widgets.Button(description="Select uncalibrated",
                                            layout=widgets.Layout(width="170px"))
-        self.left_px = widgets.FloatText(value=0.0, description="L px:",
-                                         layout=widgets.Layout(width="150px"),
-                                         style={"description_width": "45px"})
-        self.right_px = widgets.FloatText(value=0.0, description="R px:",
-                                          layout=widgets.Layout(width="150px"),
-                                          style={"description_width": "45px"})
+        self.left_um = widgets.FloatText(value=0.0, description="L µm/px:",
+                                         layout=widgets.Layout(width="170px"),
+                                         style={"description_width": "65px"})
+        self.right_um = widgets.FloatText(value=0.0, description="R µm/px:",
+                                          layout=widgets.Layout(width="170px"),
+                                          style={"description_width": "65px"})
         self.manual_btn = widgets.Button(
             description="Manual entry", icon="keyboard-o",
-            tooltip="Landmark length in pixels per eye, for blocks whose videos are offline",
+            tooltip="Write L/R µm/px directly (same numbers shown after refresh)",
             layout=widgets.Layout(width="150px"),
         )
         self.refresh_btn = widgets.Button(description="Refresh", icon="refresh",
@@ -869,8 +872,11 @@ class PixelCalibrationPanel:
                 self.block_list,
                 widgets.HBox([self.known_dist, self.overwrite, self.calib_btn,
                               self.show_missing, self.refresh_btn]),
-                widgets.HTML("<i>No video? Enter the landmark length in pixels per eye:</i>"),
-                widgets.HBox([self.left_px, self.right_px, self.manual_btn]),
+                widgets.HTML(
+                    "<i>No video? Enter the scale factors in <b>µm/px</b> "
+                    "(same units shown in the list after refresh):</i>"
+                ),
+                widgets.HBox([self.left_um, self.right_um, self.manual_btn]),
                 self.status,
             ]
         )
@@ -952,18 +958,22 @@ class PixelCalibrationPanel:
         if not specs:
             self._set_status("Select block(s) for manual entry.", level="warn")
             return
-        if self.left_px.value <= 0 or self.right_px.value <= 0:
-            self._set_status("Enter positive L/R pixel distances.", level="warn")
+        if self.left_um.value <= 0 or self.right_um.value <= 0:
+            self._set_status("Enter positive L/R µm/px factors.", level="warn")
             return
+        left = float(self.left_um.value)
+        right = float(self.right_um.value)
         for spec in specs:
-            manual_calibration(
+            manual_calibration_um_per_px(
                 spec.block_path,
-                left_px=float(self.left_px.value),
-                right_px=float(self.right_px.value),
-                known_dist_mm=float(self.known_dist.value),
+                left_um_per_px=left,
+                right_um_per_px=right,
             )
         self.refresh()
-        self._set_status(f"Wrote manual calibration for {len(specs)} block(s).", level="ok")
+        self._set_status(
+            f"Wrote L={left:.2f} / R={right:.2f} µm/px for {len(specs)} block(s).",
+            level="ok",
+        )
 
 
 class JitterPoolSelector:

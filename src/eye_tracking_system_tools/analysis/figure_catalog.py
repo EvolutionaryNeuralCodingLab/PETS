@@ -20,6 +20,13 @@ from eye_tracking_system_tools.analysis.pipeline import (
     filter_event_tables,
     with_params,
 )
+from eye_tracking_system_tools.analysis.plot_bundle import (
+    KIND_FOR_FIG,
+    begin_plot_bundle,
+    catalog_folder_id,
+    finish_plot_bundle,
+    infer_catalog_cohort,
+)
 
 Runner = Callable[..., dict[str, Path] | Path | tuple[Path, ...]]
 
@@ -85,10 +92,21 @@ def _run_2e(tables: EventTables, out_dir: Path, *, show: bool = False) -> dict[s
 
     pkl = export_amplitude_velocity_fit(tables, out_dir, show=show)
     figures_dir, _ = resolve_figure_dirs(out_dir)
-    return {
+    out = {
         "figure_2e.pdf": figures_dir / "figure_2e.pdf",
+        "figure_2e_per_animal_means.pdf": figures_dir / "figure_2e_per_animal_means.pdf",
+        "figure_2e_per_animal_means_concurrent.pdf": figures_dir / "figure_2e_per_animal_means_concurrent.pdf",
+        "figure_2e_per_animal_means_monocular.pdf": figures_dir / "figure_2e_per_animal_means_monocular.pdf",
+        "figure_2e_all_animals_scatter.pdf": figures_dir / "figure_2e_all_animals_scatter.pdf",
+        "figure_2e_all_animals_density.pdf": figures_dir / "figure_2e_all_animals_density.pdf",
+        "figure_2e_all_events_scatter.pdf": figures_dir / "figure_2e_all_events_scatter.pdf",
+        "figure_2e_concurrent_scatter.pdf": figures_dir / "figure_2e_concurrent_scatter.pdf",
+        "figure_2e_monocular_scatter.pdf": figures_dir / "figure_2e_monocular_scatter.pdf",
         "amplitude_velocity_linear_fit_bundle.pkl": pkl,
     }
+    for path in figures_dir.glob("figure_2e*.pdf"):
+        out[path.name] = path
+    return {k: v for k, v in out.items() if Path(v).exists()}
 
 
 def _run_2f(tables: EventTables, out_dir: Path, *, show: bool = False) -> dict[str, Path]:
@@ -138,6 +156,24 @@ def _run_2h(tables: EventTables, out_dir: Path, *, show: bool = False) -> dict[s
     pkl = export_figure_2h(tables, out_dir, show=show)
     figures_dir, _ = resolve_figure_dirs(out_dir)
     return {"figure_2h.pdf": figures_dir / "figure_2h.pdf", "figure_2h.pickle": pkl}
+
+
+def _run_s3(tables: EventTables, out_dir: Path, *, show: bool = False) -> dict[str, Path]:
+    from eye_tracking_system_tools.analysis.figures_2f_2h_2i import export_figure_s3
+
+    return export_figure_s3(tables, out_dir, show=show)
+
+
+def _run_2b(tables: EventTables, out_dir: Path, *, show: bool = False, **kwargs) -> dict[str, Path]:
+    from eye_tracking_system_tools.analysis.figures_3a_3c_vignettes import export_figure_2b
+
+    return export_figure_2b(tables, out_dir, show=show, **kwargs)
+
+
+def _run_2b_examples(tables: EventTables, out_dir: Path, *, show: bool = False, **kwargs) -> dict[str, Path]:
+    from eye_tracking_system_tools.analysis.figures_3a_3c_vignettes import export_figure_2b_examples
+
+    return export_figure_2b_examples(tables, out_dir, show=show, **kwargs)
 
 
 def _run_2i(tables: EventTables, out_dir: Path, *, show: bool = False) -> dict[str, Path]:
@@ -259,7 +295,17 @@ CATALOG: dict[str, FigureSpec] = {
         label="Fig 2e — amplitude–velocity linear fit",
         needs=("events",),
         params_section="main_sequence",
-        outputs=("figure_2e.pdf",),
+        outputs=(
+            "figure_2e.pdf",
+            "figure_2e_per_animal_means.pdf",
+            "figure_2e_per_animal_means_concurrent.pdf",
+            "figure_2e_per_animal_means_monocular.pdf",
+            "figure_2e_all_animals_scatter.pdf",
+            "figure_2e_all_animals_density.pdf",
+            "figure_2e_all_events_scatter.pdf",
+            "figure_2e_concurrent_scatter.pdf",
+            "figure_2e_monocular_scatter.pdf",
+        ),
         runner=_run_2e,
     ),
     "2f": FigureSpec(
@@ -285,6 +331,34 @@ CATALOG: dict[str, FigureSpec] = {
         params_section="figure_2h",
         outputs=("figure_2h.pdf",),
         runner=_run_2h,
+    ),
+    "s3": FigureSpec(
+        fig_id="s3",
+        label="Fig S3 — peak-speed coupling still vs moving",
+        needs=("events", "traces"),
+        params_section="figure_2f",
+        outputs=(
+            "figure_S3_head_still.pdf",
+            "figure_S3_head_moving.pdf",
+            "figure_S3_colorbar.pdf",
+        ),
+        runner=_run_s3,
+    ),
+    "2b": FigureSpec(
+        fig_id="2b",
+        label="Fig 2b — simultaneous φ/θ traces",
+        needs=("traces",),
+        params_section="figure_3a_3c",
+        outputs=("figure_2b.pdf",),
+        runner=_run_2b,
+    ),
+    "2b_examples": FigureSpec(
+        fig_id="2b_examples",
+        label="Fig 2b — example trajectories with N/T/D/V",
+        needs=(),
+        params_section=None,
+        outputs=(),
+        runner=_run_2b_examples,
     ),
     "2i": FigureSpec(
         fig_id="2i",
@@ -347,7 +421,7 @@ CATALOG: dict[str, FigureSpec] = {
         label="Fig 3c — full vignette with state / rates",
         needs=("traces", "behavior_state"),
         params_section="figure_3a_3c",
-        outputs=("figure_3c.pdf",),
+        outputs=("figure_3c.pdf", "figure_3c_raw.pdf", "figure_3c_smoothed.pdf"),
         runner=_run_3c,
     ),
     "1e": FigureSpec(
@@ -378,16 +452,14 @@ def run_figure(
     saccade_filter: SaccadeFilter | dict[str, Any] | None = None,
     params_overrides: dict[str, Any] | None = None,
     show: bool = True,
+    cohort: str | None = None,
     **runner_kwargs: Any,
 ) -> dict[str, Path]:
     """
     Filter ``tables``, merge params overrides, and run the catalogued exporter.
 
-    ``saccade_filter`` optionally restricts events by kind (concurrent /
-    monocular), ``head_movement``, column truth values, or a pandas query.
-
-    Extra ``runner_kwargs`` are forwarded (e.g. ``jitter_bundle`` for Fig 1e,
-    ``start_s`` / ``end_s`` for vignettes).
+    Writes a self-contained plot bundle under ``out_dir / <plot_id>/``.
+    Mouse vs lizard folder prefix comes from animal IDs (or ``cohort=``).
     """
     spec = get_spec(fig_id)
     out_dir = Path(out_dir)
@@ -396,13 +468,29 @@ def run_figure(
 
     overrides = dict(params_overrides or {})
     if spec.params_section and overrides and spec.params_section not in overrides:
-        # Allow passing the section body directly: {num_bins: 40} → {figure_3e: {...}}
         if not any(k in filtered.params for k in overrides):
-            # Heuristic: if keys look like section knobs, wrap them.
             section_keys = set((filtered.params.get(spec.params_section) or {}).keys())
             if section_keys & set(overrides) or not section_keys:
                 overrides = {spec.params_section: overrides}
     work = with_params(filtered, overrides) if overrides else filtered
 
-    result = spec.runner(work, out_dir, show=show, **runner_kwargs)
+    info = infer_catalog_cohort(work, override=cohort)
+    plot_id = catalog_folder_id(fig_id, info["cohort"])
+    logic_key = catalog_folder_id(fig_id, "lizard")
+    print(
+        f"[plot_bundle] fig_id={fig_id} cohort={info['cohort']} "
+        f"animals={info['animals']} folder={plot_id} rule={info['rule']}",
+        flush=True,
+    )
+    bundle = begin_plot_bundle(
+        out_dir,
+        plot_id,
+        kind=KIND_FOR_FIG.get(fig_id, "generic_pickle"),
+        tables=work,
+        cohort=info,
+        logic_key=logic_key,
+        params=dict(work.params or {}),
+    )
+    result = spec.runner(work, bundle.bundle_dir, show=show, **runner_kwargs)
+    finish_plot_bundle(bundle)
     return _as_path_dict(result, spec)

@@ -29,6 +29,12 @@ main_sequence:
   # (or set null / omit to plot every animal present). A total miss warns and
   # falls back to all present animals.
   plot_animals: [PV_106]
+  # Fig 2e class scatters: one animal, same xlim/ylim as the multi-animal means panel.
+  scatter_animal: PV_106
+  # Pooled all-animal Gaussian-KDE likelihood (Fig 2h: Scott bandwidth, 200 bins, turbo).
+  density_nbins: 200
+  density_cmap: turbo
+  density_figsize: [3.8, 3.2]
   bin_cmap: viridis
   # Kernel path (main_sequence_analysis.ipynb paper call site).
   smoothing: true
@@ -51,14 +57,18 @@ figure_2f:
   micro_range: [0.0, 0.1]
   macro_tick_list: [0.0, 0.25, 0.5]
   micro_tick_list: [0.0, 0.05, 0.1]
-  # Paper / R3-1 call site (migration notebook cell 31):
-  #   event_mode="monocular", head_movement==False, animal !="PV_62" and !="PV_57"
-  event_mode: monocular  # all | monocular | binocular
+  # Published Fig 2f caption: all saccades, head-stationary, equal-animal weights.
+  # Concurrent L/R pairs (binocular.sync_diff_ms) contribute one point from both
+  # event peaks. Unpaired events keep the ±51 ms contra-window sample.
+  event_mode: all  # all | monocular | binocular
   require_head_stationary: true
-  exclude_animals: [PV_62, PV_57]
+  exclude_animals: []
   contra_event_window_ms: 100.0
   contra_sample_ms: 51.0
-  also_export_s3: true  # S3 is a twin PDF of 2f
+  # Peak-speed pairing: contra_window (legacy paper 2f) | event_span (strict on/off span)
+  sample_mode: contra_window
+  also_export_s3: false  # S3 is a separate still/moving exporter
+
 
 figure_2g:
   amp_bins: 40
@@ -75,7 +85,7 @@ figure_2i:
 
 figure_3e:
   num_bins: 40
-  x_range: [1.0, 2.35]
+  x_range: [1.4, 2.35]
   outlier_percentiles: [0.001, 99.999]
   animals: [PV_62]
   figsize: [2.2, 1.5]
@@ -90,6 +100,13 @@ figure_3f:
 figure_3a_3c:
   # Single-block vignettes (paper default block: PV_126_block_007).
   block_key: null  # null -> prefer PV_126_block_007, else first block in EventTables
+  figure_2b:
+    start_s: 0.0
+    end_s: 8.0
+    traces: [center_x, center_y]
+    figsize: [2.3, 1.8]
+    std_multiplier: 3
+    with_state: false
   figure_3a:
     start_s: 210.0
     end_s: 240.0

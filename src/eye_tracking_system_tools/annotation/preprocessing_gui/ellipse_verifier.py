@@ -58,8 +58,106 @@ def _apply_color_filters(
     return (np.clip(img, 0.0, 1.0) * 255.0).astype(np.uint8)
 
 
+def display_roi_from_drag(
+    x0: float,
+    y0: float,
+    x1: float,
+    y1: float,
+    frame_w: int,
+    frame_h: int,
+) -> tuple[int, int, int, int] | None:
+    """Integer ``(x, y, w, h)`` in display/scene pixels from two drag corners."""
+    x = int(round(min(x0, x1)))
+    y = int(round(min(y0, y1)))
+    x2 = int(round(max(x0, x1)))
+    y2 = int(round(max(y0, y1)))
+    if frame_w > 0:
+        x = max(0, min(x, frame_w - 1))
+        x2 = max(0, min(x2, frame_w))
+    if frame_h > 0:
+        y = max(0, min(y, frame_h - 1))
+        y2 = max(0, min(y2, frame_h))
+    w = x2 - x
+    h = y2 - y
+    if w < 1 or h < 1:
+        return None
+    return (x, y, w, h)
+
+
+_MEASURE_COLOR = QtGui.QColor(255, 210, 50)
+
+
+class _MeasureLimbLabel(QtWidgets.QGraphicsItem):
+    """Pixel-size label on a rectangle limb; visual size ignores view zoom."""
+
+    def __init__(
+        self,
+        text: str,
+        *,
+        vertical: bool,
+        inward: bool = False,
+        color: QtGui.QColor | None = None,
+    ):
+        super().__init__()
+        self._text = text
+        self._vertical = bool(vertical)
+        self._inward = bool(inward)
+        self._color = QtGui.QColor(color) if color is not None else _MEASURE_COLOR
+        self.setFlag(
+            QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations,
+            True,
+        )
+        self.setZValue(20)
+        font = QtGui.QFont()
+        font.setBold(True)
+        font.setPixelSize(12)
+        self._font = font
+        self._pad = 3
+        metrics = QtGui.QFontMetrics(font)
+        self._text_size = metrics.size(0, text)
+
+    def text(self) -> str:
+        return self._text
+
+    def boundingRect(self) -> QtCore.QRectF:
+        tw = float(self._text_size.width() + 2 * self._pad)
+        th = float(self._text_size.height() + 2 * self._pad)
+        if self._vertical:
+            tw, th = th, tw
+        if self._vertical:
+            if self._inward:
+                return QtCore.QRectF(0.0, -th / 2.0, tw, th)
+            return QtCore.QRectF(-tw, -th / 2.0, tw, th)
+        if self._inward:
+            return QtCore.QRectF(-tw / 2.0, 0.0, tw, th)
+        return QtCore.QRectF(-tw / 2.0, -th, tw, th)
+
+    def paint(self, painter, option, widget=None) -> None:
+        del option, widget
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
+        rect = self.boundingRect()
+        painter.setBrush(QtGui.QColor(0, 0, 0, 185))
+        painter.setPen(QtCore.Qt.PenStyle.NoPen)
+        painter.drawRoundedRect(rect, 3.0, 3.0)
+        painter.setPen(QtGui.QPen(self._color))
+        painter.setFont(self._font)
+        align = int(QtCore.Qt.AlignmentFlag.AlignCenter)
+        if self._vertical:
+            painter.save()
+            painter.translate(rect.center())
+            painter.rotate(-90.0)
+            tw = float(self._text_size.width())
+            th = float(self._text_size.height())
+            painter.drawText(
+                QtCore.QRectF(-tw / 2.0, -th / 2.0, tw, th), align, self._text
+            )
+            painter.restore()
+        else:
+            painter.drawText(rect, align, self._text)
+
+
 class FramePickerView(QtWidgets.QGraphicsView):
-    """Video frame view: click (Kerr) or drag rubber-band (perimeter / zoom)."""
+    """Video frame view: click (Kerr) or drag (perimeter / zoom / measure ROI)."""
 
     clicked_scene = QtCore.pyqtSignal(float, float)
     drag_finished_scene = QtCore.pyqtSignal(float, float, float, float)
@@ -71,15 +169,22 @@ class FramePickerView(QtWidgets.QGraphicsView):
         self.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._pixmap_item: QtWidgets.QGraphicsPixmapItem | None = None
-        self._interaction = "click"  # "click" | "drag"
+        self._interaction = "click"  # "click" | "drag" | "measure"
         self._origin_view: QtCore.QPoint | None = None
         self._zoom_rect: QtCore.QRectF | None = None
+        self._measure_roi: QtCore.QRectF | None = None
+        self._measure_items: list[QtWidgets.QGraphicsItem] = []
         self._rubber = QtWidgets.QRubberBand(
             QtWidgets.QRubberBand.Shape.Rectangle, self.viewport()
         )
 
     def set_interaction(self, mode: str) -> None:
-        self._interaction = "drag" if mode == "drag" else "click"
+        if mode == "drag":
+            self._interaction = "drag"
+        elif mode == "measure":
+            self._interaction = "measure"
+        else:
+            self._interaction = "click"
         self._rubber.hide()
         self._origin_view = None
 
@@ -90,11 +195,27 @@ class FramePickerView(QtWidgets.QGraphicsView):
     def clear_zoom(self) -> None:
         self.set_zoom_rect(None)
 
+    def measure_roi(self) -> QtCore.QRectF | None:
+        return QtCore.QRectF(self._measure_roi) if self._measure_roi is not None else None
+
+    def set_measure_roi(self, rect: QtCore.QRectF | None) -> None:
+        self._measure_roi = QtCore.QRectF(rect) if rect is not None else None
+        self._refresh_measure_overlay()
+
+    def measure_overlay_texts(self) -> list[str]:
+        return [
+            item.text()
+            for item in self._measure_items
+            if isinstance(item, _MeasureLimbLabel)
+        ]
+
     def set_pixmap(self, pixmap: QtGui.QPixmap) -> None:
+        self._measure_items = []
         self._scene.clear()
         self._pixmap_item = self._scene.addPixmap(pixmap)
         self.setSceneRect(self._pixmap_item.boundingRect())
         self._apply_view()
+        self._refresh_measure_overlay()
 
     def _apply_view(self) -> None:
         if self._pixmap_item is None:
@@ -106,6 +227,56 @@ class FramePickerView(QtWidgets.QGraphicsView):
                 self._pixmap_item, QtCore.Qt.AspectRatioMode.KeepAspectRatio
             )
 
+    def _pixmap_size(self) -> tuple[int, int]:
+        if self._pixmap_item is None:
+            return (0, 0)
+        br = self._pixmap_item.boundingRect()
+        return (int(round(br.width())), int(round(br.height())))
+
+    def _roi_from_view_drag(
+        self, p0: QtCore.QPoint, p1: QtCore.QPoint
+    ) -> tuple[int, int, int, int] | None:
+        s0 = self.mapToScene(p0)
+        s1 = self.mapToScene(p1)
+        fw, fh = self._pixmap_size()
+        return display_roi_from_drag(
+            float(s0.x()), float(s0.y()), float(s1.x()), float(s1.y()), fw, fh
+        )
+
+    def _clear_measure_items(self) -> None:
+        for item in self._measure_items:
+            if item.scene() is not None:
+                item.scene().removeItem(item)
+        self._measure_items = []
+
+    def _refresh_measure_overlay(self, rect: QtCore.QRectF | None = None) -> None:
+        self._clear_measure_items()
+        draw = rect if rect is not None else self._measure_roi
+        if draw is None or self._pixmap_item is None:
+            return
+        if draw.width() < 1 or draw.height() < 1:
+            return
+        pen = QtGui.QPen(_MEASURE_COLOR, 2)
+        pen.setCosmetic(True)
+        box = self._scene.addRect(draw, pen)
+        box.setBrush(QtGui.QBrush(QtGui.QColor(255, 210, 50, 35)))
+        box.setZValue(15)
+        self._measure_items.append(box)
+
+        w_px = int(round(draw.width()))
+        h_px = int(round(draw.height()))
+        width_label = _MeasureLimbLabel(
+            f"{w_px} px", vertical=False, inward=draw.top() <= 1
+        )
+        width_label.setPos(draw.center().x(), draw.top())
+        height_label = _MeasureLimbLabel(
+            f"{h_px} px", vertical=True, inward=draw.left() <= 1
+        )
+        height_label.setPos(draw.left(), draw.center().y())
+        self._scene.addItem(width_label)
+        self._scene.addItem(height_label)
+        self._measure_items.extend((width_label, height_label))
+
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
         super().resizeEvent(event)
         self._apply_view()
@@ -115,6 +286,9 @@ class FramePickerView(QtWidgets.QGraphicsView):
             if self._interaction == "click":
                 pos = self.mapToScene(event.pos())
                 self.clicked_scene.emit(float(pos.x()), float(pos.y()))
+            elif self._interaction == "measure":
+                self._origin_view = event.pos()
+                self._rubber.hide()
             else:
                 self._origin_view = event.pos()
                 self._rubber.setGeometry(QtCore.QRect(self._origin_view, QtCore.QSize()))
@@ -122,21 +296,38 @@ class FramePickerView(QtWidgets.QGraphicsView):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QtGui.QMouseEvent) -> None:
-        if self._interaction == "drag" and self._origin_view is not None:
-            rect = QtCore.QRect(self._origin_view, event.pos()).normalized()
-            self._rubber.setGeometry(rect)
+        if self._origin_view is not None:
+            if self._interaction == "drag":
+                rect = QtCore.QRect(self._origin_view, event.pos()).normalized()
+                self._rubber.setGeometry(rect)
+            elif self._interaction == "measure":
+                roi = self._roi_from_view_drag(self._origin_view, event.pos())
+                if roi is None:
+                    self._refresh_measure_overlay()
+                else:
+                    x, y, w, h = roi
+                    self._refresh_measure_overlay(QtCore.QRectF(x, y, w, h))
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QtGui.QMouseEvent) -> None:
         if (
-            self._interaction == "drag"
-            and self._origin_view is not None
+            self._origin_view is not None
             and event.button() == QtCore.Qt.MouseButton.LeftButton
+            and self._interaction in ("drag", "measure")
         ):
             p0 = self.mapToScene(self._origin_view)
             p1 = self.mapToScene(event.pos())
             self._rubber.hide()
+            origin = self._origin_view
             self._origin_view = None
+            if self._interaction == "measure":
+                roi = self._roi_from_view_drag(origin, event.pos())
+                if roi is None:
+                    self._refresh_measure_overlay()
+                    super().mouseReleaseEvent(event)
+                    return
+                x, y, w, h = roi
+                self.set_measure_roi(QtCore.QRectF(x, y, w, h))
             self.drag_finished_scene.emit(
                 float(p0.x()), float(p0.y()), float(p1.x()), float(p1.y())
             )
@@ -144,7 +335,7 @@ class FramePickerView(QtWidgets.QGraphicsView):
 
 
 class EllipseVerifierWidget(QtWidgets.QWidget):
-    """Interactive eye-video verifier: Kerr ref, perimeter commit, zoom, color QC."""
+    """Interactive eye-video verifier: Kerr ref, perimeter, zoom, measure ROI, color QC."""
 
     def __init__(
         self,
@@ -168,7 +359,8 @@ class EllipseVerifierWidget(QtWidgets.QWidget):
         self._current_ref = ref_point_xy
         self._perimeter: dict[str, Any] | None = normalize_perimeter(perimeter)
         self._shape_kind = "rect"
-        self._mode = "kerr"  # kerr | perimeter | zoom
+        self._mode = "kerr"  # kerr | perimeter | zoom | measure
+        self._measure_roi: tuple[int, int, int, int] | None = None
         self._frame_idx = 0
         self._playing = False
         self._frame_w = 0
@@ -177,6 +369,7 @@ class EllipseVerifierWidget(QtWidgets.QWidget):
         self._contrast = 1.0
         self._saturation = 1.0
         self._gamma = 1.0
+        self._peer_verifier: EllipseVerifierWidget | None = None
         self._probe_video_geometry(video_path)
 
         self._timer = QtCore.QTimer(self)
@@ -203,7 +396,21 @@ class EllipseVerifierWidget(QtWidgets.QWidget):
                 self._frame_h, self._frame_w = probe.shape[:2]
 
     def _build_ui(self) -> None:
-        layout = QtWidgets.QVBoxLayout(self)
+        outer = QtWidgets.QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+
+        scroll = QtWidgets.QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(
+            QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        outer.addWidget(scroll)
+
+        body = QtWidgets.QWidget()
+        scroll.setWidget(body)
+        layout = QtWidgets.QVBoxLayout(body)
+
         title = "Left eye" if self._eye == "left" else "Right eye"
         self._title = QtWidgets.QLabel(f"<b>{title}</b>")
         layout.addWidget(self._title)
@@ -212,14 +419,18 @@ class EllipseVerifierWidget(QtWidgets.QWidget):
         self._rb_kerr = QtWidgets.QRadioButton("Kerr ref")
         self._rb_perim = QtWidgets.QRadioButton("Perimeter")
         self._rb_zoom = QtWidgets.QRadioButton("Zoom region")
+        self._rb_measure = QtWidgets.QRadioButton("Measure ROI")
         self._rb_kerr.setChecked(True)
         self._rb_kerr.setToolTip("Click the frame to set the Kerr reference point")
         self._rb_perim.setToolTip(
             "Drag on the frame to draw a physiological pupil bound (rect or circle)"
         )
         self._rb_zoom.setToolTip("Drag a rectangle to zoom into that image region")
+        self._rb_measure.setToolTip(
+            "Drag a rectangle to measure width and height in pixels"
+        )
         self._mode_group = QtWidgets.QButtonGroup(self)
-        for rb in (self._rb_kerr, self._rb_perim, self._rb_zoom):
+        for rb in (self._rb_kerr, self._rb_perim, self._rb_zoom, self._rb_measure):
             self._mode_group.addButton(rb)
             mode_row.addWidget(rb)
         mode_row.addSpacing(12)
@@ -233,6 +444,10 @@ class EllipseVerifierWidget(QtWidgets.QWidget):
         mode_row.addWidget(self._rb_circle)
         self._btn_reset_zoom = QtWidgets.QPushButton("Reset zoom")
         mode_row.addWidget(self._btn_reset_zoom)
+        self._btn_clear_measure = QtWidgets.QPushButton("Clear measure")
+        self._btn_clear_measure.setEnabled(False)
+        self._btn_clear_measure.setToolTip("Remove the pixel-measure rectangle")
+        mode_row.addWidget(self._btn_clear_measure)
         mode_row.addStretch(1)
         layout.addLayout(mode_row)
 
@@ -272,8 +487,33 @@ class EllipseVerifierWidget(QtWidgets.QWidget):
         layout.addWidget(filt)
 
         self._frame_view = FramePickerView()
-        self._frame_view.setMinimumHeight(280)
+        self._frame_view.setMinimumHeight(220)
+        self._frame_view.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Expanding,
+        )
         layout.addWidget(self._frame_view, stretch=1)
+
+        self._kerr_span_status = QtWidgets.QLabel("Kerr ref: (none)")
+        self._kerr_span_status.setWordWrap(True)
+        self._kerr_span_status.setTextInteractionFlags(
+            QtCore.Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        self._kerr_span_status.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Preferred,
+            QtWidgets.QSizePolicy.Policy.Minimum,
+        )
+        self._kerr_span_status.setMinimumHeight(56)
+        self._kerr_span_status.setStyleSheet(
+            "QLabel {"
+            " background-color: #e8f0fe;"
+            " color: #1a1a1a;"
+            " padding: 6px 8px;"
+            " border: 1px solid #c5d4f0;"
+            " border-radius: 4px;"
+            "}"
+        )
+        layout.addWidget(self._kerr_span_status, stretch=0)
 
         transport = QtWidgets.QHBoxLayout()
         self._btn_play = QtWidgets.QPushButton("Play")
@@ -331,16 +571,19 @@ class EllipseVerifierWidget(QtWidgets.QWidget):
         self._rb_kerr.toggled.connect(self._on_mode_changed)
         self._rb_perim.toggled.connect(self._on_mode_changed)
         self._rb_zoom.toggled.connect(self._on_mode_changed)
+        self._rb_measure.toggled.connect(self._on_mode_changed)
         self._rb_rect.toggled.connect(self._on_shape_changed)
         self._rb_circle.toggled.connect(self._on_shape_changed)
         self._btn_clear_perim.clicked.connect(self._on_clear_perimeter)
         self._btn_commit_perim.clicked.connect(self._on_commit_perimeter)
         self._btn_reset_zoom.clicked.connect(self._on_reset_zoom)
+        self._btn_clear_measure.clicked.connect(self._on_clear_measure)
         self._btn_reset_filters.clicked.connect(self._on_reset_filters)
         self._slider_contrast.valueChanged.connect(self._on_filters_changed)
         self._slider_sat.valueChanged.connect(self._on_filters_changed)
         self._slider_gamma.valueChanged.connect(self._on_filters_changed)
         self._sync_mode_ui()
+        self._update_kerr_span_status()
 
     @staticmethod
     def _make_filter_slider(lo: int, hi: int, val: int) -> QtWidgets.QSlider:
@@ -358,6 +601,14 @@ class EllipseVerifierWidget(QtWidgets.QWidget):
 
     def df(self) -> pd.DataFrame:
         return self._df_current
+
+    @property
+    def eye(self) -> str:
+        return self._eye
+
+    def set_peer_verifier(self, peer: EllipseVerifierWidget | None) -> None:
+        """Link the opposite-eye verifier for span comparison / matching."""
+        self._peer_verifier = peer
 
     def ref_xy(self) -> tuple[int, int] | None:
         if self._current_ref is None:
@@ -381,16 +632,84 @@ class EllipseVerifierWidget(QtWidgets.QWidget):
         self._current_ref = (x_raw, y_raw)
         return self._current_ref
 
+    def _update_kerr_span_status(self) -> None:
+        """Show Kerr XY, φ/θ spans, and MAD under the eye image."""
+        ref = self.ref_xy()
+        if ref is None:
+            self._kerr_span_status.setText("Kerr ref: (none)")
+            return
+
+        from eye_tracking_system_tools.annotation.preprocessing_gui.kerr_angles_span_dialog import (
+            _fmt_span,
+            compute_kerr_ref_span,
+        )
+
+        QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.CursorShape.WaitCursor)
+        try:
+            metrics = compute_kerr_ref_span(self._df_current, ref[0], ref[1])
+        except Exception as exc:
+            QtWidgets.QApplication.restoreOverrideCursor()
+            self._kerr_span_status.setText(
+                f"Kerr ref: ({ref[0]}, {ref[1]}) — span preview failed: {exc}"
+            )
+            return
+        QtWidgets.QApplication.restoreOverrideCursor()
+
+        self._kerr_span_status.setText(
+            f"Kerr ref: ({ref[0]}, {ref[1]}) · "
+            f"φ full {_fmt_span(metrics.phi_full)}° · "
+            f"φ p5–p95 {_fmt_span(metrics.phi_p5_95)}° · "
+            f"θ full {_fmt_span(metrics.theta_full)}° · "
+            f"θ p5–p95 {_fmt_span(metrics.theta_p5_95)}° · "
+            f"φ MAD {_fmt_span(metrics.phi_mad)}° · "
+            f"θ MAD {_fmt_span(metrics.theta_mad)}°"
+        )
+
+    def measure_roi(self) -> tuple[int, int, int, int] | None:
+        """Display-space pixel ROI ``(x, y, w, h)``, or ``None`` if unset."""
+        return self._measure_roi
+
+    def _apply_measure_roi(self, roi: tuple[int, int, int, int] | None) -> None:
+        self._measure_roi = roi
+        if roi is None:
+            self._frame_view.set_measure_roi(None)
+        else:
+            x, y, w, h = roi
+            self._frame_view.set_measure_roi(QtCore.QRectF(x, y, w, h))
+        self._btn_clear_measure.setEnabled(roi is not None)
+        self._sync_mode_ui()
+
+    def _on_clear_measure(self) -> None:
+        self._apply_measure_roi(None)
+
     def _sync_mode_ui(self) -> None:
         perim = self._rb_perim.isChecked()
         zoom = self._rb_zoom.isChecked()
+        measure = self._rb_measure.isChecked()
         self._rb_rect.setEnabled(perim)
         self._rb_circle.setEnabled(perim)
         self._btn_clear_perim.setEnabled(True)
         self._btn_commit_perim.setEnabled(self._perimeter is not None)
-        self._frame_view.set_interaction("drag" if (perim or zoom) else "click")
+        self._btn_clear_measure.setEnabled(self._measure_roi is not None)
+        if measure:
+            interaction = "measure"
+        elif perim or zoom:
+            interaction = "drag"
+        else:
+            interaction = "click"
+        self._frame_view.set_interaction(interaction)
         eye_title = "Left eye" if self._eye == "left" else "Right eye"
-        if zoom:
+        if measure:
+            if self._measure_roi is None:
+                self._title.setText(
+                    f"<b>{eye_title}</b> — Measure ROI: drag a rectangle"
+                )
+            else:
+                _x, _y, w, h = self._measure_roi
+                self._title.setText(
+                    f"<b>{eye_title}</b> — Measure ROI: {w} × {h} px"
+                )
+        elif zoom:
             self._title.setText(f"<b>{eye_title}</b> — Zoom: drag a region")
         elif perim:
             tip = (
@@ -403,7 +722,9 @@ class EllipseVerifierWidget(QtWidgets.QWidget):
             self._title.setText(f"<b>{eye_title}</b> — click frame to set Kerr ref")
 
     def _on_mode_changed(self, _checked: bool = False) -> None:
-        if self._rb_zoom.isChecked():
+        if self._rb_measure.isChecked():
+            self._mode = "measure"
+        elif self._rb_zoom.isChecked():
             self._mode = "zoom"
         elif self._rb_perim.isChecked():
             self._mode = "perimeter"
@@ -489,10 +810,19 @@ class EllipseVerifierWidget(QtWidgets.QWidget):
             return
         self.pick_ref_from_display_xy(x_view, y_view)
         self._show_frame(self._frame_idx)
+        self._update_kerr_span_status()
 
     def _on_drag_finished(
         self, x0: float, y0: float, x1: float, y1: float
     ) -> None:
+        if self._mode == "measure":
+            roi = display_roi_from_drag(
+                x0, y0, x1, y1, self._frame_w, self._frame_h
+            )
+            if roi is None:
+                return
+            self._apply_measure_roi(roi)
+            return
         if self._mode == "zoom":
             rect = QtCore.QRectF(
                 QtCore.QPointF(min(x0, x1), min(y0, y1)),
@@ -533,7 +863,13 @@ class EllipseVerifierWidget(QtWidgets.QWidget):
             r = int(round(peri["r"]))
             cv2.circle(annotated, (cx, cy), max(r, 1), color, 2)
 
-    def _render_frame_rgb(self, frame_idx: int) -> np.ndarray | None:
+    def _render_frame_rgb(
+        self,
+        frame_idx: int,
+        *,
+        flip_vertical: bool = True,
+    ) -> np.ndarray | None:
+        """Render annotated RGB frame; Kerr/raw space when ``flip_vertical=False``."""
         rgb = self._reader.read_frame(frame_idx)
         if rgb is None:
             return None
@@ -558,7 +894,9 @@ class EllipseVerifierWidget(QtWidgets.QWidget):
                 -1,
             )
         self._draw_perimeter_overlay(annotated)
-        return cv2.flip(annotated, 0)
+        if flip_vertical:
+            return cv2.flip(annotated, 0)
+        return annotated
 
     def _show_frame(self, frame_idx: int) -> None:
         nframes = max(self._reader.nframes, 1)
@@ -622,6 +960,7 @@ class EllipseVerifierWidget(QtWidgets.QWidget):
         x0, y0 = self._current_ref
         self._current_ref = (self._frame_w - int(x0), int(y0))
         self._show_frame(self._frame_idx)
+        self._update_kerr_span_status()
 
     def _on_compute_angles_span(self) -> None:
         ref = self.ref_xy()
@@ -651,15 +990,43 @@ class EllipseVerifierWidget(QtWidgets.QWidget):
                 f"Kerr preview failed:\n{exc}",
             )
             return
+
+        other_preview = None
+        other_eye = None
+        other_error: str | None = None
+        peer = self._peer_verifier
+        if peer is not None:
+            other_ref = peer.ref_xy()
+            if other_ref is not None:
+                other_eye = peer.eye
+                try:
+                    other_preview = preview_kerr_angles(
+                        peer.df(), other_ref[0], other_ref[1]
+                    )
+                except Exception as exc:
+                    other_error = str(exc)
         QtWidgets.QApplication.restoreOverrideCursor()
 
+        if other_error is not None:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Compute angles span",
+                f"Opposite-eye Kerr preview failed (continuing without it):\n{other_error}",
+            )
+
+        # Pass Kerr/raw (unflipped) frame so ROI grid coords match ref_x/ref_y.
+        frame_rgb = self._render_frame_rgb(self._frame_idx, flip_vertical=False)
         dialog = KerrAnglesSpanDialog(
             preview,
             eye=self._eye,
             eye_df=self._df_current,
+            frame_rgb=frame_rgb,
+            other_preview=other_preview,
+            other_eye=other_eye,
             parent=self,
         )
         if dialog.exec() == QtWidgets.QDialog.DialogCode.Accepted:
             new_ref = dialog.ref_xy()
             self._current_ref = new_ref
             self._show_frame(self._frame_idx)
+            self._update_kerr_span_status()

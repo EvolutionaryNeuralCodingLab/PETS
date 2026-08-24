@@ -277,7 +277,7 @@ def plot_zoomed_in_with_head_rate(
             raise ValueError(f"Unknown trace {trace!r}")
 
         if i == num_traces - 1:
-            ax.set_xlabel("Time (seconds from window start)" if x_zero_origin else "Time (seconds)")
+            ax.set_xlabel("[s]")
 
     # ---------- behavior-state strip (φ axis only) ----------
     if first_trace_axis is not None and behavior_state_df is not None and not behavior_state_df.empty:
@@ -352,6 +352,26 @@ def plot_zoomed_in_with_head_rate(
     return fig, axes
 
 
+def _add_anatomical_nt_dv(ax, *, eye: str) -> None:
+    """Nasal/temporal/dorsal/ventral ticks. Nasal is opposite for L vs R."""
+    xlim = ax.get_xlim()
+    ylim = ax.get_ylim()
+    xmid = 0.5 * (xlim[0] + xlim[1])
+    ymid = 0.5 * (ylim[0] + ylim[1])
+    pad_x = 0.04 * (xlim[1] - xlim[0])
+    pad_y = 0.04 * (ylim[1] - ylim[0])
+    # +φ is nasal for the left eye and temporal for the right eye.
+    if str(eye).upper().startswith("L"):
+        nasal_x, temporal_x = xlim[1] - pad_x, xlim[0] + pad_x
+    else:
+        nasal_x, temporal_x = xlim[0] + pad_x, xlim[1] - pad_x
+    kw = dict(fontsize=7, color="0.25", clip_on=False)
+    ax.text(nasal_x, ymid, "N", ha="center", va="center", **kw)
+    ax.text(temporal_x, ymid, "T", ha="center", va="center", **kw)
+    ax.text(xmid, ylim[1] - pad_y, "D", ha="center", va="top", **kw)
+    ax.text(xmid, ylim[0] + pad_y, "V", ha="center", va="bottom", **kw)
+
+
 def plot_angle_mapping(
     start_time,
     end_time,
@@ -372,9 +392,9 @@ def plot_angle_mapping(
     right_w = right_df[(right_df["t_s"] >= start_time) & (right_df["t_s"] <= end_time)]
 
     fig, axs = plt.subplots(1, 2, figsize=figure_size, dpi=300)
-    for ax, df, title in (
-        (axs[0], left_w, "Left"),
-        (axs[1], right_w, "Right"),
+    for ax, df, title, eye in (
+        (axs[0], left_w, "Left", "L"),
+        (axs[1], right_w, "Right", "R"),
     ):
         if len(df) == 0:
             ax.set_title(f"{title} (empty)")
@@ -393,6 +413,7 @@ def plot_angle_mapping(
         ax.set_ylabel("θ [deg]", fontsize=8)
         ax.set_title(title, fontsize=9)
         ax.tick_params(labelsize=7)
+        _add_anatomical_nt_dv(ax, eye=eye)
     fig.tight_layout()
     if export_path:
         out = Path(export_path)

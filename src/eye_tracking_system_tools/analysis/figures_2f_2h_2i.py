@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pickle
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import matplotlib.colors as mcolors
@@ -12,9 +13,10 @@ import pandas as pd
 from matplotlib import rcParams
 from scipy.stats import gaussian_kde
 
+from eye_tracking_system_tools.analysis.binocular import find_synced_saccades_ms
 from eye_tracking_system_tools.analysis.colors import build_color_map
 from eye_tracking_system_tools.analysis.export_meta import write_pickle_with_meta
-from eye_tracking_system_tools.analysis.pipeline import EventTables
+from eye_tracking_system_tools.analysis.pipeline import EventTables, _row_block_key
 from eye_tracking_system_tools.analysis.figure_display import show_and_close
 from eye_tracking_system_tools.analysis.run_layout import resolve_figure_dirs
 
@@ -136,7 +138,193 @@ def _iqr_bounds(arr: np.ndarray, mult: float) -> tuple[float, float]:
     return float(q1 - mult * iqr), float(q3 + mult * iqr)
 
 
+def _is_auto_token(value: object) -> bool:
+    return isinstance(value, str) and value.strip().lower() in {"auto", "data"}
+
+
+def _as_range(value: object, default: tuple[float, float]) -> tuple[float, float]:
+    if value is None or _is_auto_token(value):
+        return default
+    if isinstance(value, (list, tuple)) and len(value) == 2:
+        try:
+            lo, hi = float(value[0]), float(value[1])
+        except (TypeError, ValueError):
+            return default
+        if np.isfinite(lo) and np.isfinite(hi) and hi > lo:
+            return (lo, hi)
+    return default
+
+
+def nice_axis_max(value: float, *, step: float | None = None) -> float:
+    """Round ``value`` up onto a short tick so the plotted percentile is not clipped."""
+    x = float(value)
+    if not np.isfinite(x) or x <= 0:
+        return 0.5
+    if step is None:
+        step = 0.05 if x < 2.0 else 0.1
+    return float(np.ceil((x / step) - 1e-12) * step)
+
+
+def _ticks_for_span(lo: float, hi: float) -> list[float]:
+    lo, hi = float(lo), float(hi)
+    if not np.isfinite(lo) or not np.isfinite(hi) or hi <= lo:
+        return [0.0, 0.5]
+    if hi <= 0.3:
+        step = 0.1
+    elif hi <= 0.6:
+        step = 0.25
+    elif hi <= 1.5:
+        step = 0.5
+    else:
+        step = 1.0
+    ticks = []
+    t = lo
+    while t <= hi + 1e-9:
+        ticks.append(round(t, 10))
+        t += step
+    if ticks[-1] < hi - 1e-9:
+        ticks.append(round(hi, 10))
+    return ticks
+
+
+def _as_tick_list(value: object, lo: float, hi: float) -> list[float]:
+    if value is None or _is_auto_token(value):
+        return _ticks_for_span(lo, hi)
+    if isinstance(value, (list, tuple)) and len(value) >= 2:
+        try:
+            ticks = [float(v) for v in value]
+        except (TypeError, ValueError):
+            return _ticks_for_span(lo, hi)
+        if all(np.isfinite(t) for t in ticks):
+            return ticks
+    return _ticks_for_span(lo, hi)
+
+
+def resolve_figure_2f_view_limits(
+    right: np.ndarray,
+    left: np.ndarray,
+    cfg: dict | None = None,
+) -> dict[str, object]:
+    """Macro/micro axis ranges for Fig 2f.
+
+    With ``auto_view_limits`` (or ``macro_range: auto``), macro xmax is the
+    ``macro_pct`` (default 99.5) percentile of the plotted L/R speeds, rounded
+    up so the cloud is not clipped. Micro xmax is ``micro_frac_of_macro`` of
+    that (default 0.2), a zoom on slower/near-threshold saccades.
+    """
+    cfg = dict(cfg or {})
+    pct = float(cfg.get("macro_pct", 99.5))
+    auto_macro = bool(cfg.get("auto_view_limits")) or _is_auto_token(cfg.get("macro_range"))
+    auto_micro = bool(cfg.get("auto_view_limits")) or _is_auto_token(cfg.get("micro_range"))
+    right = np.asarray(right, dtype=float)
+    left = np.asarray(left, dtype=float)
+    finite_r = right[np.isfinite(right)]
+    finite_l = left[np.isfinite(left)]
+
+    if auto_macro and finite_r.size and finite_l.size:
+        p_r = float(np.nanpercentile(finite_r, pct))
+        p_l = float(np.nanpercentile(finite_l, pct))
+        macro_range = (0.0, nice_axis_max(max(p_r, p_l)))
+    else:
+        macro_range = _as_range(cfg.get("macro_range"), (0.0, 0.5))
+
+    if auto_micro:
+        frac = float(cfg.get("micro_frac_of_macro", 0.2))
+        micro_hi = nice_axis_max(macro_range[1] * frac, step=0.05)
+        if micro_hi >= macro_range[1]:
+            micro_hi = macro_range[1]
+        micro_range = (0.0, float(micro_hi))
+    else:
+        micro_range = _as_range(cfg.get("micro_range"), (0.0, 0.1))
+
+    if auto_macro:
+        macro_ticks = _ticks_for_span(*macro_range)
+    else:
+        macro_ticks = _as_tick_list(cfg.get("macro_tick_list"), *macro_range)
+    if auto_micro:
+        micro_ticks = _ticks_for_span(*micro_range)
+    else:
+        micro_ticks = _as_tick_list(cfg.get("micro_tick_list"), *micro_range)
+
+    return {
+        "macro_range": macro_range,
+        "micro_range": micro_range,
+        "macro_tick_list": [float(t) for t in macro_ticks],
+        "micro_tick_list": [float(t) for t in micro_ticks],
+    }
+
+
+def histogram2d_xy(
+    right: np.ndarray,
+    left: np.ndarray,
+    weights: np.ndarray | None,
+    rng: tuple[float, float],
+    bins: int,
+) -> dict[str, np.ndarray]:
+    """Normalized 2f histogram on a square ``rng`` grid."""
+    n_edge = max(int(bins), 2)
+    xbins = np.linspace(float(rng[0]), float(rng[1]), n_edge)
+    ybins = np.linspace(float(rng[0]), float(rng[1]), n_edge)
+    right = np.asarray(right, dtype=float)
+    left = np.asarray(left, dtype=float)
+    if right.size == 0:
+        zeros = np.zeros((n_edge - 1, n_edge - 1), dtype=float)
+        return {
+            "xedges": xbins.astype(float),
+            "yedges": ybins.astype(float),
+            "norm_counts": zeros,
+        }
+    if weights is None:
+        w = np.ones(right.size, dtype=float)
+    else:
+        w = np.asarray(weights, dtype=float)
+    counts, xedges, yedges = np.histogram2d(right, left, bins=[xbins, ybins], weights=w)
+    norm = counts / counts.sum() if counts.sum() > 0 else counts
+    return {
+        "xedges": xedges.astype(float),
+        "yedges": yedges.astype(float),
+        "norm_counts": norm.astype(float),
+    }
+
+
+def rebin_figure_2f_data(data: dict, cfg: dict | None = None) -> dict:
+    """Recompute 2f histograms from stored speeds. Does not re-detect events."""
+    data = dict(data)
+    right = np.asarray(data.get("right_eye_speeds", []), dtype=float)
+    left = np.asarray(data.get("left_eye_speeds", []), dtype=float)
+    if right.size == 0 or left.size == 0:
+        return data
+    weights = data.get("weights")
+    bins = int((cfg or {}).get("bins", data.get("bins", 60)))
+    merged = dict(data)
+    if cfg:
+        merged.update(cfg)
+    limits = resolve_figure_2f_view_limits(right, left, merged)
+    macro_range = tuple(limits["macro_range"])
+    micro_range = tuple(limits["micro_range"])
+    data["bins"] = bins
+    data["macro_range"] = macro_range
+    data["micro_range"] = micro_range
+    data["macro_tick_list"] = list(limits["macro_tick_list"])
+    data["micro_tick_list"] = list(limits["micro_tick_list"])
+    data["macro"] = histogram2d_xy(right, left, weights, macro_range, bins)
+    data["micro"] = histogram2d_xy(right, left, weights, micro_range, bins)
+    data["vmax_all"] = float(
+        max(
+            np.nanmax(data["macro"]["norm_counts"]),
+            np.nanmax(data["micro"]["norm_counts"]),
+            1e-12,
+        )
+    )
+    data["auto_view_limits"] = bool(merged.get("auto_view_limits"))
+    data["macro_pct"] = float(merged.get("macro_pct", 99.5))
+    data["micro_frac_of_macro"] = float(merged.get("micro_frac_of_macro", 0.2))
+    return data
+
+
 def _estimate_frame_period_ms(eye_df: pd.DataFrame, t_ms: float) -> float:
+    if eye_df is None or eye_df.empty or "ms_axis" not in getattr(eye_df, "columns", []):
+        return 17.0
     try:
         window = eye_df.query(
             "ms_axis >= @t_ms - 51 and ms_axis <= @t_ms + 51"
@@ -165,6 +353,8 @@ def _contra_has_event(
 def _sample_contra_peak(
     contra_df: pd.DataFrame, t_ms: float, halfwin_ms: float, frame_ms: float
 ) -> float:
+    if contra_df is None or contra_df.empty:
+        return np.nan
     if "angular_speed_r" not in contra_df.columns or "ms_axis" not in contra_df.columns:
         return np.nan
     series = contra_df.query(
@@ -175,19 +365,183 @@ def _sample_contra_peak(
     return float(np.nanmax(series.to_numpy(dtype=float))) / frame_ms
 
 
-def export_figure_2f(tables: EventTables, out_dir: Path, *, show: bool = False) -> Path:
-    """
-    Inter-ocular peak-speed 2D histogram.
+def _sample_event_span_peak(
+    eye_df: pd.DataFrame, t_on_ms: float, t_off_ms: float, frame_ms: float
+) -> float:
+    """Max ``angular_speed_r`` over the event's own [on, off] ms span (strict mode)."""
+    if eye_df is None or eye_df.empty:
+        return np.nan
+    if "angular_speed_r" not in eye_df.columns or "ms_axis" not in eye_df.columns:
+        return np.nan
+    series = eye_df.query(
+        "ms_axis >= @t_on_ms and ms_axis <= @t_off_ms"
+    )["angular_speed_r"]
+    if series.notna().sum() == 0:
+        return np.nan
+    return float(np.nanmax(series.to_numpy(dtype=float))) / frame_ms
 
-    Paper / R3-1 path (migration notebook): ``event_mode=monocular``,
-    ``head_movement==False``, exclude PV_62/PV_57, contra window 100 ms.
-    """
+
+def _event_peak_deg_per_ms(row: pd.Series, eye_df: pd.DataFrame) -> float:
+    """Detected-saccade peak: max ``speed_profile_angular`` / frame period."""
+    sp = row.get("speed_profile_angular", None)
+    if sp is None:
+        return float("nan")
+    try:
+        arr = np.asarray(sp, dtype=float)
+    except (TypeError, ValueError):
+        return float("nan")
+    if arr.size == 0 or not np.isfinite(np.nanmax(arr)):
+        return float("nan")
+    t0 = float(row["saccade_on_ms"]) if "saccade_on_ms" in row.index else float("nan")
+    frame_ms = _estimate_frame_period_ms(eye_df, t0)
+    if not np.isfinite(frame_ms) or frame_ms <= 0:
+        return float("nan")
+    return float(np.nanmax(arr)) / frame_ms
+
+
+def _resolve_contra_peak(
+    contra_df: pd.DataFrame,
+    row: pd.Series,
+    *,
+    sample_mode: str,
+    contra_sample_ms: float,
+    frame_ms: float,
+) -> float:
+    mode = str(sample_mode).lower()
+    t0 = float(row["saccade_on_ms"])
+    if mode == "event_span":
+        if "saccade_off_ms" not in row.index or not np.isfinite(row["saccade_off_ms"]):
+            return np.nan
+        return _sample_event_span_peak(
+            contra_df, t0, float(row["saccade_off_ms"]), frame_ms
+        )
+    if mode == "contra_window":
+        return _sample_contra_peak(contra_df, t0, contra_sample_ms, frame_ms)
+    raise ValueError(
+        f"figure_2f sample_mode must be 'contra_window' or 'event_span', got {sample_mode!r}"
+    )
+
+
+@dataclass
+class Figure2fDisplayData:
+    """Histogram panels for Fig 2f display (from export pickle or live compute)."""
+
+    macro: dict[str, np.ndarray]
+    micro: dict[str, np.ndarray]
+    macro_range: tuple[float, float]
+    micro_range: tuple[float, float]
+    macro_tick_list: list[float]
+    micro_tick_list: list[float]
+    vmax_all: float
+    source: str = "computed"
+    n_points: int = 0
+
+
+def display_data_from_collected(collected: Figure2fPoints) -> Figure2fDisplayData:
+    macro = histogram2d_from_points(collected, view="macro")
+    micro = histogram2d_from_points(collected, view="micro")
+    cfg = collected.cfg
+    vmax_all = float(
+        max(
+            np.nanmax(macro["norm_counts"]),
+            np.nanmax(micro["norm_counts"]),
+            1e-12,
+        )
+    )
+    return Figure2fDisplayData(
+        macro=macro,
+        micro=micro,
+        macro_range=collected.macro_range,
+        micro_range=collected.micro_range,
+        macro_tick_list=list(cfg.get("macro_tick_list", [0.0, 0.25, 0.5])),
+        micro_tick_list=list(cfg.get("micro_tick_list", [0.0, 0.05, 0.1])),
+        vmax_all=vmax_all,
+        source="computed",
+        n_points=len(collected.points),
+    )
+
+
+def load_figure_2f_display(pickle_path: Path | str) -> Figure2fDisplayData:
+    """Load macro/micro histograms from a ``figure_2f_nodowncast.pickle`` export."""
+    pickle_path = Path(pickle_path)
+    with open(pickle_path, "rb") as handle:
+        data = pickle.load(handle)
+    right = np.asarray(data["right_eye_speeds"], dtype=float)
+    left = np.asarray(data["left_eye_speeds"], dtype=float)
+    macro_range = tuple(data["macro_range"])
+    micro_range = tuple(data["micro_range"])
+    vmax_all = float(data.get("vmax_all", 1.0))
+    if not np.isfinite(vmax_all) or vmax_all <= 0:
+        vmax_all = 1.0
+    return Figure2fDisplayData(
+        macro=data["macro"],
+        micro=data["micro"],
+        macro_range=(float(macro_range[0]), float(macro_range[1])),
+        micro_range=(float(micro_range[0]), float(micro_range[1])),
+        macro_tick_list=list(data.get("macro_tick_list", [0.0, 0.25, 0.5])),
+        micro_tick_list=list(data.get("micro_tick_list", [0.0, 0.05, 0.1])),
+        vmax_all=vmax_all,
+        source=str(pickle_path),
+        n_points=int(right.size),
+    )
+
+
+@dataclass
+class Figure2fPoints:
+    """Per-event inter-ocular peak speeds used for Fig 2f and ROI selection."""
+
+    points: pd.DataFrame
+    macro_range: tuple[float, float]
+    micro_range: tuple[float, float]
+    bins: int
+    cfg: dict[str, object] = field(default_factory=dict)
+    n_skip_mode: int = 0
+    n_skip_profile: int = 0
+
+    @property
+    def right_peak_v(self) -> np.ndarray:
+        return self.points["right_peak_v"].to_numpy(dtype=float)
+
+    @property
+    def left_peak_v(self) -> np.ndarray:
+        return self.points["left_peak_v"].to_numpy(dtype=float)
+
+    @property
+    def weights(self) -> np.ndarray:
+        return self.points["weight"].to_numpy(dtype=float)
+
+
+def figure_2f_config(tables: EventTables, overrides: dict | None = None) -> dict:
     cfg = dict(tables.params.get("figure_2f", {}))
+    if overrides:
+        cfg.update(overrides)
+    return cfg
+
+
+def collect_figure_2f_points(
+    tables: EventTables,
+    *,
+    cfg: dict | None = None,
+    apply_iqr_clip: bool = True,
+) -> Figure2fPoints:
+    """
+    Build (right, left) inter-ocular peak speeds for Fig 2f / ROI tools.
+
+    Concurrent L/R onsets (``binocular.sync_diff_ms``, default 34 ms) contribute
+    **one** point whose coordinates are the two detected saccade peaks — the
+    contra eye is not re-sampled in a time window. Unpaired (monocular) events
+    all stay in: ipsilateral peak from the event, contralateral value from the
+    ±51 ms trace window so near-threshold contra motion is visible.
+    """
+    cfg = figure_2f_config(tables, cfg)
     event_mode = str(cfg.get("event_mode", "monocular")).lower()
-    contra_win = float(cfg.get("contra_event_window_ms", 100.0))
+    sample_mode = str(cfg.get("sample_mode", "contra_window")).lower()
     contra_sample = float(cfg.get("contra_sample_ms", 51.0))
+    pair_ms = float(
+        tables.params.get("binocular", {}).get("sync_diff_ms", 34.0)
+    )
     exclude = {str(a) for a in cfg.get("exclude_animals", [])}
-    figures_dir, metadata_dir = resolve_figure_dirs(out_dir)
+    bins = int(cfg.get("bins", 60))
 
     df = tables.all_saccades.copy()
     if exclude:
@@ -200,100 +554,189 @@ def export_figure_2f(tables: EventTables, out_dir: Path, *, show: bool = False) 
             df = df[df["head_movement"] == False]  # noqa: E712
             print(f"[2f] head_stationary filter: {before} → {len(df)}")
 
-    # Per-block onset caches + eye traces
     block_map = tables.block_dict
-    onset_cache: dict[tuple[str, str], np.ndarray] = {}
-    for key, bundle in block_map.items():
-        for eye, ev in (("L", bundle.l_saccades), ("R", bundle.r_saccades)):
-            if ev is None or ev.empty or "saccade_on_ms" not in ev.columns:
-                onset_cache[(key, eye)] = np.array([], dtype=float)
-            else:
-                onset_cache[(key, eye)] = ev["saccade_on_ms"].to_numpy(dtype=float)
-
-    rights, lefts, animals = [], [], []
+    rows: list[dict] = []
     n_skip_mode = 0
     n_skip_profile = 0
-    for _, row in df.iterrows():
-        animal = str(row["animal"])
-        block_key = f"{animal}_block_{row['block']}"
-        bundle = block_map.get(block_key)
+    n_pairs = 0
+    n_mono = 0
+
+    include_pairs = event_mode in {"all", "binocular"}
+    include_mono = event_mode in {"all", "monocular"}
+
+    grouped = []
+    if not df.empty and {"animal", "block"}.issubset(df.columns):
+        grouped = list(df.groupby(["animal", "block"], dropna=False))
+
+    for (animal, block), g in grouped:
+        bundle = block_map.get(_row_block_key(animal, block))
         if bundle is None:
             continue
-        eye = str(row["eye"])
-        t0 = float(row["saccade_on_ms"])
-        other = "R" if eye == "L" else "L"
-        is_binocular = _contra_has_event(onset_cache[(block_key, other)], t0, contra_win)
-        if event_mode == "monocular" and is_binocular:
-            n_skip_mode += 1
-            continue
-        if event_mode == "binocular" and not is_binocular:
-            n_skip_mode += 1
-            continue
+        synced, mono = find_synced_saccades_ms(g, sync_diff_ms=pair_ms)
 
-        if eye == "L":
-            ipsi_df, contra_df = bundle.left, bundle.right
-        else:
-            ipsi_df, contra_df = bundle.right, bundle.left
+        if include_pairs and synced is not None and not synced.empty and "Main" in synced.columns:
+            for _, pg in synced.groupby("Main"):
+                l_rows = pg[pg["eye"].astype(str) == "L"]
+                r_rows = pg[pg["eye"].astype(str) == "R"]
+                if l_rows.empty or r_rows.empty:
+                    n_skip_profile += 1
+                    continue
+                l_row = l_rows.iloc[0]
+                r_row = r_rows.iloc[0]
+                left_peak = _event_peak_deg_per_ms(l_row, bundle.left)
+                right_peak = _event_peak_deg_per_ms(r_row, bundle.right)
+                if not (np.isfinite(left_peak) and np.isfinite(right_peak)):
+                    n_skip_profile += 1
+                    continue
+                rec = {k: l_row[k] for k in l_row.index if k not in {"Main", "Sub"}}
+                rec["eye"] = "LR"
+                rec["right_peak_v"] = right_peak
+                rec["left_peak_v"] = left_peak
+                rec["block_key"] = bundle.spec.block_key
+                rec["2f_source"] = "binocular_peaks"
+                rows.append(rec)
+                n_pairs += 1
+        elif (
+            not include_pairs
+            and synced is not None
+            and not synced.empty
+            and "Main" in synced.columns
+        ):
+            n_skip_mode += int(synced["Main"].nunique())
 
-        frame_ms = _estimate_frame_period_ms(ipsi_df, t0)
-        sp = row.get("speed_profile_angular", None)
-        if sp is None or len(sp) == 0 or not np.isfinite(np.nanmax(sp)):
-            n_skip_profile += 1
-            continue
-        ipsi_peak = float(np.nanmax(sp)) / frame_ms
-        contra_peak = _sample_contra_peak(contra_df, t0, contra_sample, frame_ms)
-        if not np.isfinite(contra_peak):
-            n_skip_profile += 1
-            continue
+        if include_mono and mono is not None and not mono.empty:
+            for _, row in mono.iterrows():
+                eye = str(row["eye"])
+                t0 = float(row["saccade_on_ms"])
+                if eye == "L":
+                    ipsi_df, contra_df = bundle.left, bundle.right
+                else:
+                    ipsi_df, contra_df = bundle.right, bundle.left
+                frame_ms = _estimate_frame_period_ms(ipsi_df, t0)
+                ipsi_peak = _event_peak_deg_per_ms(row, ipsi_df)
+                contra_peak = _resolve_contra_peak(
+                    contra_df,
+                    row,
+                    sample_mode=sample_mode,
+                    contra_sample_ms=contra_sample,
+                    frame_ms=frame_ms,
+                )
+                if not (np.isfinite(ipsi_peak) and np.isfinite(contra_peak)):
+                    n_skip_profile += 1
+                    continue
+                if eye == "L":
+                    right_peak, left_peak = contra_peak, ipsi_peak
+                else:
+                    right_peak, left_peak = ipsi_peak, contra_peak
+                rec = {k: row[k] for k in row.index if k not in {"Main", "Sub"}}
+                rec["right_peak_v"] = right_peak
+                rec["left_peak_v"] = left_peak
+                rec["block_key"] = bundle.spec.block_key
+                rec["2f_source"] = "monocular_window"
+                rows.append(rec)
+                n_mono += 1
+        elif not include_mono and mono is not None and not mono.empty:
+            n_skip_mode += int(len(mono))
 
-        if eye == "L":
-            lefts.append(ipsi_peak)
-            rights.append(contra_peak)
-        else:
-            rights.append(ipsi_peak)
-            lefts.append(contra_peak)
-        animals.append(animal)
-
-    right = np.asarray(rights, dtype=float)
-    left = np.asarray(lefts, dtype=float)
-    animals_arr = np.asarray(animals)
-    print(
-        f"[2f] event_mode={event_mode} kept={right.size} "
-        f"skip_mode={n_skip_mode} skip_profile={n_skip_profile} "
-        f"exclude={sorted(exclude)}"
-    )
-    if right.size == 0:
+    if not rows:
         raise ValueError("No speeds for figure 2f after filters")
 
+    points = pd.DataFrame(rows)
+    animals_arr = points["animal"].astype(str).to_numpy()
     u, c = np.unique(animals_arr, return_counts=True)
     wmap = {a: (len(animals_arr) / (len(u) * cnt)) for a, cnt in zip(u, c)}
-    weights = np.array([wmap[a] for a in animals_arr], dtype=float)
+    points["weight"] = [wmap[str(a)] for a in animals_arr]
 
-    iqr_mult = float(cfg.get("iqr_multiplier", 60.0))
-    r_lo, r_hi = _iqr_bounds(right, iqr_mult)
-    l_lo, l_hi = _iqr_bounds(left, iqr_mult)
-    keep = (right >= r_lo) & (right <= r_hi) & (left >= l_lo) & (left <= l_hi)
-    right, left, weights = right[keep], left[keep], weights[keep]
+    if apply_iqr_clip:
+        iqr_mult = float(cfg.get("iqr_multiplier", 60.0))
+        right = points["right_peak_v"].to_numpy(dtype=float)
+        left = points["left_peak_v"].to_numpy(dtype=float)
+        r_lo, r_hi = _iqr_bounds(right, iqr_mult)
+        l_lo, l_hi = _iqr_bounds(left, iqr_mult)
+        keep = (right >= r_lo) & (right <= r_hi) & (left >= l_lo) & (left <= l_hi)
+        points = points.loc[keep].reset_index(drop=True)
 
-    bins = int(cfg.get("bins", 60))
-    macro_range = tuple(cfg.get("macro_range", [0.0, 0.5]))
-    micro_range = tuple(cfg.get("micro_range", [0.0, 0.1]))
+    limits = resolve_figure_2f_view_limits(
+        points["right_peak_v"].to_numpy(dtype=float),
+        points["left_peak_v"].to_numpy(dtype=float),
+        cfg,
+    )
+    cfg = dict(cfg)
+    cfg["macro_range"] = list(limits["macro_range"])
+    cfg["micro_range"] = list(limits["micro_range"])
+    cfg["macro_tick_list"] = list(limits["macro_tick_list"])
+    cfg["micro_tick_list"] = list(limits["micro_tick_list"])
+    macro_range = tuple(limits["macro_range"])
+    micro_range = tuple(limits["micro_range"])
 
-    def _hist(rng):
-        xbins = np.linspace(rng[0], rng[1], bins)
-        ybins = np.linspace(rng[0], rng[1], bins)
-        counts, xedges, yedges = np.histogram2d(
-            right, left, bins=[xbins, ybins], weights=weights
-        )
-        norm = counts / counts.sum() if counts.sum() > 0 else counts
-        return {
-            "xedges": xedges.astype(float),
-            "yedges": yedges.astype(float),
-            "norm_counts": norm.astype(float),
-        }
+    print(
+        f"[2f] event_mode={event_mode} sample_mode={sample_mode} kept={len(points)} "
+        f"binocular_pairs={n_pairs} monocular={n_mono} "
+        f"skip_mode={n_skip_mode} skip_profile={n_skip_profile} "
+        f"exclude={sorted(exclude)} "
+        f"macro_range={list(macro_range)} micro_range={list(micro_range)}"
+    )
+    return Figure2fPoints(
+        points=points,
+        macro_range=(float(macro_range[0]), float(macro_range[1])),
+        micro_range=(float(micro_range[0]), float(micro_range[1])),
+        bins=bins,
+        cfg=cfg,
+        n_skip_mode=n_skip_mode,
+        n_skip_profile=n_skip_profile,
+    )
 
-    macro = _hist(macro_range)
-    micro = _hist(micro_range)
+
+def histogram2d_from_points(
+    points: Figure2fPoints,
+    *,
+    view: str = "macro",
+) -> dict[str, np.ndarray]:
+    """Normalized 2f histogram for macro or micro range."""
+    rng = points.macro_range if view == "macro" else points.micro_range
+    right = points.right_peak_v if not points.points.empty else np.array([])
+    left = points.left_peak_v if not points.points.empty else np.array([])
+    weights = points.weights if not points.points.empty else np.array([])
+    return histogram2d_xy(right, left, weights, rng, points.bins)
+
+
+def select_figure_2f_roi(
+    points: Figure2fPoints,
+    x0: float,
+    x1: float,
+    y0: float,
+    y1: float,
+) -> pd.DataFrame:
+    """Return event rows whose (right_peak_v, left_peak_v) fall inside the ROI."""
+    xa, xb = (float(min(x0, x1)), float(max(x0, x1)))
+    ya, yb = (float(min(y0, y1)), float(max(y0, y1)))
+    right = points.points["right_peak_v"].to_numpy(dtype=float)
+    left = points.points["left_peak_v"].to_numpy(dtype=float)
+    mask = (right >= xa) & (right <= xb) & (left >= ya) & (left <= yb)
+    return points.points.loc[mask].reset_index(drop=True)
+
+
+def export_figure_2f(tables: EventTables, out_dir: Path, *, show: bool = False) -> Path:
+    """
+    Inter-ocular peak-speed 2D histogram.
+
+    Paper caption path: ``event_mode=all``, head-stationary, equal-animal
+    weights. Concurrent pairs use both event peaks (one point); unpaired
+    events use the ±51 ms contra-window sample. Macro/micro share ``vmax_all``.
+    S3 is a separate still/moving exporter — this function does not write it.
+    """
+    figures_dir, metadata_dir = resolve_figure_dirs(out_dir)
+    collected = collect_figure_2f_points(tables)
+    cfg = collected.cfg
+    right = collected.right_peak_v
+    left = collected.left_peak_v
+    weights = collected.weights
+    bins = collected.bins
+    macro_range = collected.macro_range
+    micro_range = collected.micro_range
+
+    macro = histogram2d_from_points(collected, view="macro")
+    micro = histogram2d_from_points(collected, view="micro")
     vmax_all = float(
         max(np.nanmax(macro["norm_counts"]), np.nanmax(micro["norm_counts"]), 1e-12)
     )
@@ -310,12 +753,16 @@ def export_figure_2f(tables: EventTables, out_dir: Path, *, show: bool = False) 
         "micro_n_ticks": 6,
         "macro_tick_list": cfg.get("macro_tick_list", [0, 0.25, 0.5]),
         "micro_tick_list": cfg.get("micro_tick_list", [0, 0.05, 0.1]),
-        "iqr_multiplier": iqr_mult,
+        "iqr_multiplier": cfg.get("iqr_multiplier", 60.0),
         "macro": macro,
         "micro": micro,
         "vmax_all": vmax_all,
-        "event_mode": event_mode,
-        "exclude_animals": sorted(exclude),
+        "event_mode": cfg.get("event_mode", "monocular"),
+        "sample_mode": cfg.get("sample_mode", "contra_window"),
+        "exclude_animals": sorted(cfg.get("exclude_animals", [])),
+        "auto_view_limits": bool(cfg.get("auto_view_limits")),
+        "macro_pct": float(cfg.get("macro_pct", 99.5)),
+        "micro_frac_of_macro": float(cfg.get("micro_frac_of_macro", 0.2)),
         "versions": {"numpy": np.__version__},
     }
     pkl = metadata_dir / "figure_2f_nodowncast.pickle"
@@ -327,8 +774,9 @@ def export_figure_2f(tables: EventTables, out_dir: Path, *, show: bool = False) 
             "params": cfg,
             "figure": "2f",
             "n": int(right.size),
-            "event_mode": event_mode,
-            "exclude_animals": sorted(exclude),
+        "event_mode": str(cfg.get("event_mode", "monocular")),
+        "sample_mode": str(cfg.get("sample_mode", "contra_window")),
+        "exclude_animals": sorted(cfg.get("exclude_animals", [])),
         },
         entrypoint="eye_tracking_system_tools.analysis.figures_2f_2h_2i.export_figure_2f",
     )
@@ -348,7 +796,7 @@ def export_figure_2f(tables: EventTables, out_dir: Path, *, show: bool = False) 
             hist["norm_counts"].T,
             cmap=cmap,
             vmin=0,
-            vmax=float(np.nanmax(hist["norm_counts"]) or 1),
+            vmax=vmax_all if vmax_all > 0 else 1,
             shading="flat",
         )
         ax.set_xlim(*rng)
@@ -367,12 +815,7 @@ def export_figure_2f(tables: EventTables, out_dir: Path, *, show: bool = False) 
         if mesh is not None:
             mesh.set_rasterized(True)
     fig.savefig(figures_dir / "figure_2f.pdf", bbox_inches="tight", dpi=300)
-    if cfg.get("also_export_s3", True):
-        fig.savefig(figures_dir / "figure_S3.pdf", bbox_inches="tight", dpi=300)
-    if show:
-        from IPython.display import display
-
-        display(fig)
+    show_and_close(fig, show)
     # Standalone colorbar (matches reproduction figure_2f.py)
     sm = plt.cm.ScalarMappable(
         cmap=cmap, norm=plt.Normalize(vmin=0, vmax=vmax_all if vmax_all > 0 else 1)
@@ -385,8 +828,140 @@ def export_figure_2f(tables: EventTables, out_dir: Path, *, show: bool = False) 
     cbar.ax.tick_params(labelsize=8)
     fig_cbar.savefig(figures_dir / "figure_2f_colorbar.pdf", bbox_inches="tight", dpi=150)
     show_and_close(fig_cbar, show)
-    plt.close(fig)
     return pkl
+
+
+def _turbo_white0():
+    turbo = plt.get_cmap("turbo", 256)
+    colors = turbo(np.linspace(0, 1, 256))
+    colors[0] = np.array([1, 1, 1, 1])
+    return mcolors.ListedColormap(colors)
+
+
+def _draw_coupling_heatmap(ax, hist, rng, ticks, *, vmax: float, cmap) -> None:
+    ax.pcolormesh(
+        hist["xedges"],
+        hist["yedges"],
+        hist["norm_counts"].T,
+        cmap=cmap,
+        vmin=0,
+        vmax=vmax if vmax > 0 else 1,
+        shading="flat",
+    )
+    ax.set_xlim(*rng)
+    ax.set_ylim(*rng)
+    ax.set_xticks(ticks)
+    ax.set_yticks(ticks)
+    ax.plot([rng[0], rng[1]], [rng[0], rng[1]], ls="--", color="gray", lw=1)
+    ax.set_xlabel("Right max V [deg/ms]", fontsize=9)
+    ax.set_ylabel("Left max V [deg/ms]", fontsize=9)
+    ax.set_box_aspect(1)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.grid(False)
+    if ax.collections:
+        ax.collections[0].set_rasterized(True)
+
+
+def export_figure_s3(tables: EventTables, out_dir: Path, *, show: bool = False) -> dict[str, Path]:
+    """Head-still vs head-moving coupling histograms with a shared colorbar.
+
+    Same collector as Fig 2f (one point per concurrent pair from event peaks;
+    unpaired events keep the ±51 ms contra-window sample) and equal-animal
+    weights, but **all** saccades (no head-stationary filter). The two PDFs
+    share vmax; they do not share a colorbar with Fig 2f.
+    """
+    figures_dir, metadata_dir = resolve_figure_dirs(out_dir)
+    cfg = figure_2f_config(
+        tables,
+        {
+            "event_mode": "all",
+            "require_head_stationary": False,
+            "exclude_animals": [],
+        },
+    )
+    collected = collect_figure_2f_points(tables, cfg=cfg)
+    points = collected.points
+    rng = collected.macro_range
+    ticks = cfg.get("macro_tick_list", [0.0, 0.25, 0.5])
+    cmap = _turbo_white0()
+
+    if "head_movement" not in points.columns:
+        raise ValueError("S3 needs head_movement labels on events")
+    hm = points["head_movement"].fillna(False).astype(bool)
+    still = Figure2fPoints(
+        points=points.loc[~hm].reset_index(drop=True),
+        macro_range=collected.macro_range,
+        micro_range=collected.micro_range,
+        bins=collected.bins,
+        cfg=cfg,
+    )
+    moving = Figure2fPoints(
+        points=points.loc[hm].reset_index(drop=True),
+        macro_range=collected.macro_range,
+        micro_range=collected.micro_range,
+        bins=collected.bins,
+        cfg=cfg,
+    )
+    hist_still = histogram2d_from_points(still, view="macro")
+    hist_moving = histogram2d_from_points(moving, view="macro")
+    vmax = float(
+        max(
+            np.nanmax(hist_still["norm_counts"]) if hist_still["norm_counts"].size else 0.0,
+            np.nanmax(hist_moving["norm_counts"]) if hist_moving["norm_counts"].size else 0.0,
+            1e-12,
+        )
+    )
+
+    written: dict[str, Path] = {}
+    for name, hist, n in (
+        ("figure_S3_head_still.pdf", hist_still, int((~hm).sum())),
+        ("figure_S3_head_moving.pdf", hist_moving, int(hm.sum())),
+    ):
+        fig, ax = plt.subplots(figsize=(1.7, 1.7), dpi=300)
+        _draw_coupling_heatmap(ax, hist, rng, ticks, vmax=vmax, cmap=cmap)
+        ax.set_title(f"n={n}", fontsize=8)
+        out = figures_dir / name
+        fig.savefig(out, bbox_inches="tight", dpi=300)
+        show_and_close(fig, show)
+        written[name] = out
+
+    sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(vmin=0, vmax=vmax))
+    sm.set_array([])
+    fig_cbar = plt.figure(figsize=(1.2, 3.2), dpi=150)
+    cax = fig_cbar.add_axes([0.35, 0.1, 0.2, 0.8])
+    cbar = plt.colorbar(sm, cax=cax, orientation="vertical")
+    cbar.set_label("Probability", fontsize=8)
+    cbar.ax.tick_params(labelsize=8)
+    cbar_path = figures_dir / "figure_S3_colorbar.pdf"
+    fig_cbar.savefig(cbar_path, bbox_inches="tight", dpi=150)
+    show_and_close(fig_cbar, show)
+    written["figure_S3_colorbar.pdf"] = cbar_path
+
+    pkl = metadata_dir / "figure_S3.pickle"
+    write_pickle_with_meta(
+        {
+            "figure_name": "figure_S3",
+            "vmax": vmax,
+            "n_still": int((~hm).sum()),
+            "n_moving": int(hm.sum()),
+            "macro_range": rng,
+            "bins": collected.bins,
+            "binocular_onset_window_ms": 60.0,
+            "binocular_merge_note": (
+                "Published S3 caption: contra onset within ±60 ms. "
+                "Does not change the ±51 ms pairing used for the speed axes."
+            ),
+            "contra_sample_ms": float(cfg.get("contra_sample_ms", 51.0)),
+            "still": hist_still,
+            "moving": hist_moving,
+        },
+        pkl,
+        meta={"csv_choices": tables.csv_meta, "params": cfg, "figure": "S3", "vmax": vmax},
+        entrypoint="eye_tracking_system_tools.analysis.figures_2f_2h_2i.export_figure_s3",
+    )
+    written["figure_S3.pickle"] = pkl
+    return written
 
 
 def export_figure_2h(tables: EventTables, out_dir: Path, *, show: bool = False) -> Path:
@@ -477,6 +1052,17 @@ def export_figure_2h(tables: EventTables, out_dir: Path, *, show: bool = False) 
             ax.imshow(zi.T, extent=[gmin, gmax, gmin, gmax], origin="lower", cmap="turbo", vmin=vmin, vmax=vmax)
         ax.set_aspect("equal")
         ax.tick_params(labelsize=7)
+        ax.plot(0, 0, "k+", ms=7, zorder=5)
+        ax.annotate(
+            "pre",
+            (0, 0),
+            xytext=(4, 4),
+            textcoords="offset points",
+            fontsize=6,
+            color="k",
+        )
+        ax.set_xlabel("Δφ post [deg]", fontsize=7)
+        ax.set_ylabel("Δθ post [deg]", fontsize=7)
     fig.tight_layout()
     fig.savefig(figures_dir / "figure_2h.pdf", format="pdf", bbox_inches="tight")
     show_and_close(fig, show)

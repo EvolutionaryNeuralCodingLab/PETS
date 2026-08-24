@@ -37,9 +37,13 @@ def write_pickle_with_meta(
     with open(pickle_path, "wb") as f:
         pickle.dump(payload, f, protocol=pickle.HIGHEST_PROTOCOL)
 
+    rel = str(pickle_path.name)
+    if pickle_path.parent.name == "metadata":
+        rel = f"metadata/{pickle_path.name}"
+
     meta_out = {
         "created_utc": datetime.now(timezone.utc).isoformat(),
-        "pickle": str(pickle_path.resolve()),
+        "pickle": rel,
         "entrypoint": entrypoint,
         "git_hash": git_hash(),
         **meta,

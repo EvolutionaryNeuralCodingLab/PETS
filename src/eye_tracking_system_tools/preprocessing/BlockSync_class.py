@@ -101,9 +101,17 @@ class BlockSync:
             print(f'block number {self.block_num} does not have open_ephys files')
 
         # Auto-detect arena_videos layout: support both arena_videos/ and arena_videos/videos/
-        arena_nested = self.block_path / 'arena_videos' / 'videos'
-        arena_flat = self.block_path / 'arena_videos'
-        self.arena_path = arena_nested if arena_nested.is_dir() else arena_flat
+        # Prefer nested only when it actually contains video files (empty videos/ must not hide flat .avi).
+        try:
+            from eye_tracking_system_tools.preprocessing.arena_video_io import (
+                resolve_arena_path,
+            )
+
+            self.arena_path = resolve_arena_path(self.block_path)
+        except Exception:
+            arena_nested = self.block_path / 'arena_videos' / 'videos'
+            arena_flat = self.block_path / 'arena_videos'
+            self.arena_path = arena_nested if arena_nested.is_dir() else arena_flat
 
         self.arena_files = None
         self.arena_videos = None
@@ -384,10 +392,17 @@ class BlockSync:
         else:
             print('events.csv file already exists')
 
-    def handle_arena_files(self):
+    def handle_arena_files(self, *, convert_non_mp4: bool = False):
         """
-        method to fix arena files names and append them to separate video and timestamp files
-        this is a preliminary stage for arena internal synchronization
+        Method to fix arena file names and append them to separate video and timestamp lists.
+        This is a preliminary stage for arena internal synchronization.
+
+        Parameters
+        ----------
+        convert_non_mp4 : bool
+            When True and no ``.mp4`` files are present, convert convertible formats
+            (e.g. ``.avi``) to ``.mp4`` via ffmpeg. When False, raises
+            ``ArenaVideosNeedConversion`` if only convertible files exist.
 
         sets the following attributes:
         self.arena_videos: list
@@ -395,23 +410,75 @@ class BlockSync:
         self.arena_timestamps : list
             list of .csv files associated with
         """
+        from eye_tracking_system_tools.preprocessing.arena_video_io import (
+            ArenaVideosNeedConversion,
+            convert_arena_videos_to_mp4,
+            list_convertible_arena_videos,
+            resolve_arena_path,
+        )
+
         print('handling arena files')
+        self.arena_path = resolve_arena_path(self.block_path)
+        if not self.arena_path.is_dir():
+            self.arena_files = []
+            self.arena_videos = []
+            self.arena_timestamps = []
+            self.arena_vidnames = []
+            raise FileNotFoundError(
+                f"Arena videos folder not found under {self.block_path / 'arena_videos'}"
+            )
+
         self.arena_files = [x for x in self.arena_path.iterdir()]
         # fix names
-        for i in self.arena_files:
-            if '-' in i.name:
+        for i in list(self.arena_files):
+            if i.is_file() and '-' in i.name:
                 newname = i.name.replace('-', '_')
                 newpath = i.parent / newname
-                i.replace(newpath)
+                try:
+                    i.replace(newpath)
+                except OSError as e:
+                    print(f'could not rename {i.name}: {e}')
         self.arena_files = [x for x in self.arena_path.iterdir()]
-        self.arena_videos = [x for x in self.arena_files if x.suffix == '.mp4']
-        self.arena_timestamps = [x for x in self.arena_files if x.suffix == '.csv']
+        self.arena_videos = [
+            x for x in self.arena_files if x.is_file() and x.suffix.lower() == '.mp4'
+        ]
+        self.arena_timestamps = [
+            x for x in self.arena_files if x.is_file() and x.suffix.lower() == '.csv'
+        ]
         if len(self.arena_timestamps) == 0:
             try:
                 self.arena_timestamps = \
                     [x for x in [y for y in (self.arena_path / 'frames_timestamps').iterdir()] if x.suffix == '.csv']
             except FileNotFoundError:
                 print('no arena timestamps folder found')
+
+        if len(self.arena_videos) == 0:
+            convertible = list_convertible_arena_videos(self.arena_path)
+            if convertible and convert_non_mp4:
+                print(
+                    f'No .mp4 arena videos; converting {len(convertible)} file(s) with ffmpeg...'
+                )
+                convert_arena_videos_to_mp4(self.arena_path)
+                self.arena_files = [x for x in self.arena_path.iterdir()]
+                self.arena_videos = [
+                    x
+                    for x in self.arena_files
+                    if x.is_file() and x.suffix.lower() == '.mp4'
+                ]
+            elif convertible:
+                raise ArenaVideosNeedConversion(convertible, self.arena_path)
+            else:
+                raise RuntimeError(
+                    f"No .mp4 arena videos found in {self.arena_path}. "
+                    "Place arena .mp4 files there, or provide a convertible format "
+                    f"({', '.join(sorted({'.avi', '.mov', '.mkv'}))} …)."
+                )
+
+        if len(self.arena_videos) == 0:
+            raise RuntimeError(
+                f"Arena video conversion produced no .mp4 files under {self.arena_path}."
+            )
+
         self.arena_vidnames = [i.name for i in self.arena_videos]
         print(f'Arena video Names:')
         print(*self.arena_vidnames, sep='\n')

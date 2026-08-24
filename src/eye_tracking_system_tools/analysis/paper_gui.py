@@ -11,17 +11,26 @@ Notebook (ipywidgets) front-ends for the flexible paper-figures tool.
 from __future__ import annotations
 
 from copy import deepcopy
+from contextlib import redirect_stderr, redirect_stdout
+from io import StringIO
 from pathlib import Path
 from typing import Any, Callable
+import traceback
 
 import ipywidgets as widgets
+import matplotlib.pyplot as plt
 import pandas as pd
 import yaml
-from IPython.display import display
+from IPython.display import Image, display
 
 from eye_tracking_system_tools.analysis.behavior_state import has_behavior_state
 from eye_tracking_system_tools.analysis.event_cache import ensure_traces_for_blocks
 from eye_tracking_system_tools.analysis.figure_catalog import CATALOG, get_spec, run_figure
+from eye_tracking_system_tools.analysis.figure_display import (
+    _clear_inline_draw_flag,
+    capture_figure_previews,
+    stop_capturing_figure_previews,
+)
 from eye_tracking_system_tools.analysis.paper_export import FigureBuildResult
 from eye_tracking_system_tools.analysis.pipeline import (
     EventTables,
@@ -101,6 +110,20 @@ def block_qc_table(tables: EventTables) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _iter_leaf_widgets(widgets_seq):
+    """Yield nested ipywidgets leaves so HBox-wrapped start_s/end_s are found."""
+    for w in widgets_seq:
+        desc = getattr(w, "description", "") or ""
+        if desc in {"start_s", "end_s", "jitter_bundle"}:
+            yield w
+            continue
+        children = getattr(w, "children", None)
+        if children:
+            yield from _iter_leaf_widgets(children)
+        else:
+            yield w
+
+
 def _eligibility(tables: EventTables, fig_id: str, block_key: str) -> tuple[bool, str]:
     """Return (ok, reason) for whether ``block_key`` can contribute to ``fig_id``."""
     spec = get_spec(fig_id)
@@ -124,6 +147,19 @@ def _eligibility(tables: EventTables, fig_id: str, block_key: str) -> tuple[bool
     if "traces" in needs:
         pass
     return True, ""
+
+
+def _collapse_duplicate_lines(text: str) -> str:
+    """Drop consecutive identical lines (widget/log fan-out artifact)."""
+    lines = text.splitlines(keepends=True)
+    out: list[str] = []
+    prev: str | None = None
+    for line in lines:
+        if line == prev:
+            continue
+        out.append(line)
+        prev = line
+    return "".join(out)
 
 
 def _seed_params_yaml(tables: EventTables, fig_id: str) -> str:
@@ -153,6 +189,7 @@ class PaperContext:
         registry_path: Path | str | None = None,
         params_path: Path | str | None = None,
         on_build: Callable[[FigureBuildResult], None] | None = None,
+        exclude_verification_bad: bool = False,
     ) -> None:
         self.tables = tables
         self.out_dir = Path(out_dir)
@@ -160,6 +197,8 @@ class PaperContext:
         self.params_path = Path(params_path) if params_path else None
         self.builds: dict[str, FigureBuildResult] = {}
         self.on_build = on_build
+        # Default for per-figure "Exclude verification-bad" checkboxes.
+        self.exclude_verification_bad = bool(exclude_verification_bad)
         self.qc = block_qc_table(tables)
 
     def record(self, result: FigureBuildResult) -> None:
@@ -175,10 +214,14 @@ class PaperFigureSelector:
     ``selector = PaperFigureSelector("2g", ctx); selector`` renders the UI.
     After Build, ``selector.result`` / ``ctx.builds[fig_id]`` hold the outputs.
 
+    Fig 2f also exposes a **Legacy / Strict** ``sample_mode`` toggle that drives
+    ``contra_window`` vs ``event_span`` peak sampling (mirrored into Params YAML).
+
     The saccade filter section supports:
 
     * event kind — all / concurrent (synced) / monocular
     * head movement — any / without / with / labeled-only
+    * exclude verification-bad — drop events tagged bad in the Saccade Viewer
     * optional pandas ``query`` string
     * per-column truth filters for other boolean-like flags
     """
@@ -197,7 +240,7 @@ class PaperFigureSelector:
         self.fig_id = fig_id
         self.spec = get_spec(fig_id)
         self.ctx = ctx
-        self.single_block = single_block or fig_id in {"3a", "3b", "3c"}
+        self.single_block = single_block or fig_id in {"2b", "3a", "3b", "3c"}
         self.default_runner_kwargs = dict(default_runner_kwargs or {})
         self.enable_saccade_filter = bool(enable_saccade_filter)
         if "jitter_bundle" in self.spec.needs:
@@ -206,6 +249,7 @@ class PaperFigureSelector:
         self.result: FigureBuildResult | None = None
         self._extra = list(extra_widgets or [])
         self.column_truth: dict[str, widgets.Dropdown] = {}
+        self.sample_mode_toggle: widgets.ToggleButtons | None = None
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -228,6 +272,23 @@ class PaperFigureSelector:
             layout=widgets.Layout(width="98%", height="120px"),
             style={"description_width": "60px"},
         )
+        if self.fig_id == "2f":
+            self.sample_mode_toggle = widgets.ToggleButtons(
+                options=[
+                    ("Legacy (±window)", "contra_window"),
+                    ("Strict (event span)", "event_span"),
+                ],
+                value=self._seed_figure_2f_sample_mode(),
+                description="2f mode:",
+                tooltips=[
+                    "Paper 2f: max contra angular_speed_r in ±contra_sample_ms around onset",
+                    "Strict: max contra angular_speed_r over [saccade_on_ms, saccade_off_ms]",
+                ],
+                style={"description_width": "70px"},
+                layout=widgets.Layout(width="auto"),
+            )
+            self.sample_mode_toggle.observe(self._on_sample_mode_toggle, names="value")
+            self._sync_sample_mode_into_params(self.sample_mode_toggle.value)
         self.all_btn = widgets.Button(description="All", layout=widgets.Layout(width="70px"))
         self.none_btn = widgets.Button(description="None", layout=widgets.Layout(width="70px"))
         self.build_btn = widgets.Button(
@@ -248,6 +309,8 @@ class PaperFigureSelector:
             self.checks_box,
             widgets.HBox([self.all_btn, self.none_btn, self.build_btn]),
         ]
+        if self.sample_mode_toggle is not None:
+            children.append(self.sample_mode_toggle)
         children.extend(self._extra)
         if self.enable_saccade_filter:
             children.append(self._build_filter_section())
@@ -268,11 +331,15 @@ class PaperFigureSelector:
             head_val = "labeled"
         else:
             head_val = "any"
+        exclude_bad = bool(getattr(seed, "exclude_bad", False))
+        if not exclude_bad:
+            exclude_bad = bool(getattr(self.ctx, "exclude_verification_bad", False))
         return {
             "event_kind": kind,
             "head_movement": head_val,
             "query": (seed.query or "") if seed.query else "",
             "column_equals": dict(seed.column_equals or {}),
+            "exclude_bad": exclude_bad,
         }
 
     def _build_filter_section(self) -> widgets.Widget:
@@ -299,6 +366,16 @@ class PaperFigureSelector:
             description="Head:",
             style={"description_width": "70px", "button_width": "110px"},
             layout=widgets.Layout(width="auto"),
+        )
+        self.exclude_bad_box = widgets.Checkbox(
+            value=bool(seed["exclude_bad"]),
+            description="Exclude verification-bad",
+            indent=False,
+            layout=widgets.Layout(width="auto"),
+        )
+        self.exclude_bad_box.tooltip = (
+            "Drop events tagged bad in analysis/saccade_verification/tags.csv "
+            "(keeps good and unset)."
         )
         self.query_box = widgets.Textarea(
             value=seed["query"],
@@ -363,7 +440,13 @@ class PaperFigureSelector:
         )
         advanced.set_title(0, "Advanced: query & column truth filters")
 
-        for w in (self.event_kind, self.head_movement, self.query_box, *self.column_truth.values()):
+        for w in (
+            self.event_kind,
+            self.head_movement,
+            self.exclude_bad_box,
+            self.query_box,
+            *self.column_truth.values(),
+        ):
             w.observe(lambda _c: self._refresh_filter_preview(), names="value")
         # Also refresh when block ticks change.
         for box in self.checks.values():
@@ -374,6 +457,15 @@ class PaperFigureSelector:
                 widgets.HTML("<b>Saccade filter</b>"),
                 self.event_kind,
                 self.head_movement,
+                self.exclude_bad_box,
+                widgets.HTML(
+                    "<span style='color:#666;font-size:12px'>"
+                    "Verification-bad comes from the Saccade Viewer tags "
+                    "(<code>analysis/saccade_verification/tags.csv</code>). "
+                    "Unset <code>ctx.exclude_verification_bad</code> before creating "
+                    "selectors to change the default for all figures."
+                    "</span>"
+                ),
                 advanced,
                 widgets.HBox([self.filter_reset, self.filter_preview]),
             ],
@@ -387,6 +479,9 @@ class PaperFigureSelector:
             return
         self.event_kind.value = "all"
         self.head_movement.value = "any"
+        self.exclude_bad_box.value = bool(
+            getattr(self.ctx, "exclude_verification_bad", False)
+        )
         self.query_box.value = ""
         for dd in self.column_truth.values():
             dd.value = "any"
@@ -409,6 +504,7 @@ class PaperFigureSelector:
             head_movement=str(self.head_movement.value),
             query=str(self.query_box.value).strip() or None,
             column_equals=column_equals or None,
+            exclude_bad=bool(self.exclude_bad_box.value),
         )
         return filt if filt.is_active() else None
 
@@ -534,13 +630,61 @@ class PaperFigureSelector:
             return [keys[0]]
         return keys
 
-    def _parse_overrides(self) -> dict[str, Any]:
+    def _load_params_yaml(self) -> dict[str, Any]:
         text = self.params_box.value.strip()
         if not text or text.startswith("# (no params"):
             return {}
         data = yaml.safe_load(text) or {}
         if not isinstance(data, dict):
             raise ValueError("Params override must be a YAML mapping")
+        return data
+
+    def _seed_figure_2f_sample_mode(self) -> str:
+        """Initial Legacy/Strict toggle from seeded params YAML."""
+        try:
+            data = self._load_params_yaml()
+        except Exception:  # noqa: BLE001
+            return "contra_window"
+        body = data.get("figure_2f") if isinstance(data.get("figure_2f"), dict) else data
+        mode = str((body or {}).get("sample_mode", "contra_window")).lower()
+        return mode if mode in {"contra_window", "event_span"} else "contra_window"
+
+    def _sync_sample_mode_into_params(self, mode: str) -> None:
+        """Keep params YAML ``sample_mode`` aligned with the Fig 2f toggle."""
+        try:
+            data = self._load_params_yaml()
+        except Exception:  # noqa: BLE001
+            return
+        if "figure_2f" in data and isinstance(data["figure_2f"], dict):
+            data["figure_2f"]["sample_mode"] = mode
+        else:
+            data["sample_mode"] = mode
+        self.params_box.value = yaml.safe_dump(
+            data, sort_keys=False, default_flow_style=False
+        )
+
+    def _on_sample_mode_toggle(self, change: dict[str, Any]) -> None:
+        if change.get("name") != "value":
+            return
+        mode = str(change.get("new", "contra_window"))
+        self._sync_sample_mode_into_params(mode)
+
+    def current_sample_mode(self) -> str | None:
+        """Fig 2f Legacy/Strict mode from the toggle (else ``None``)."""
+        if self.sample_mode_toggle is None:
+            return None
+        return str(self.sample_mode_toggle.value)
+
+    def _parse_overrides(self) -> dict[str, Any]:
+        data = self._load_params_yaml()
+        # Toggle is the source of truth for Fig 2f sample_mode on Build.
+        if self.sample_mode_toggle is not None:
+            mode = str(self.sample_mode_toggle.value)
+            data = deepcopy(data) if data else {}
+            if "figure_2f" in data and isinstance(data["figure_2f"], dict):
+                data["figure_2f"]["sample_mode"] = mode
+            else:
+                data["sample_mode"] = mode
         return data
 
     def build(self, *, show: bool = True) -> FigureBuildResult | None:
@@ -578,76 +722,113 @@ class PaperFigureSelector:
         self._set_status(
             f"Building {self.fig_id} from {len(block_keys) or 'bundle'}{filt_note} …"
         )
-        with self.out:
-            self.out.clear_output(wait=True)
-            tables = self.ctx.tables
-            if "traces" in self.spec.needs and block_keys:
-                tables = ensure_traces_for_blocks(tables, block_keys)
-                self.ctx.tables = tables  # keep traces for subsequent builds
-            try:
-                # Forward vignette window kwargs from extra widgets if present.
-                for w in self._extra:
-                    if getattr(w, "description", "") == "start_s":
-                        kwargs["start_s"] = float(w.value)
-                    elif getattr(w, "description", "") == "end_s":
-                        kwargs["end_s"] = float(w.value)
-                    elif getattr(w, "description", "") == "jitter_bundle":
-                        kwargs["jitter_bundle"] = Path(str(w.value)).expanduser()
-                if self.single_block and block_keys:
-                    kwargs.setdefault("block_key", block_keys[0])
+        # Widget clicks trigger IPython post_execute → matplotlib_inline.flush_figures,
+        # and ipywidgets Output replays iopub display/stdout many times. Capture
+        # previews + logs locally, then append each once.
+        was_interactive = plt.isinteractive()
+        plt.ioff()
+        self.out.clear_output(wait=False)
+        result: FigureBuildResult | None = None
+        log_buf = StringIO()
+        previews = capture_figure_previews()
+        try:
+            with redirect_stdout(log_buf), redirect_stderr(log_buf):
+                tables = self.ctx.tables
+                if "traces" in self.spec.needs and block_keys:
+                    tables = ensure_traces_for_blocks(tables, block_keys)
+                    self.ctx.tables = tables  # keep traces for subsequent builds
+                try:
+                    # Forward vignette window kwargs from extra widgets if present.
+                    # start_s/end_s live inside an HBox — walk children.
+                    for w in _iter_leaf_widgets(self._extra):
+                        desc = getattr(w, "description", "") or ""
+                        if desc == "start_s":
+                            kwargs["start_s"] = float(w.value)
+                        elif desc == "end_s":
+                            kwargs["end_s"] = float(w.value)
+                        elif desc == "jitter_bundle":
+                            kwargs["jitter_bundle"] = Path(str(w.value)).expanduser()
+                    if self.single_block and block_keys:
+                        kwargs.setdefault("block_key", block_keys[0])
 
-                outputs = run_figure(
-                    self.fig_id,
-                    tables,
-                    self.ctx.out_dir,
-                    block_keys=block_keys or None,
-                    saccade_filter=saccade_filter,
-                    params_overrides=overrides,
-                    show=show,
-                    **kwargs,
+                    outputs = run_figure(
+                        self.fig_id,
+                        tables,
+                        self.ctx.out_dir,
+                        block_keys=block_keys or None,
+                        saccade_filter=saccade_filter,
+                        params_overrides=overrides,
+                        show=show,
+                        **kwargs,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    self._set_status(f"Build failed: {exc}", level="err")
+                    traceback.print_exc(file=log_buf)
+                    self._publish_build_output(log_buf.getvalue(), previews)
+                    return None
+
+                filtered = filter_event_tables(tables, block_keys=block_keys or None)
+                filtered = apply_saccade_filter(filtered, saccade_filter)
+                section = self.spec.params_section
+                if section and overrides:
+                    params_used = overrides if section in overrides else {section: overrides}
+                elif section:
+                    params_used = {section: deepcopy(tables.params.get(section, {}))}
+                else:
+                    params_used = overrides
+
+                result = FigureBuildResult(
+                    fig_id=self.fig_id,
+                    block_keys=list(block_keys),
+                    params_used=params_used,
+                    outputs=outputs,
+                    n_events=int(len(filtered.all_saccades)),
+                    n_synced_rows=int(len(filtered.synced)),
+                    runner_kwargs={
+                        k: (str(v) if isinstance(v, Path) else v) for k, v in kwargs.items()
+                    },
+                    saccade_filter=filter_dict,
+                    notes=(saccade_filter.describe() if saccade_filter else ""),
                 )
-            except Exception as exc:  # noqa: BLE001
-                self._set_status(f"Build failed: {exc}", level="err")
-                import traceback
+                self.result = result
+                self.ctx.record(result)
+                pdf_names = [
+                    name
+                    for name, path in outputs.items()
+                    if str(path).lower().endswith(".pdf")
+                ]
+                print("PDF files written:")
+                for name in pdf_names:
+                    print(f"  {name}: {outputs[name]}")
+        finally:
+            stop_capturing_figure_previews()
+            plt.close("all")
+            _clear_inline_draw_flag()
+            if was_interactive:
+                plt.ion()
 
-                traceback.print_exc()
-                return None
-
-            filtered = filter_event_tables(tables, block_keys=block_keys or None)
-            filtered = apply_saccade_filter(filtered, saccade_filter)
-            section = self.spec.params_section
-            if section and overrides:
-                params_used = overrides if section in overrides else {section: overrides}
-            elif section:
-                params_used = {section: deepcopy(tables.params.get(section, {}))}
-            else:
-                params_used = overrides
-
-            result = FigureBuildResult(
-                fig_id=self.fig_id,
-                block_keys=list(block_keys),
-                params_used=params_used,
-                outputs=outputs,
-                n_events=int(len(filtered.all_saccades)),
-                n_synced_rows=int(len(filtered.synced)),
-                runner_kwargs={
-                    k: (str(v) if isinstance(v, Path) else v) for k, v in kwargs.items()
-                },
-                saccade_filter=filter_dict,
-                notes=(saccade_filter.describe() if saccade_filter else ""),
-            )
-            self.result = result
-            self.ctx.record(result)
-            for name, path in outputs.items():
-                if str(path).lower().endswith(".pdf"):
-                    print(f"  {name}: {path}")
+        self._publish_build_output(log_buf.getvalue(), previews)
+        if result is None:
+            return None
+        n_pdf = sum(
+            1 for p in result.outputs.values() if str(p).lower().endswith(".pdf")
+        )
         self._set_status(
             f"Built {self.fig_id} — {len(block_keys)} block(s), "
-            f"{result.n_events} events → {len(outputs)} output(s)"
-            f"{filt_note}.",
+            f"{result.n_events} events, {len(previews)} preview panel(s), "
+            f"{n_pdf} PDF file(s) on disk{filt_note}.",
             level="ok",
         )
         return result
+
+    def _publish_build_output(self, log_text: str, previews: list[bytes]) -> None:
+        """Write captured logs + preview PNGs into the Output widget once each."""
+        self.out.clear_output(wait=False)
+        cleaned = _collapse_duplicate_lines(log_text)
+        if cleaned.strip():
+            self.out.append_stdout(cleaned if cleaned.endswith("\n") else cleaned + "\n")
+        for png in previews:
+            self.out.append_display_data(Image(data=png))
 
 
 def make_vignette_selector(fig_id: str, ctx: PaperContext, *, start_s: float, end_s: float) -> PaperFigureSelector:

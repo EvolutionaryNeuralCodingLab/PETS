@@ -118,13 +118,25 @@ def apply_display_transforms(
     show_annotations: bool = False,
     flip_horizontal: bool = False,
     flip_vertical: bool = False,
+    saccade_active: bool = False,
+    saccade_circle_radius: int = 18,
+    saccade_circle_margin: int = 28,
+    saccade_circle_thickness: int = 2,
 ) -> np.ndarray:
     """
     Build display image: ellipse overlay on raw frame coords, then display-only flips.
+    Optional green corner circle marks an active saccade on this eye panel.
     """
     out = arr
     if show_annotations and frame_idx is not None:
         out = draw_ellipse_overlay(out, ellipse_df, frame_col, int(frame_idx))
+    if saccade_active:
+        out = draw_saccade_circle(
+            out,
+            radius=saccade_circle_radius,
+            margin=saccade_circle_margin,
+            thickness=saccade_circle_thickness,
+        )
     if flip_horizontal:
         out = cv2.flip(out, 1)
     if flip_vertical:
@@ -154,6 +166,27 @@ def draw_ellipse_overlay(
     h = max(int(row.get("height", 1) or 1), 1)
     phi = float(row.get("phi", 0.0))
     cv2.ellipse(out, (x, y), (w, h), phi, 0, 360, (0, 255, 0), 2)
+    return out
+
+
+def draw_saccade_circle(
+    frame: np.ndarray,
+    *,
+    radius: int = 18,
+    margin: int = 28,
+    thickness: int = 2,
+) -> np.ndarray:
+    """Filled green corner circle (verification-notebook style) for active saccades."""
+    if frame is None or frame.size == 0:
+        return frame
+    out = frame.copy()
+    h, w = out.shape[:2]
+    cx = max(0, min(int(margin), w - 1))
+    cy = max(0, min(int(margin), h - 1))
+    r = max(1, int(radius))
+    # Outline then fill so the marker stays visible on bright/dark pupils.
+    cv2.circle(out, (cx, cy), r, (0, 255, 0), max(1, int(thickness)), cv2.LINE_AA)
+    cv2.circle(out, (cx, cy), max(1, r - 3), (0, 255, 0), -1, cv2.LINE_AA)
     return out
 
 
@@ -210,6 +243,7 @@ class VideoPanel(QtWidgets.QWidget):
         self._show_annotations = False
         self._ellipse_df: pd.DataFrame | None = None
         self._frame_col = "L_eye_frame"
+        self._saccade_active = False
         self._max_display_width = 0
         self._max_display_height = 0
         self._no_upscale = True
@@ -251,6 +285,10 @@ class VideoPanel(QtWidgets.QWidget):
 
     def set_show_annotations(self, enabled: bool) -> None:
         self._show_annotations = bool(enabled)
+
+    def set_saccade_active(self, active: bool) -> None:
+        """Show/hide the green corner circle for an active saccade on this eye."""
+        self._saccade_active = bool(active)
 
     def set_fast_scale(self, enabled: bool) -> None:
         """Use fast (nearest) scaling during playback; smooth when paused."""
@@ -326,6 +364,7 @@ class VideoPanel(QtWidgets.QWidget):
             show_annotations=self._show_annotations,
             flip_horizontal=self._flip_h,
             flip_vertical=self._flip_v,
+            saccade_active=self._saccade_active,
         )
         qimg = numpy_array_to_qimage(arr)
         if target_size is None:

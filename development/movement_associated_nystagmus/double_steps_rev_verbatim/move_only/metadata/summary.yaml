@@ -1,0 +1,54 @@
+question: Among large saccades that occur during annotated head movement, how often
+  is there an immediate small-amplitude back-and-forth sequence, interpreted as nystagmus-like
+  gaze stabilization?
+rule: "head-moving unique events only (lizMov overlap with primary on\u2013off); large\
+  \ = net_angular_disp \u2265 7.0\xB0; back-and-forth = \u22652 smaller extras in\
+  \ (t0, t0+150 ms], \u22651 counter-directed vs primary (> 90\xB0), and \u22651 consecutive\
+  \ pair of extras that reverse relative to each other"
+n_unique_head_moving: 10193
+n_unique_dropped_still: 7703
+amp_threshold_deg: 7.0
+amp_stats:
+  n: 9930.0
+  p50: 4.058103742114898
+  p75: 8.137096937088083
+  p90: 13.316693854318968
+  percentile_used: 75.0
+  floor_deg: 5.0
+  p_used: 8.137096937088083
+  proposed_deg: 8.0
+  threshold_deg: 7.0
+  threshold_source: user
+params:
+  post_window_ms: 150.0
+  reverse_min_deg: 90.0
+  amp_percentile: 75.0
+  amp_floor_deg: 5.0
+  sync_diff_ms: 34.0
+  head_filter: primary_span_overlaps_lizMov
+overall:
+  n: 2997
+  pct: 21.32132132132132
+  n_hit: 639
+  n_reverse: 639
+per_animal:
+  PV_106:
+    n: 737
+    n_reverse: 111
+    pct: 15.061058344640434
+    n_hit: 111
+  PV_126:
+    n: 1449
+    n_reverse: 444
+    pct: 30.641821946169774
+    n_hit: 444
+  PV_143:
+    n: 300
+    n_reverse: 69
+    pct: 23.0
+    n_hit: 69
+  PV_62:
+    n: 511
+    n_reverse: 15
+    pct: 2.935420743639922
+    n_hit: 15

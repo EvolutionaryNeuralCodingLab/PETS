@@ -22,7 +22,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Collection, Literal
+from typing import Any, Collection, Literal, Mapping
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -45,7 +45,14 @@ JITTER_POOL_MOUNT_TYPES = ("modular", "rigid", "mouse", "turtle")
 # Single-mount gray PDFs (comparison overlay is separate).
 JITTER_SINGLE_MOUNT_PLOTS = ("modular", "rigid", "mouse", "turtle")
 UNIFIED_JITTER_PLOT_ID = "unified jitter quantification across animals"
+UNIFIED_JITTER_PLOT_ID_PX = "unified jitter quantification across animals px"
 UNIFIED_JITTER_PDF = "unified_jitter_quantification.pdf"
+# Cap so a near-continuous pool (or a tiny inferred 1-px step) cannot explode the bar count.
+UNIFIED_JITTER_MAX_BINS = 80
+# Bin width = this × the coarsest 1-pixel step in that mount type.
+# ``pixel_bin_k`` may be this scalar or a mount→k dict (``lizard`` covers rigid+modular).
+UNIFIED_JITTER_PIXEL_K = 1.0
+PixelBinK = float | Mapping[str, float]
 # (mount_type, panel label, color) — lizard colors match modular-vs-rigid overlay.
 UNIFIED_JITTER_PANELS: tuple[tuple[str, str, str], ...] = (
     ("rigid", "rigid lizard", "#D55E00"),
@@ -53,6 +60,33 @@ UNIFIED_JITTER_PANELS: tuple[tuple[str, str, str], ...] = (
     ("mouse", "modular mouse", "#009E73"),
     ("turtle", "modular turtle", "#CC79A7"),
 )
+
+
+def resolve_pixel_bin_k(
+    k: PixelBinK,
+    mount: str,
+    *,
+    default: float = UNIFIED_JITTER_PIXEL_K,
+) -> float:
+    """Per-mount multiplier. ``\"lizard\"`` applies to both rigid and modular."""
+    if not isinstance(k, Mapping):
+        return float(k)
+    lowered = {str(key).strip().lower(): float(val) for key, val in k.items()}
+    mount_key = str(mount).strip().lower()
+    if mount_key in lowered:
+        return lowered[mount_key]
+    if mount_key in {"rigid", "modular"} and "lizard" in lowered:
+        return lowered["lizard"]
+    if "default" in lowered:
+        return lowered["default"]
+    return float(default)
+
+
+def pixel_bin_k_payload(k: PixelBinK) -> float | dict[str, float]:
+    """YAML/pickle form of ``pixel_bin_k`` (scalar or mount dict)."""
+    if isinstance(k, Mapping):
+        return {str(key): float(val) for key, val in k.items()}
+    return float(k)
 
 
 @dataclass
@@ -680,6 +714,12 @@ def unit_label(units: str) -> str:
     return "µm" if str(units).lower() == "um" else str(units)
 
 
+def _jitter_stat_annotation(med: float, p95: float, units: str) -> str:
+    """Compact median / P95 label; one decimal in pixels, integers in µm."""
+    fmt = ".1f" if str(units).lower() == "px" else ".0f"
+    return f"median {med:{fmt}}\nP95 {p95:{fmt}}"
+
+
 def _hist_percent_frames(
     distances: np.ndarray,
     *,
@@ -808,22 +848,89 @@ def shared_jitter_xmax(
     return max(best, 1e-6), source
 
 
+def pixel_step(values: np.ndarray) -> float | None:
+    """Smallest positive displacement — typically 1 camera pixel in plot units."""
+    v = np.asarray(values, dtype=float)
+    v = v[np.isfinite(v) & (v > 0)]
+    if v.size == 0:
+        return None
+    return float(np.min(v))
+
+
+def mount_bin_widths(
+    block_samples: list[BlockSamples],
+    *,
+    include: Collection[str] | None = None,
+    k: PixelBinK = UNIFIED_JITTER_PIXEL_K,
+) -> dict[str, float]:
+    """Per-mount histogram width: ``k`` × coarsest 1-pixel step in that mount type.
+
+    ``k`` is a scalar or a mount→multiplier dict. ``\"lizard\"`` covers both
+    ``rigid`` and ``modular`` unless those keys are set explicitly.
+
+    Each block's 1-pixel step is its smallest positive epoch sample (integer-pixel
+    correlation peak, already scaled to plot units). Taking the max across blocks
+    of one mount type keeps bins wide enough for the coarsest camera in that panel,
+    so mixed calibrations do not reopen empty bins between lattice rings.
+    """
+    keys = None if include is None else {str(x) for x in include}
+    steps: dict[str, list[float]] = {m: [] for m in JITTER_POOL_MOUNT_TYPES}
+    for bs in block_samples:
+        if keys is not None and bs.block_key not in keys:
+            continue
+        step = pixel_step(bs.values)
+        if step is not None:
+            steps[bs.mount_type].append(step)
+    return {
+        m: resolve_pixel_bin_k(k, m) * max(s)
+        for m, s in steps.items()
+        if s
+    }
+
+
+def unified_jitter_bin_edges(
+    xmax: float,
+    *,
+    bin_width: float | None = None,
+    n_bins: int | None = None,
+    max_bins: int = UNIFIED_JITTER_MAX_BINS,
+) -> np.ndarray:
+    """Edges covering ``[0, xmax]``. ``bin_width`` wins over ``n_bins`` when set."""
+    xmax = max(float(xmax), 1e-6)
+    if bin_width is not None and np.isfinite(bin_width) and float(bin_width) > 0:
+        width = max(float(bin_width), xmax / int(max_bins))
+        edges = np.arange(0.0, xmax, width)
+        if edges.size == 0 or edges[-1] < xmax:
+            edges = np.append(edges, xmax)
+        return edges
+    n = int(n_bins if n_bins is not None else 15)
+    return np.linspace(0.0, xmax, n + 1)
+
+
 def figure_unified_jitter(
     pools: dict[str, np.ndarray],
     *,
     xmax: float | None = None,
-    n_bins: int = 15,
+    n_bins: int | None = None,
+    bin_widths: dict[str, float] | None = None,
     units: str = "um",
 ):
-    """2×2 histograms with a shared x-limit from the most jittery mount."""
+    """2×2 histograms with a shared x-limit and per-panel bin widths.
+
+    ``xmax`` is the 99.5th percentile of the most jittery mount. When
+    ``bin_widths`` maps mount type → bar width (typically one coarsest pixel in
+    that panel), each histogram is binned independently. Otherwise all panels
+    share ``n_bins`` equal-width bins (legacy).
+    """
     if xmax is None:
         xmax, _ = shared_jitter_xmax(pools)
     xmax = max(float(xmax), 1e-6)
-    bins = np.linspace(0, xmax, int(n_bins) + 1)
     fig, axes = plt.subplots(2, 2, figsize=(4.8, 3.8), dpi=150, sharex=True)
     for ax, (mount, label, color) in zip(axes.ravel(), UNIFIED_JITTER_PANELS):
         values = np.asarray(pools.get(mount, np.array([])), dtype=float)
         n = int(np.isfinite(values).sum()) if values.size else 0
+        width = None if not bin_widths else bin_widths.get(mount)
+        bins = unified_jitter_bin_edges(xmax, bin_width=width, n_bins=n_bins)
         x, y = _hist_percent_frames(values, bins=bins)
         ax.bar(
             x,
@@ -834,13 +941,34 @@ def figure_unified_jitter(
             edgecolor="black",
             alpha=0.7,
         )
+        finite = values[np.isfinite(values)]
+        if finite.size:
+            med = float(np.median(finite))
+            p95 = float(np.percentile(finite, 95))
+            ax.axvline(med, color="0.15", ls="-", lw=0.9, zorder=3)
+            ax.axvline(p95, color="0.15", ls=":", lw=0.9, zorder=3)
+            ax.text(
+                0.98,
+                0.96,
+                _jitter_stat_annotation(med, p95, units),
+                transform=ax.transAxes,
+                ha="right",
+                va="top",
+                fontsize=6,
+                color="0.15",
+            )
         ax.set_xlim(0, xmax)
         ax.set_title(f"{label} (n={n})", fontsize=8)
         ax.set_ylabel("% frames", fontsize=8)
         ax.tick_params(labelsize=7)
         ax.spines["top"].set_visible(False)
         ax.spines["right"].set_visible(False)
-    xlabel = f"Displacement [{unit_label(units)}] (eye plane)"
+    ulabel = unit_label(units)
+    xlabel = (
+        f"Displacement [{ulabel}] (eye plane)"
+        if str(units).lower() == "um"
+        else f"Displacement [{ulabel}]"
+    )
     for ax in axes[1]:
         ax.set_xlabel(xlabel, fontsize=8)
     fig.tight_layout()
@@ -852,11 +980,14 @@ def plot_unified_jitter(
     out_pdf: Path,
     *,
     xmax: float | None = None,
-    n_bins: int = 15,
+    n_bins: int | None = None,
+    bin_widths: dict[str, float] | None = None,
     units: str = "um",
     show: bool = False,
 ) -> Path:
-    fig = figure_unified_jitter(pools, xmax=xmax, n_bins=n_bins, units=units)
+    fig = figure_unified_jitter(
+        pools, xmax=xmax, n_bins=n_bins, bin_widths=bin_widths, units=units
+    )
     return _save_figure(fig, out_pdf, show=show)
 
 
@@ -1164,12 +1295,20 @@ def export_unified_jitter(
     metadata_dir: Path,
     *,
     units: str = "um",
-    n_bins: int = 15,
+    n_bins: int | None = None,
+    bin_widths: dict[str, float] | None = None,
+    pixel_bin_k: PixelBinK = UNIFIED_JITTER_PIXEL_K,
     show: bool = False,
     include: Collection[str] | None = None,
     block_samples: list[BlockSamples] | None = None,
 ) -> dict[str, Path]:
-    """Four-panel jitter comparison with a shared x-limit (most jittery mount)."""
+    """Four-panel jitter comparison: shared xmax, per-mount bin width.
+
+    Bin width defaults to ``pixel_bin_k`` × the coarsest 1-pixel step among
+    blocks of that mount type. ``pixel_bin_k`` is a scalar or a mount→k dict
+    (``lizard`` covers rigid and modular). Pass ``n_bins`` (and omit
+    ``bin_widths``) to restore equal-width bins across panels.
+    """
     collected = (
         block_samples
         if block_samples is not None
@@ -1189,16 +1328,34 @@ def export_unified_jitter(
     if missing:
         print(f"[warn] unified jitter missing samples for: {missing}")
 
+    plot_id = (
+        UNIFIED_JITTER_PLOT_ID_PX
+        if str(units).lower() == "px"
+        else UNIFIED_JITTER_PLOT_ID
+    )
     xmax, xmax_source = shared_jitter_xmax(pools)
+    if bin_widths is None and n_bins is None:
+        bin_widths = mount_bin_widths(collected, include=include, k=pixel_bin_k)
+    resolved_widths: dict[str, float] = {}
+    if bin_widths:
+        for mount, raw in bin_widths.items():
+            edges = unified_jitter_bin_edges(xmax, bin_width=raw)
+            resolved_widths[mount] = float(np.diff(edges)[0]) if len(edges) > 1 else float(xmax)
+        print(
+            "unified jitter bin widths (plot units): "
+            + ", ".join(f"{m}={w:.3g}" for m, w in resolved_widths.items())
+        )
+
     run_dir = Path(figures_dir)
     if run_dir.name in {"figures", "plots"}:
         run_dir = run_dir.parent
 
     animals = sorted({bs.spec.animal for bs in used})
     keys = [bs.block_key for bs in used]
+    n_bins_out = None if n_bins is None else int(n_bins)
     bundle = begin_plot_bundle(
         run_dir,
-        UNIFIED_JITTER_PLOT_ID,
+        plot_id,
         kind="unified_jitter",
         logic_key="unified_jitter",
         cohort={
@@ -1210,7 +1367,9 @@ def export_unified_jitter(
         },
         extra={
             "units": units,
-            "n_bins": n_bins,
+            "n_bins": n_bins_out,
+            "bin_widths": {k: float(v) for k, v in resolved_widths.items()},
+            "pixel_bin_k": pixel_bin_k_payload(pixel_bin_k),
             "xmax": xmax,
             "xmax_source": xmax_source,
             "xmax_percentile": 99.5,
@@ -1221,12 +1380,22 @@ def export_unified_jitter(
         bundle.plots_dir / UNIFIED_JITTER_PDF,
         xmax=xmax,
         n_bins=n_bins,
+        bin_widths=bin_widths,
         units=units,
         show=show,
     )
+    bin_edges = {
+        mount: unified_jitter_bin_edges(
+            xmax, bin_width=None if not bin_widths else bin_widths.get(mount), n_bins=n_bins
+        ).tolist()
+        for mount, _label, _color in UNIFIED_JITTER_PANELS
+    }
     payload = {
         "pools": {k: np.asarray(v, dtype=float) for k, v in pools.items()},
-        "n_bins": int(n_bins),
+        "n_bins": n_bins_out,
+        "bin_widths": {k: float(v) for k, v in resolved_widths.items()},
+        "bin_edges": bin_edges,
+        "pixel_bin_k": pixel_bin_k_payload(pixel_bin_k),
         "units": units,
         "xmax": float(xmax),
         "xmax_source": xmax_source,
@@ -1239,14 +1408,18 @@ def export_unified_jitter(
         meta={
             "xmax": float(xmax),
             "xmax_source": xmax_source,
-            "n_bins": int(n_bins),
+            "n_bins": n_bins_out,
+            "bin_widths": payload["bin_widths"],
+            "pixel_bin_k": payload["pixel_bin_k"],
             "n_blocks": len(used),
         },
         entrypoint="eye_tracking_system_tools.analysis.jitter_epochs.export_unified_jitter",
     )
     summary = {
         "units": units,
-        "n_bins": int(n_bins),
+        "n_bins": n_bins_out,
+        "bin_widths": payload["bin_widths"],
+        "pixel_bin_k": pixel_bin_k_payload(pixel_bin_k),
         "xmax": float(xmax),
         "xmax_source": xmax_source,
         "xmax_percentile": 99.5,
@@ -1263,6 +1436,8 @@ def export_unified_jitter(
             "median": float(np.median(arr)) if arr.size else None,
             "p95": float(np.percentile(arr, 95)) if arr.size else None,
             "p99_5": float(np.percentile(arr, 99.5)) if arr.size else None,
+            "bin_width": payload["bin_widths"].get(mount),
+            "pixel_bin_k": resolve_pixel_bin_k(pixel_bin_k, mount),
         }
     with open(bundle.metadata_dir / "unified_jitter_summary.yaml", "w", encoding="utf-8") as f:
         yaml.safe_dump(summary, f, sort_keys=False)

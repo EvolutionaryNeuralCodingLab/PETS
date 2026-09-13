@@ -178,7 +178,7 @@ def plateau_onset_hi_pct(
 
 
 def argmin_shape_hi_pct(table: pd.DataFrame) -> float:
-    """HI_PCT that minimizes shape_err (often past the plateau; comparison only)."""
+    """HI_PCT that minimizes shape_err (closest skew/kurtosis to Rayleigh)."""
     if table.empty or "shape_err" not in table.columns:
         return float("nan")
     err = table["shape_err"].to_numpy()
@@ -218,6 +218,73 @@ def mean_excess_d2(
             }
         )
     return pd.DataFrame(rows)
+
+
+def rayleigh_cdf(x: np.ndarray, B: float) -> np.ndarray:
+    """CDF of Rayleigh(B) (loc=0). ``F(x) = 1 - exp(-x² / (2 B²))`` for x ≥ 0."""
+    x = np.asarray(x, dtype=float)
+    b = max(float(B), 1e-15)
+    return np.clip(1.0 - np.exp(-0.5 * (np.clip(x, 0.0, None) / b) ** 2), 0.0, 1.0)
+
+
+def ks_rayleigh(
+    arr: np.ndarray,
+    B: float | None = None,
+    *,
+    n_sim: int = 0,
+    rng: np.random.Generator | None = None,
+) -> dict[str, float | int]:
+    """KS goodness-of-fit of ``D`` vs Rayleigh(B).
+
+    ``B`` defaults to the S10 overlay scale ``median(D) / sqrt(2 ln 2)``.
+    Zeros are dropped (Rayleigh support is ``(0, ∞)``).
+
+    ``ks_p`` is scipy's p-value treating ``B`` as known. With ``n_sim > 0``,
+    ``ks_p_lilliefors`` is a Monte Carlo p-value that re-estimates ``B_med``
+    on each Rayleigh draw (Lilliefors correction for an estimated scale).
+    """
+    a = _finite_d(arr)
+    a = a[a > 0]
+    out: dict[str, float | int] = {
+        "n": int(a.size),
+        "B": float("nan"),
+        "ks_statistic": float("nan"),
+        "ks_p": float("nan"),
+        "ks_p_lilliefors": float("nan"),
+        "n_sim": int(n_sim),
+        "d_crit_05_lilliefors": float("nan"),
+    }
+    if a.size < 8:
+        return out
+    if B is None or not np.isfinite(B) or float(B) <= 0:
+        B = rayleigh_scale_from_median(a)
+    B = float(B)
+    if not np.isfinite(B) or B <= 0:
+        return out
+    out["B"] = B
+    cdf = lambda x, _B=B: rayleigh_cdf(x, _B)
+    stat, p = stats.kstest(a, cdf)
+    out["ks_statistic"] = float(stat)
+    out["ks_p"] = float(p)
+    if int(n_sim) <= 0:
+        return out
+    rng = np.random.default_rng(0) if rng is None else rng
+    n = int(a.size)
+    null = np.empty(int(n_sim), dtype=float)
+    for i in range(int(n_sim)):
+        sim = rng.rayleigh(scale=B, size=n)
+        sim_B = rayleigh_scale_from_median(sim)
+        if not np.isfinite(sim_B) or sim_B <= 0:
+            null[i] = float("nan")
+            continue
+        sim_stat, _ = stats.kstest(sim, lambda x, _B=float(sim_B): rayleigh_cdf(x, _B))
+        null[i] = float(sim_stat)
+    finite = null[np.isfinite(null)]
+    if finite.size:
+        out["ks_p_lilliefors"] = float(np.mean(finite >= float(stat)))
+        out["d_crit_05_lilliefors"] = float(np.quantile(finite, 0.95))
+        out["n_sim"] = int(finite.size)
+    return out
 
 
 def truncated_rayleigh_cdf(x: np.ndarray, B: float, c: float) -> np.ndarray:
@@ -312,6 +379,16 @@ def gof_onset_hi_pct(gof: pd.DataFrame, *, ks_tol: float = 1.15) -> float:
     if not np.any(ok):
         return float("nan")
     return float(sub["hi_pct"].to_numpy()[np.argmax(ok)])
+
+
+def argmin_gof_hi_pct(gof: pd.DataFrame) -> float:
+    """HI_PCT that minimizes KS (best truncated-Rayleigh fit on the sweep)."""
+    if gof.empty or "ks" not in gof.columns:
+        return float("nan")
+    ks = gof["ks"].to_numpy(dtype=float)
+    if not np.any(np.isfinite(ks)):
+        return float("nan")
+    return float(gof["hi_pct"].iloc[int(np.nanargmin(ks))])
 
 
 def rayleigh_qq(

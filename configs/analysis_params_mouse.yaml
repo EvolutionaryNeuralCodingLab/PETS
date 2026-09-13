@@ -1,8 +1,10 @@
 # Mouse M_002 mini–Fig 2 params (no state / head-movement filters).
-# Same saccade detection defaults as lizard paper; 2f without R3-1 lizard exclusions.
+# Detector floor is the S10 jitter-catalog mouse threshold (3.23 °/frame),
+# not the lizard paper 0.8 °/frame. S8g/h/i/j share this detector.
+# 2f without R3-1 lizard exclusions.
 
 saccade:
-  speed_threshold_deg_per_frame: 0.8
+  speed_threshold_deg_per_frame: 3.23
   directional_delta_threshold_deg: 90.0
   min_subsaccade_samples: 2
   min_net_disp_deg: 0.5

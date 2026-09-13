@@ -30,6 +30,55 @@ rcParams["pdf.fonttype"] = 42
 rcParams["ps.fonttype"] = 42
 
 
+def neighbor_on_off(
+    events: pd.DataFrame,
+    *,
+    pad_ms: float = 0.0,
+    min_amp: float = 0.5,
+    amp_col: str = "net_angular_disp",
+) -> dict[tuple[str, str, str], tuple[np.ndarray, np.ndarray]]:
+    """Per-eye (animal, block, eye) onset/offset arrays for neighbor masking."""
+    out: dict[tuple[str, str, str], tuple[np.ndarray, np.ndarray]] = {}
+    if events is None or events.empty:
+        return out
+    use = events
+    if amp_col in events.columns:
+        amp = pd.to_numeric(events[amp_col], errors="coerce")
+        use = events.loc[amp >= float(min_amp)]
+    needed = {"animal", "block", "eye", "saccade_on_ms", "saccade_off_ms"}
+    if use.empty or not needed.issubset(use.columns):
+        return out
+    for (animal, block, eye), g in use.groupby(["animal", "block", "eye"], sort=False):
+        ons = pd.to_numeric(g["saccade_on_ms"], errors="coerce").to_numpy(dtype=float)
+        offs = pd.to_numeric(g["saccade_off_ms"], errors="coerce").to_numpy(dtype=float)
+        out[(str(animal), str(block), str(eye).upper())] = (
+            ons - float(pad_ms),
+            offs + float(pad_ms),
+        )
+    return out
+
+
+def keep_samples_outside_neighbors(
+    t_ms: np.ndarray,
+    on_t: float,
+    off_t: float,
+    ons: np.ndarray,
+    offs: np.ndarray,
+) -> np.ndarray:
+    """True where ``t_ms`` is not inside another same-eye event's [on, off]."""
+    t_ms = np.asarray(t_ms, dtype=float)
+    keep = np.ones(t_ms.shape, dtype=bool)
+    on_t = float(on_t)
+    off_t = float(off_t)
+    for a, b in zip(np.asarray(ons, dtype=float), np.asarray(offs, dtype=float)):
+        if not np.isfinite(a) or not np.isfinite(b):
+            continue
+        if abs(a - on_t) <= 1e-6 and abs(b - off_t) <= 1e-6:
+            continue
+        keep &= ~((t_ms >= a) & (t_ms <= b))
+    return keep
+
+
 def _ms_params(tables: EventTables) -> dict[str, Any]:
     return dict(tables.params.get("main_sequence", {}))
 
@@ -180,7 +229,14 @@ def _peak_time_in_window(
     return float(tloc[i] + d * dt_local)
 
 
-def export_pos_vel_bundle(tables: EventTables, out_dir: Path, *, show: bool = False) -> Path:
+def export_pos_vel_bundle(
+    tables: EventTables,
+    out_dir: Path,
+    *,
+    show: bool = False,
+    isolation: str = "none",
+    neighbor_pad_ms: float = 0.0,
+) -> Path:
     """
     Export mean vel/pos traces by amplitude bin (Fig 2c/2d).
 
@@ -216,6 +272,8 @@ def export_pos_vel_bundle(tables: EventTables, out_dir: Path, *, show: bool = Fa
     plot_animals = p.get("plot_animals")
     if plot_animals is not None:
         plot_animals = [str(a) for a in plot_animals]
+    isolation = str(isolation or p.get("isolation") or "none").lower()
+    neighbor_pad_ms = float(p.get("neighbor_pad_ms", neighbor_pad_ms))
 
     if align_to not in {"peak", "onset"}:
         raise ValueError("align_to must be 'peak' or 'onset'")
@@ -241,6 +299,13 @@ def export_pos_vel_bundle(tables: EventTables, out_dir: Path, *, show: bool = Fa
         df = df[df["eye"].astype(str).str.upper() == eye_filter.upper()].copy()
 
     tables = _ensure_eye_traces(tables, df)
+
+    interval_map = neighbor_on_off(
+        df,
+        pad_ms=neighbor_pad_ms,
+        min_amp=min_amp,
+        amp_col=amp_col,
+    )
 
     # Cache per-eye arrays so we do not recompute velocity for every event.
     eye_cache: dict[tuple[str, str, str], dict[str, np.ndarray] | None] = {}
@@ -341,6 +406,18 @@ def export_pos_vel_bundle(tables: EventTables, out_dir: Path, *, show: bool = Fa
                     t0 = on_t
 
                 m = (t_ms >= t0 + tmin) & (t_ms <= t0 + tmax) & np.isfinite(v_vel)
+                if isolation == "nan_mask_neighbors" and np.any(m):
+                    key = (str(row["animal"]), str(row["block"]), str(row["eye"]).upper())
+                    ons, offs = interval_map.get(key, (np.array([]), np.array([])))
+                    extra = keep_samples_outside_neighbors(
+                        t_ms[m],
+                        on_t - neighbor_pad_ms,
+                        off_t + neighbor_pad_ms,
+                        ons,
+                        offs,
+                    )
+                    m_idx = np.flatnonzero(m)
+                    m[m_idx] = extra
                 if not np.any(m):
                     continue
 
@@ -525,6 +602,11 @@ def export_pos_vel_bundle(tables: EventTables, out_dir: Path, *, show: bool = Fa
         "velocity_unit": velocity_unit,
         "framerate_hz": framerate_hz,
         "use_fixed_dt": use_fixed_dt,
+        "isolation": isolation,
+        "neighbor_pad_ms": neighbor_pad_ms,
+        "speed_threshold_deg_per_frame": float(
+            (tables.params.get("saccade") or {}).get("speed_threshold_deg_per_frame", 0.8)
+        ),
         "fig_size": tuple(p.get("fig_size", (1.8, 1.8))),
         "dpi": int(p.get("dpi", 300)),
         "lw": float(p.get("lw", 1.0)),
@@ -539,6 +621,9 @@ def export_pos_vel_bundle(tables: EventTables, out_dir: Path, *, show: bool = Fa
     )
 
     _plot_pos_vel_pdfs(bundle, figures_dir, show=show)
+    from eye_tracking_system_tools.analysis.plot_bundle import write_replot_script
+
+    write_replot_script(Path(out_dir), "pos_vel")
     return pkl
 
 
@@ -684,6 +769,11 @@ def _plot_pos_vel_pdfs(
                 canon_pdf = figures_dir / canon_name
                 fig.savefig(canon_pdf, format="pdf", bbox_inches="tight")
                 written[canon_name] = canon_pdf
+                if str(params.get("isolation", "none")).lower() == "nan_mask_neighbors":
+                    iso_name = f"{Path(canon_name).stem}_isolated.pdf"
+                    iso_pdf = figures_dir / iso_name
+                    fig.savefig(iso_pdf, format="pdf", bbox_inches="tight")
+                    written[iso_name] = iso_pdf
 
             legend_name = f"{Path(canon_name).stem}_{animal}_legend.pdf"
             legend_pdf = _export_amp_bin_legend_pdf(
@@ -1083,7 +1173,13 @@ def _pool_pogona(df: pd.DataFrame) -> tuple[pd.DataFrame, str]:
     return df, "all"
 
 
-def export_amplitude_velocity_fit(tables: EventTables, out_dir: Path, *, show: bool = False) -> Path:
+def export_amplitude_velocity_fit(
+    tables: EventTables,
+    out_dir: Path,
+    *,
+    show: bool = False,
+    use_s13_preonset: bool = False,
+) -> Path:
     p = _ms_params(tables)
     amp_col = p.get("amp_col", "net_angular_disp")
     bin_width = float(p.get("bin_width_deg", 5.0))
@@ -1102,6 +1198,25 @@ def export_amplitude_velocity_fit(tables: EventTables, out_dir: Path, *, show: b
     df = tables.all_saccades.copy()
     if df.empty:
         raise ValueError("No saccades for 2e export")
+    amp_definition = "onset_to_offset"
+    if use_s13_preonset:
+        from eye_tracking_system_tools.analysis.diagnostics_2e import attach_s13_amplitude
+        from eye_tracking_system_tools.analysis.event_cache import ensure_traces_for_blocks
+
+        keys = sorted(
+            {_row_block_key(a, b) for a, b in zip(df["animal"], df["block"])}
+        )
+        tables = ensure_traces_for_blocks(tables, keys)
+        df = attach_s13_amplitude(df, tables, frame_rate_fps=frame_rate)
+        amp_col = "amp_s13"
+        amp_definition = "onset_to_offset; length1_preonset_to_offset"
+        n_len1 = int((np.round(df["length"].to_numpy(float)) == 1).sum())
+        n_pre = int(df["amp_s13_used_preonset"].to_numpy(bool).sum())
+        if n_len1 >= 100 and n_pre < 50:
+            raise RuntimeError(
+                f"pre-onset A finite for {n_pre} / {n_len1} length-1 events; "
+                "lab traces are required (ensure_traces_for_blocks)."
+            )
     df["peak_velocity"] = _peak_velocity_deg_per_ms(df, frame_rate)
     df = df[np.isfinite(df[amp_col]) & np.isfinite(df["peak_velocity"]) & (df[amp_col] >= min_amp)]
     amp_hi = float(np.nanpercentile(df[amp_col], max_amp_pct))
@@ -1135,6 +1250,7 @@ def export_amplitude_velocity_fit(tables: EventTables, out_dir: Path, *, show: b
     color_map = build_color_map(animals, template="okabeito", order=animals)
     params = {
         "amp_col": amp_col,
+        "amp_definition": amp_definition,
         "bin_width_deg": bin_width,
         "min_amp_deg": min_amp,
         "max_amp_pct": max_amp_pct,
@@ -1147,6 +1263,9 @@ def export_amplitude_velocity_fit(tables: EventTables, out_dir: Path, *, show: b
         "density_cmap": str(p.get("density_cmap", "turbo")),
         "density_figsize": tuple(p.get("density_figsize", (3.8, 3.2))),
         "scatter_animal": scatter_animal,
+        "speed_threshold_deg_per_frame": float(
+            (tables.params.get("saccade") or {}).get("speed_threshold_deg_per_frame", 0.8)
+        ),
     }
 
     x_fit_span = (
@@ -1296,6 +1415,7 @@ def export_amplitude_velocity_fit(tables: EventTables, out_dir: Path, *, show: b
             "csv_choices": tables.csv_meta,
             "params": params,
             "figure": "2e",
+            "amp_definition": amp_definition,
             "n": global_fit["n"],
             "n_concurrent": class_stats["concurrent"]["n"],
             "n_monocular": class_stats["monocular"]["n"],
@@ -1308,6 +1428,9 @@ def export_amplitude_velocity_fit(tables: EventTables, out_dir: Path, *, show: b
         },
         entrypoint="eye_tracking_system_tools.analysis.figures_2c_2e.export_amplitude_velocity_fit",
     )
+    from eye_tracking_system_tools.analysis.plot_bundle import write_replot_script
+
+    write_replot_script(Path(out_dir), "figure_2e")
     return pkl
 
 

@@ -42,33 +42,54 @@ def find_lizmov_mat(spec: BlockSpec) -> Path | None:
     return (preferred or matches)[0]
 
 
-def load_lizmov_times_ms(mat_path: Path) -> np.ndarray:
-    """Return movement sample times (ms) from ``lizMov.mat`` (HDF5)."""
+def load_lizmov_samples(mat_path: Path) -> tuple[np.ndarray, np.ndarray]:
+    """Return ``(t_mov_ms, movAll)`` from ``lizMov.mat`` with no movement filter."""
     import h5py
 
     with h5py.File(mat_path, "r") as mat:
         t = np.asarray(mat["t_mov_ms"], dtype=float).reshape(-1)
         mov = np.asarray(mat["movAll"], dtype=float).reshape(-1)
+    return t, mov
+
+
+def load_lizmov_times_ms(mat_path: Path) -> np.ndarray:
+    """Return movement sample times (ms) from ``lizMov.mat`` (HDF5)."""
+    t, mov = load_lizmov_samples(mat_path)
     # Keep times where movement flag is on (movAll > 0), else all sample times.
     if mov.size == t.size and np.nanmax(mov) > 0:
         return t[mov > 0]
     return t
 
 
-def load_lizmov_bout_onsets_ms(mat_path: Path) -> np.ndarray:
-    """Head-bout onsets: rising edges of ``movAll > 0`` (ms)."""
-    import h5py
+def bout_onsets_from_times(
+    times: np.ndarray,
+    *,
+    gap_ms: float = 40.0,
+) -> np.ndarray:
+    """Split movement sample times into bouts; return each bout's first sample.
 
-    with h5py.File(mat_path, "r") as mat:
-        t = np.asarray(mat["t_mov_ms"], dtype=float).reshape(-1)
-        mov = np.asarray(mat["movAll"], dtype=float).reshape(-1)
-    n = min(t.size, mov.size)
-    t, mov = t[:n], mov[:n]
-    on = np.isfinite(mov) & (mov > 0)
-    prev = np.concatenate([[False], on[:-1]])
-    rising = on & ~prev
-    out = t[rising]
-    return out[np.isfinite(out)]
+    ``lizMov.mat`` stores *sparse* times where the accel envelope exceeded
+    threshold (typically 4 ms samples). ``movAll`` at those times is almost
+    always > 0, so a rising-edge of ``movAll > 0`` collapses to one onset at
+    the first sample. Consecutive samples more than ``gap_ms`` apart start a
+    new bout.
+    """
+    t = np.sort(np.asarray(times, dtype=float))
+    t = t[np.isfinite(t)]
+    if t.size <= 1:
+        return t
+    starts = np.concatenate([[True], np.diff(t) > float(gap_ms)])
+    return t[starts]
+
+
+def load_lizmov_bout_onsets_ms(
+    mat_path: Path,
+    *,
+    gap_ms: float = 40.0,
+) -> np.ndarray:
+    """Head-bout onsets from ``lizMov.mat`` (gap-clustered ``t_mov_ms``)."""
+    times = load_lizmov_times_ms(mat_path)
+    return bout_onsets_from_times(times, gap_ms=gap_ms)
 
 
 def _label_from_mov_times(events: pd.DataFrame, mov_times: np.ndarray) -> pd.Series:
@@ -165,3 +186,47 @@ def label_saccades_head_movement(
     out["head_movement"] = flags
     print(f"[{spec.block_key}] labeled head_movement from {mov_path.name}")
     return out
+
+
+def refresh_event_tables_head_labels(tables: "EventTables") -> "EventTables":
+    """
+    Re-apply ``head_movement`` from ``lizMov.mat`` (or CSV fallbacks) for every block.
+
+    Updates each :class:`~pipeline.BlockBundle` and the pooled ``all_saccades`` frame.
+    Use when finalized on-disk events lack the column or you want labels refreshed
+    from the current ``lizMov.mat`` on disk.
+    """
+    from dataclasses import replace
+
+    from eye_tracking_system_tools.analysis.pipeline import EventTables
+
+    if not isinstance(tables, EventTables):
+        raise TypeError(f"expected EventTables, got {type(tables)!r}")
+
+    new_blocks = []
+    parts: list[pd.DataFrame] = []
+    for bundle in tables.blocks:
+        ev = bundle.all_saccades.copy()
+        if ev.empty:
+            new_blocks.append(bundle)
+            continue
+        ev = label_saccades_head_movement(ev, bundle.spec)
+        parts.append(ev)
+        if "eye" in ev.columns:
+            l_ev = ev[ev["eye"].astype(str) == "L"].reset_index(drop=True)
+            r_ev = ev[ev["eye"].astype(str) == "R"].reset_index(drop=True)
+        else:
+            l_ev = pd.DataFrame()
+            r_ev = pd.DataFrame()
+        new_blocks.append(
+            replace(
+                bundle,
+                all_saccades=ev,
+                l_saccades=l_ev,
+                r_saccades=r_ev,
+            )
+        )
+    all_saccades = (
+        pd.concat(parts, ignore_index=True) if parts else tables.all_saccades.copy()
+    )
+    return replace(tables, blocks=new_blocks, all_saccades=all_saccades)

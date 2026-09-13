@@ -75,6 +75,9 @@ def show_and_close(fig, show: bool = False) -> None:
 
 def save_figure(fig, out_pdf: Path, *, show: bool = False, **savefig_kw) -> Path:
     """Save ``fig`` to ``out_pdf`` and optionally display it before closing."""
+    from eye_tracking_system_tools.analysis.paper_mpl_style import apply_paper_style
+
+    apply_paper_style()
     out_pdf = Path(out_pdf)
     out_pdf.parent.mkdir(parents=True, exist_ok=True)
     kw = {"format": "pdf", "bbox_inches": "tight"}

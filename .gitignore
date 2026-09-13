@@ -30,3 +30,6 @@ Thumbs.db
 # Phase-1 local figure validation outputs / matplotlib cache
 /outputs/
 /.mplconfig/
+/.matplotlib/
+/.pytest_cache/
+/.cursor/

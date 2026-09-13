@@ -137,6 +137,28 @@ def test_discover_and_load_eye_data_versions(tmp_path: Path):
     assert le_path is not None and le_path.name.endswith("raw_verified.csv")
 
 
+def test_export_eye_data_tag_writes_raw_verified(tmp_path: Path):
+    from eye_tracking_system_tools.annotation.preprocessing_gui.explore_series import (
+        RAW_VERIFIED_TAG,
+        export_eye_data_tag,
+    )
+
+    analysis = tmp_path / "analysis"
+    analysis.mkdir()
+    le = _synthetic_eye_df(20, with_kerr=True)
+    re = _synthetic_eye_df(20, with_kerr=True)
+    written = export_eye_data_tag(analysis, RAW_VERIFIED_TAG, le, re)
+    assert len(written) == 2
+    assert (analysis / "left_eye_data_raw_verified.csv").is_file()
+    assert (analysis / "right_eye_data_raw_verified.csv").is_file()
+    # Overwrite with a marker column and confirm it replaces content.
+    le2 = le.copy()
+    le2["marker"] = 1
+    export_eye_data_tag(analysis, RAW_VERIFIED_TAG, le2, re)
+    reloaded = pd.read_csv(analysis / "left_eye_data_raw_verified.csv")
+    assert "marker" in reloaded.columns
+
+
 def test_eye_csvs_are_stale(tmp_path: Path):
     analysis = tmp_path / "analysis"
     analysis.mkdir()
@@ -163,9 +185,12 @@ def test_explore_plot_panel_version_combo(qapp_session, tmp_path: Path):
         final, 30000.0, le_df=tagged, re_df=tagged, eye_version_tag="raw_verified"
     )
     panel = ExplorePlotPanel()
+    assert panel._btn_finalize_eye_data.text() == "finalize_eye_data"
+    assert not panel._btn_finalize_eye_data.isEnabled()
     panel.set_eye_versions(versions, selected_tag="raw_verified")
     panel.set_catalog(catalog)
     assert panel.current_eye_version_tag() == "raw_verified"
+    assert panel._btn_finalize_eye_data.isEnabled()
     assert EYE_PUPIL_SIZE in panel._eye_checks
     assert EYE_K_PHI in panel._eye_checks
     assert EYE_K_THETA in panel._eye_checks

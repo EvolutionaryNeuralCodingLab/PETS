@@ -1,0 +1,98 @@
+question: Among large saccades that start while the head is still, how often is a
+  subsequent detected eye movement present, is it same-direction or counter-directed,
+  and is it associated with later head-bout onset?
+n_stationary_onset: 7325
+n_stationary_with_amp: 7006
+n_qualifying: 1903
+amp_threshold_deg: 5.5
+amp_stats:
+  n: 7006.0
+  p50: 2.403615786783581
+  p75: 5.839589493220976
+  p90: 10.993674123204261
+  percentile_used: 75.0
+  floor_deg: 5.0
+  p_used: 5.839589493220976
+  proposed_deg: 5.5
+  threshold_deg: 5.5
+  threshold_source: proposed
+params:
+  lookback_ms: 50.0
+  post_window_ms: 250.0
+  bout_gap_ms: 40.0
+  reverse_min_deg: 90.0
+  amp_percentile: 75.0
+  amp_floor_deg: 5.0
+  sync_diff_ms: 34.0
+  pre_plot_ms: 80.0
+  post_plot_ms: 400.0
+  trace_dt_ms: 2.0
+n_with_secondary: 1123
+pct_with_secondary: 59.012086179716235
+n_first_same: 395
+pct_first_same: 20.75669994745139
+n_first_reverse: 684
+pct_first_reverse: 35.943247503941144
+n_first_unknown: 44
+pct_first_unknown: 2.3121387283236996
+n_no_secondary: 780
+pct_no_secondary: 40.987913820283765
+n_multi_secondary: 713
+pct_multi_secondary: 37.46715712033631
+n_both_directions: 413
+pct_both_directions: 21.702574881765635
+n_subsequent_head: 313
+pct_subsequent_head: 16.447714135575406
+n_secondary_and_head: 193
+pct_secondary_given_head: 61.66134185303515
+pct_head_given_secondary: 17.186108637577917
+median_first_latency_ms: 67.94999999995343
+median_first_secondary_amp_deg: 2.2822446409132127
+median_head_latency_ms: 55.75
+median_remaining_frac: 0.9167254559914502
+n_remaining_ge_0p5: 1602
+pct_remaining_ge_0p5: 84.22712933753944
+n_remaining_lt_0p5: 300
+pct_remaining_lt_0p5: 15.772870662460567
+head_by_secondary_class:
+  none:
+    n: 780
+    n_subsequent_head: 120
+    pct_subsequent_head: 15.384615384615385
+  same:
+    n: 395
+    n_subsequent_head: 61
+    pct_subsequent_head: 15.443037974683543
+  reverse:
+    n: 684
+    n_subsequent_head: 127
+    pct_subsequent_head: 18.567251461988306
+per_animal:
+  PV_106:
+    n_qualifying: 302
+    pct_any_secondary: 49.668874172185426
+    pct_reverse_first: 29.80132450331126
+    pct_same_first: 18.874172185430464
+    pct_subsequent_head: 22.185430463576157
+    median_remaining_frac: 0.987221000543118
+  PV_126:
+    n_qualifying: 818
+    pct_any_secondary: 64.18092909535453
+    pct_reverse_first: 40.95354523227384
+    pct_same_first: 22.12713936430318
+    pct_subsequent_head: 16.13691931540342
+    median_remaining_frac: 0.9384984863261816
+  PV_143:
+    n_qualifying: 174
+    pct_any_secondary: 42.5287356321839
+    pct_reverse_first: 22.988505747126435
+    pct_same_first: 14.942528735632186
+    pct_subsequent_head: 35.05747126436782
+    median_remaining_frac: 0.8930104788647182
+  PV_62:
+    n_qualifying: 609
+    pct_any_secondary: 61.412151067323485
+    pct_reverse_first: 35.960591133004925
+    pct_same_first: 21.510673234811165
+    pct_subsequent_head: 8.70279146141215
+    median_remaining_frac: 0.8548768564991974

@@ -1,0 +1,7 @@
+created_utc: '2026-09-07T17:50:50.968820+00:00'
+pickle: metadata/double_steps_move_only.pkl
+entrypoint: eye_tracking_system_tools.analysis.double_steps_move_only.export_double_steps_move_only
+git_hash: 30a8fe1009b8d48f70f3ab3b7cee9e1afeaeda34
+n_large: 2997
+pct_overall: 21.32132132132132
+n_unique_head_moving: 10193

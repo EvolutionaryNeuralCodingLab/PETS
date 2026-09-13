@@ -122,6 +122,41 @@ def test_build_manual_ttl_payload_with_extra_roles(ttl_fixture):
     assert arena_window == golden["arena_window"]
 
 
+def test_build_manual_ttl_payload_led_driver_missing(ttl_fixture):
+    blocksync, events_csv, _golden = ttl_fixture
+    manual_line_map, arena_window = build_manual_ttl_payload(
+        blocksync,
+        events_csv,
+        arena_line=3,
+        l_eye_line=1,
+        r_eye_line=2,
+        led_driver_missing=True,
+        window_mode="i",
+        start_index=0,
+        end_index=-1,
+    )
+    assert "LED_driver" not in manual_line_map
+    assert set(manual_line_map) >= {"Arena_TTL", "L_eye_TTL", "R_eye_TTL"}
+    assert arena_window["arena_start_index"] == 0
+
+
+def test_manual_ttl_dialog_led_missing_payload(qapp_session, ttl_fixture):
+    blocksync, events_csv, _golden = ttl_fixture
+    dlg = ManualTtlDialog(blocksync, events_csv)
+    dlg.set_mapping_for_test(
+        arena_line=3,
+        l_eye_line=1,
+        r_eye_line=2,
+        led_driver_missing=True,
+        window_mode="i",
+        start_index="0",
+        end_index="-1",
+    )
+    manual_line_map, _arena_window = dlg.build_payload()
+    assert "LED_driver" not in manual_line_map
+    assert dlg._led_missing.isChecked() is True
+
+
 def test_build_manual_ttl_payload_rejects_duplicate_lines(ttl_fixture):
     blocksync, events_csv, _golden = ttl_fixture
     with pytest.raises(ValueError, match="distinct line"):

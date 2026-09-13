@@ -120,6 +120,27 @@ def test_load_ttl_sidecar(tmp_path: Path):
     assert loaded is not None
     assert loaded["manual_line_map"]["Arena_TTL"] == 3
     assert loaded["arena_window"]["arena_start_index"] == 0
+    assert loaded["led_driver_missing"] is False
+
+
+def test_load_ttl_sidecar_led_missing_flag(tmp_path: Path):
+    block = _block_handle(tmp_path)
+    oe_dir = block.block_path / "oe_files" / "exp1"
+    oe_dir.mkdir(parents=True)
+    payload = {
+        "manual_line_map": {"Arena_TTL": 3, "L_eye_TTL": 1, "R_eye_TTL": 2},
+        "arena_window": {
+            "arena_start_timestamp": 100,
+            "arena_end_timestamp": 200,
+            "arena_start_index": 0,
+        },
+        "led_driver_missing": True,
+    }
+    (oe_dir / "ttl_manual_mapping.json").write_text(json.dumps(payload), encoding="utf-8")
+    loaded = load_ttl_sidecar(block.block_path, "exp1")
+    assert loaded is not None
+    assert loaded["led_driver_missing"] is True
+    assert "LED_driver" not in loaded["manual_line_map"]
 
 
 def test_block_sync_session_resolve_channeldict():

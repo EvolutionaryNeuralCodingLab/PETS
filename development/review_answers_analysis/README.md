@@ -59,6 +59,8 @@ development/review_answers_analysis/
   qc_reversals_noise_blinks.ipynb
   corrective_head_timing.ipynb
   s1_occupancy.ipynb
+  2f_figure_edits.ipynb
+  figure_2e_edits.ipynb
 
 outputs/review_answers_latest/
   <plot_id>/plots/*.pdf
@@ -118,6 +120,9 @@ Fig 2e scatters (`figure_2e_all_events_scatter.pdf`, `_concurrent_scatter.pdf`, 
 | [qc_reversals_noise_blinks.ipynb](qc_reversals_noise_blinks.ipynb) | R3-5, R3-7, R3-14, R3-21 | Reloads traces; reversal = ≥50% return toward start within 80 ms after offset | folder `qc_reversals_noise_blinks/` |
 | [corrective_head_timing.ipynb](corrective_head_timing.ipynb) | R3-15, R3-16 | Corrective = contra monocular partner in (0, 80] ms and ≤45°; head peri from `lizMov.mat` rising edges | folder `corrective_head/` |
 | [s1_occupancy.ipynb](s1_occupancy.ipynb) | R3-4 | Likelihood histogram of Euclidean eccentricity `hypot(k_phi, k_theta)`; line at ±35°. Filename kept as `s1_empirical_ratio_hist.pdf` | folder `s1_occupancy/` |
+| [mouse_2c_prepeak.ipynb](mouse_2c_prepeak.ipynb) | mouse 2c QC | Pre-peak speed bump: neighbor ISI, split averages, NaN-mask vs drop isolation. Does not change the production 2c exporter. | folder `mouse_2c_prepeak/` (`figure_2c.pdf`, `figure_2c_isolated.pdf`) |
+| [2f_figure_edits.ipynb](2f_figure_edits.ipynb) | Fig 2f colormap trials | Lizard 2f (head-stationary), mouse 2f, lizard S3 — each in `paper_white0`, `turbo`, `hot`, and `hot_r` | run root `outputs/2f_colormap_trials/` with bundles `figure_2f/`, `mouse_figure_2f/`, `figure_S3/` |
+| [figure_2e_edits.ipynb](figure_2e_edits.ipynb) | Fig 2e short-event ridge | Length-colored / gray scatters, all–concurrent–monocular means triptych, omission_trial (drop length ≤ 2); identity-line occupancy table | folder `diagnostics_2e/` (+ nested `omission_trial/`) |
 
 ---
 

@@ -808,6 +808,88 @@ def export_isi_by_state(tables: EventTables, out_dir: Path, *, show: bool = Fals
 EPOCH_DURATION_N_BINS = 30
 _EPOCH_DURATION_COLORS = {"active": "#D55E00", "quiet": "#0072B2"}
 
+# Binning trials for the quiet-full / quiet-zoom / active-zoom layout. Durations are
+# nearly integer seconds, so fixed-width integer bins avoid empty-bin combing.
+EPOCH_DURATION_BIN_TRIALS: tuple[dict[str, Any], ...] = (
+    {
+        "name": "width5s_quiet50s",
+        "zoom_bin_width_s": 5.0,
+        "quiet_full_bin_width_s": 50.0,
+        "label": "zoom 5 s bins; quiet-full 50 s",
+    },
+    {
+        "name": "width10s_quiet100s",
+        "zoom_bin_width_s": 10.0,
+        "quiet_full_bin_width_s": 100.0,
+        "label": "zoom 10 s bins; quiet-full 100 s",
+    },
+    {
+        "name": "width2s_quiet30s",
+        "zoom_bin_width_s": 2.0,
+        "quiet_full_bin_width_s": 30.0,
+        "label": "zoom 2 s bins; quiet-full 30 s",
+    },
+    {
+        "name": "nbins12_quiet15",
+        "zoom_n_bins": 12,
+        "quiet_full_n_bins": 15,
+        "label": "zoom 12 bins; quiet-full 15 bins",
+    },
+    {
+        "name": "nbins15_quiet20",
+        "zoom_n_bins": 15,
+        "quiet_full_n_bins": 20,
+        "label": "zoom 15 bins; quiet-full 20 bins",
+    },
+    {
+        "name": "kde_width5s_quiet50s",
+        "zoom_bin_width_s": 5.0,
+        "quiet_full_bin_width_s": 50.0,
+        "kde": True,
+        "label": "KDE + 5 s hist; quiet-full 50 s",
+    },
+)
+
+
+def epoch_duration_zoom_xmax_s(
+    active_vals: np.ndarray,
+    *,
+    round_to: float = 5.0,
+    pad_s: float = 0.0,
+) -> float:
+    """Linear zoom upper limit from the longest active epoch (rounded up)."""
+    vals = np.asarray(active_vals, dtype=float)
+    vals = vals[np.isfinite(vals) & (vals > 0)]
+    if vals.size == 0:
+        return float(round_to)
+    hi = float(np.nanmax(vals)) + float(pad_s)
+    step = max(float(round_to), 1e-9)
+    return float(np.ceil(hi / step) * step)
+
+
+def epoch_duration_linear_edges(
+    *,
+    xmax_s: float,
+    xmin_s: float = 0.0,
+    n_bins: int | None = None,
+    bin_width_s: float | None = None,
+) -> np.ndarray:
+    """Linear histogram edges; prefer integer-aligned ``bin_width_s`` when set."""
+    lo = float(xmin_s)
+    hi = float(xmax_s)
+    if hi <= lo:
+        hi = lo + 1.0
+    if bin_width_s is not None:
+        width = float(bin_width_s)
+        if width <= 0:
+            raise ValueError("bin_width_s must be > 0")
+        n = max(1, int(np.ceil((hi - lo) / width)))
+        return lo + width * np.arange(n + 1, dtype=float)
+    n_bins = 15 if n_bins is None else int(n_bins)
+    if n_bins < 1:
+        raise ValueError("n_bins must be >= 1")
+    return np.linspace(lo, hi, n_bins + 1)
+
 
 def epoch_duration_bin_edges(
     vals: np.ndarray,
@@ -850,20 +932,120 @@ def _draw_epoch_duration_hist(
     scale: str,
     bins: np.ndarray,
     xmin: float = 0.0,
+    xmax: float | None = None,
+    continuous: bool = False,
 ) -> None:
     vals = np.asarray(vals, dtype=float)
     if vals.size:
-        ax.hist(vals, bins=bins, color=color, edgecolor="black", alpha=0.8)
+        hist_kw: dict[str, Any] = {"bins": bins, "color": color, "alpha": 1.0}
+        if continuous:
+            hist_kw.update(histtype="stepfilled", edgecolor="none", linewidth=0)
+        else:
+            hist_kw["edgecolor"] = "black"
+            hist_kw["linewidth"] = 0.4
+        ax.hist(vals, **hist_kw)
         if scale == "log":
             ax.set_xscale("log")
         else:
-            right = float(bins[-1]) if bins.size else None
+            right = float(xmax) if xmax is not None else (float(bins[-1]) if bins.size else None)
             ax.set_xlim(float(xmin), right)
     ax.set_xlabel("Epoch duration [s]", fontsize=8)
     ax.set_ylabel("Count", fontsize=8)
     ax.set_title(title, fontsize=8)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
+
+
+def _overlay_epoch_duration_kde(
+    ax,
+    vals: np.ndarray,
+    *,
+    bins: np.ndarray,
+    color: str,
+    xmin: float,
+    xmax: float,
+) -> None:
+    """Draw a count-scaled Gaussian KDE over an existing histogram."""
+    vals = np.asarray(vals, dtype=float)
+    vals = vals[np.isfinite(vals)]
+    if vals.size < 2 or bins.size < 2:
+        return
+    try:
+        from scipy.stats import gaussian_kde
+    except ImportError:
+        return
+    width = float(np.mean(np.diff(bins)))
+    if width <= 0:
+        return
+    xs = np.linspace(float(xmin), float(xmax), 256)
+    dens = gaussian_kde(vals)(xs)
+    ax.plot(xs, dens * vals.size * width, color="0.15", linewidth=1.2, zorder=3)
+
+
+def plot_epoch_duration_triptych(
+    quiet: np.ndarray,
+    active: np.ndarray,
+    *,
+    zoom_xmax_s: float,
+    quiet_full_bins: np.ndarray,
+    zoom_bins: np.ndarray,
+    title: str | None = None,
+    kde: bool = False,
+) -> Any:
+    """Quiet full-range | quiet zoomed | active zoomed (shared zoom x-limit)."""
+    quiet = np.asarray(quiet, dtype=float)
+    active = np.asarray(active, dtype=float)
+    quiet_full_hi = float(np.nanmax(quiet)) if quiet.size else float(quiet_full_bins[-1])
+    fig, axes = plt.subplots(1, 3, figsize=(7.2, 1.9), dpi=300)
+    panels = (
+        (
+            axes[0],
+            quiet,
+            _EPOCH_DURATION_COLORS["quiet"],
+            f"quiet full n={quiet.size}",
+            quiet_full_bins,
+            0.0,
+            quiet_full_hi,
+        ),
+        (
+            axes[1],
+            quiet,
+            _EPOCH_DURATION_COLORS["quiet"],
+            f"quiet 0–{zoom_xmax_s:g}s n={(quiet <= zoom_xmax_s).sum()}",
+            zoom_bins,
+            0.0,
+            float(zoom_xmax_s),
+        ),
+        (
+            axes[2],
+            active,
+            _EPOCH_DURATION_COLORS["active"],
+            f"active 0–{zoom_xmax_s:g}s n={active.size}",
+            zoom_bins,
+            0.0,
+            float(zoom_xmax_s),
+        ),
+    )
+    for ax, vals, color, panel_title, bins, xmin, xmax in panels:
+        _draw_epoch_duration_hist(
+            ax,
+            vals,
+            color=color,
+            title=panel_title,
+            scale="linear",
+            bins=bins,
+            xmin=xmin,
+            xmax=xmax,
+            continuous=False,
+        )
+        if kde:
+            _overlay_epoch_duration_kde(
+                ax, vals, bins=bins, color=color, xmin=xmin, xmax=xmax
+            )
+    if title:
+        fig.suptitle(title, fontsize=9, y=1.05)
+    fig.tight_layout()
+    return fig
 
 
 def collect_epoch_durations(
@@ -876,16 +1058,43 @@ def collect_epoch_durations(
     gap_bridge_ms: float = 3000.0,
 ) -> dict[str, list[float]]:
     """Per-state epoch lengths in seconds from behavior-state CSVs."""
+    frame = collect_epoch_table(
+        tables,
+        smooth_state=smooth_state,
+        min_duration_s=min_duration_s,
+        min_active_ms=min_active_ms,
+        min_quiet_ms=min_quiet_ms,
+        gap_bridge_ms=gap_bridge_ms,
+    )
+    durations = {"active": [], "quiet": []}
+    if frame.empty:
+        return durations
+    for lab in durations:
+        durations[lab] = frame.loc[frame["state"] == lab, "duration_s"].astype(float).tolist()
+    return durations
+
+
+def collect_epoch_table(
+    tables: EventTables,
+    *,
+    smooth_state: bool = False,
+    min_duration_s: float = 0.0,
+    min_active_ms: float = 5000.0,
+    min_quiet_ms: float = 5000.0,
+    gap_bridge_ms: float = 3000.0,
+) -> pd.DataFrame:
+    """Per-epoch table with animal/block/timestamps (ms) and duration (s)."""
     from eye_tracking_system_tools.analysis.behavior_state import (
         normalize_label,
         read_behavior_state,
         smooth_behavior_state,
     )
 
-    durations = {"active": [], "quiet": []}
+    rows: list[dict[str, Any]] = []
     min_s = float(min_duration_s)
     for block in tables.blocks:
-        state = read_behavior_state(block.spec)
+        spec = block.spec
+        state = read_behavior_state(spec)
         if state is None or state.empty:
             continue
         if smooth_state:
@@ -897,11 +1106,45 @@ def collect_epoch_durations(
             )
         for _, row in state.iterrows():
             lab = normalize_label(row["annotation"])
-            dur_s = (float(row["end_time"]) - float(row["start_time"])) / 1000.0
-            if np.isfinite(dur_s) and dur_s > 0 and lab in durations:
-                if dur_s >= min_s:
-                    durations[lab].append(dur_s)
-    return durations
+            if lab not in {"active", "quiet"}:
+                continue
+            start_ms = float(row["start_time"])
+            end_ms = float(row["end_time"])
+            dur_s = (end_ms - start_ms) / 1000.0
+            if not (np.isfinite(dur_s) and dur_s > 0 and dur_s >= min_s):
+                continue
+            rows.append(
+                {
+                    "animal": spec.animal,
+                    "block_num": spec.block_num,
+                    "block_key": spec.block_key,
+                    "state": lab,
+                    "duration_s": dur_s,
+                    "start_time_ms": start_ms,
+                    "end_time_ms": end_ms,
+                    "start_s": start_ms / 1000.0,
+                    "end_s": end_ms / 1000.0,
+                    "block_path": str(spec.block_path),
+                }
+            )
+    if not rows:
+        return pd.DataFrame(
+            columns=[
+                "animal",
+                "block_num",
+                "block_key",
+                "state",
+                "duration_s",
+                "start_time_ms",
+                "end_time_ms",
+                "start_s",
+                "end_s",
+                "block_path",
+            ]
+        )
+    return pd.DataFrame(rows).sort_values(
+        ["duration_s", "animal", "block_num"], ascending=[False, True, True]
+    ).reset_index(drop=True)
 
 
 def export_epoch_durations(
@@ -1021,11 +1264,128 @@ def export_epoch_durations_raw_and_smoothed(
     return written
 
 
+def export_epoch_duration_bin_trials(
+    tables: EventTables,
+    out_dir: Path,
+    *,
+    show: bool = False,
+    plot_id: str = "epoch_duration_bin_trials",
+    trials: tuple[dict[str, Any], ...] | list[dict[str, Any]] | None = None,
+    zoom_round_to_s: float = 5.0,
+    smooth_state: bool = True,
+    min_duration_s: float = 1.0,
+) -> dict[str, Path]:
+    """Export quiet-full / quiet-zoom / active-zoom triptychs for several bin schemes.
+
+    Defaults match ``epoch_durations_smoothed`` (bridge ≤3 s, min 5 s/state, drop
+    epochs shorter than 1 s). Zoom xmax is
+    ``ceil(max(active) / zoom_round_to_s) * zoom_round_to_s``.
+    """
+    trial_cfgs = list(EPOCH_DURATION_BIN_TRIALS if trials is None else trials)
+    bundle = begin_plot_bundle(
+        out_dir,
+        plot_id,
+        kind="epoch_duration_bin_trials",
+        tables=tables,
+        logic_key="epoch_duration_bin_trials",
+        params=dict(getattr(tables, "params", {}) or {}),
+        extra={
+            "smooth_state": bool(smooth_state),
+            "min_duration_s": float(min_duration_s),
+            "zoom_round_to_s": float(zoom_round_to_s),
+            "trials": [dict(t) for t in trial_cfgs],
+        },
+    )
+    figures_dir = bundle.plots_dir
+    for stale in figures_dir.glob("epoch_duration_*.pdf"):
+        stale.unlink()
+    # Also clear PNG previews from prior inspection runs.
+    for stale in figures_dir.glob("epoch_duration_*.png"):
+        stale.unlink()
+
+    durations = collect_epoch_durations(
+        tables,
+        smooth_state=smooth_state,
+        min_duration_s=min_duration_s,
+    )
+    active = np.asarray(durations["active"], dtype=float)
+    quiet = np.asarray(durations["quiet"], dtype=float)
+    zoom_xmax = epoch_duration_zoom_xmax_s(active, round_to=float(zoom_round_to_s))
+    quiet_full_hi = float(np.nanmax(quiet)) if quiet.size else zoom_xmax
+
+    written: dict[str, Path] = {}
+    trial_meta: list[dict[str, Any]] = []
+    for cfg in trial_cfgs:
+        name = str(cfg["name"])
+        zoom_bins = epoch_duration_linear_edges(
+            xmax_s=zoom_xmax,
+            n_bins=cfg.get("zoom_n_bins"),
+            bin_width_s=cfg.get("zoom_bin_width_s"),
+        )
+        quiet_full_bins = epoch_duration_linear_edges(
+            xmax_s=quiet_full_hi,
+            n_bins=cfg.get("quiet_full_n_bins"),
+            bin_width_s=cfg.get("quiet_full_bin_width_s"),
+        )
+        label = str(cfg.get("label") or name)
+        fig = plot_epoch_duration_triptych(
+            quiet,
+            active,
+            zoom_xmax_s=zoom_xmax,
+            quiet_full_bins=quiet_full_bins,
+            zoom_bins=zoom_bins,
+            title=f"{label}  (zoom≤{zoom_xmax:g}s = ceil max active)",
+            kde=bool(cfg.get("kde", False)),
+        )
+        out = figures_dir / f"epoch_duration_triptych_{name}.pdf"
+        fig.savefig(out, format="pdf", bbox_inches="tight")
+        show_and_close(fig, show)
+        written[out.name] = out
+        trial_meta.append(
+            {
+                "name": name,
+                "label": label,
+                "zoom_xmax_s": zoom_xmax,
+                "zoom_bins": zoom_bins,
+                "quiet_full_bins": quiet_full_bins,
+                "zoom_bin_width_s": cfg.get("zoom_bin_width_s"),
+                "quiet_full_bin_width_s": cfg.get("quiet_full_bin_width_s"),
+                "zoom_n_bins": cfg.get("zoom_n_bins"),
+                "quiet_full_n_bins": cfg.get("quiet_full_n_bins"),
+            }
+        )
+
+    write_pickle_with_meta(
+        {
+            "active": active,
+            "quiet": quiet,
+            "zoom_xmax_s": zoom_xmax,
+            "max_active_s": float(np.nanmax(active)) if active.size else None,
+            "max_quiet_s": float(np.nanmax(quiet)) if quiet.size else None,
+            "trials": trial_meta,
+            "smooth_state": bool(smooth_state),
+            "min_duration_s": float(min_duration_s),
+        },
+        bundle.metadata_dir / "epoch_duration_bin_trials.pkl",
+        meta={
+            "n_active": int(active.size),
+            "n_quiet": int(quiet.size),
+            "zoom_xmax_s": zoom_xmax,
+            "n_trials": len(trial_meta),
+            "plot_id": plot_id,
+        },
+        entrypoint="eye_tracking_system_tools.analysis.figures_3d_isi.export_epoch_duration_bin_trials",
+    )
+    finish_plot_bundle(bundle)
+    return written
+
+
 def export_state_isi_and_epochs(
     tables: EventTables, out_dir: Path, *, show: bool = False
 ) -> dict[str, Path]:
     """All-ISI Fig 3d copies, same-epoch active/quiet ISIs, and epoch-duration hists."""
     written = export_isi_by_state(tables, out_dir, show=show)
     written.update(export_epoch_durations(tables, out_dir, show=show))
+    written.update(export_epoch_duration_bin_trials(tables, out_dir, show=show))
     return written
 

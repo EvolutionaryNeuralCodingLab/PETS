@@ -1,0 +1,107 @@
+question: "Among large saccades, how often is there a small-amplitude back-and-forth\
+  \ sequence (\u22652 extra saccades with a direction reversal) immediately afterward,\
+  \ and is that almost restricted to head-moving periods?"
+rule: "large = unique-event net_angular_disp \u2265 7.0\xB0; back-and-forth = \u2265\
+  2 smaller extras in (t0, t0+150 ms], \u22651 counter-directed vs primary (> 90\xB0\
+  ), and \u22651 consecutive pair of extras that reverse relative to each other"
+n_unique_lizmov: 17896
+amp_threshold_deg: 7.0
+amp_stats:
+  n: 17305.0
+  p50: 3.2248045940744254
+  p75: 7.107770235987884
+  p90: 12.348816026048226
+  percentile_used: 75.0
+  floor_deg: 5.0
+  p_used: 7.107770235987884
+  proposed_deg: 7.0
+  threshold_deg: 7.0
+  threshold_source: proposed
+params:
+  post_window_ms: 150.0
+  reverse_min_deg: 90.0
+  amp_percentile: 75.0
+  amp_floor_deg: 5.0
+  sync_diff_ms: 34.0
+overall:
+  n: 4416
+  pct: 18.093297101449274
+  n_hit: 799
+  n_reverse: 799
+head_still:
+  n: 1419
+  pct: 11.275546159267089
+  n_hit: 160
+  n_reverse: 160
+head_moving:
+  n: 2997
+  pct: 21.32132132132132
+  n_hit: 639
+  n_reverse: 639
+fisher_odds_ratio_moving_vs_still: 2.1323711832061067
+fisher_p_two_sided: 7.642500699942807e-17
+per_animal:
+  PV_106:
+    overall:
+      n: 970
+      n_reverse: 136
+      pct: 14.02061855670103
+      n_hit: 136
+    head_still:
+      n: 233
+      n_reverse: 25
+      pct: 10.729613733905579
+      n_hit: 25
+    head_moving:
+      n: 737
+      n_reverse: 111
+      pct: 15.061058344640434
+      n_hit: 111
+  PV_126:
+    overall:
+      n: 2075
+      n_reverse: 548
+      pct: 26.40963855421687
+      n_hit: 548
+    head_still:
+      n: 626
+      n_reverse: 104
+      pct: 16.61341853035144
+      n_hit: 104
+    head_moving:
+      n: 1449
+      n_reverse: 444
+      pct: 30.641821946169774
+      n_hit: 444
+  PV_143:
+    overall:
+      n: 398
+      n_reverse: 79
+      pct: 19.849246231155778
+      n_hit: 79
+    head_still:
+      n: 98
+      n_reverse: 10
+      pct: 10.204081632653061
+      n_hit: 10
+    head_moving:
+      n: 300
+      n_reverse: 69
+      pct: 23.0
+      n_hit: 69
+  PV_62:
+    overall:
+      n: 973
+      n_reverse: 36
+      pct: 3.6998972250770814
+      n_hit: 36
+    head_still:
+      n: 462
+      n_reverse: 21
+      pct: 4.545454545454546
+      n_hit: 21
+    head_moving:
+      n: 511
+      n_reverse: 15
+      pct: 2.935420743639922
+      n_hit: 15

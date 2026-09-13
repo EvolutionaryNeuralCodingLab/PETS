@@ -57,13 +57,15 @@ figure_2f:
   micro_range: [0.0, 0.1]
   macro_tick_list: [0.0, 0.25, 0.5]
   micro_tick_list: [0.0, 0.05, 0.1]
-  # Published Fig 2f caption: all saccades, head-stationary, equal-animal weights.
-  # Concurrent L/R pairs (binocular.sync_diff_ms) contribute one point from both
-  # event peaks. Unpaired events keep the ±51 ms contra-window sample.
+  # Head-stationary coupling: asymmetry should emerge without an explicit
+  # monocular filter. PV_62 excluded (head-movement labels unreliable); PV_57
+  # excluded (no lizMov.mat on paper blocks → head_movement NaN).
   event_mode: all  # all | monocular | binocular
   require_head_stationary: true
-  exclude_animals: []
+  exclude_animals: [PV_62, PV_57]
+  pairing_mode: synced_ms  # synced_ms | legacy_contra_table (notebook reproduction)
   contra_event_window_ms: 100.0
+  pair_merge_ms: 60.0
   contra_sample_ms: 51.0
   # Peak-speed pairing: contra_window (legacy paper 2f) | event_span (strict on/off span)
   sample_mode: contra_window

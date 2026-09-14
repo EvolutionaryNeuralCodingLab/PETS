@@ -1,0 +1,15 @@
+kind: figure_2f_lizard_mouse
+plot_id: s8_2f_lizard_mouse_all
+git_hash: 30a8fe1009b8d48f70f3ab3b7cee9e1afeaeda34
+params:
+  require_head_stationary: false
+  event_mode: all
+  thr_lizard: 0.8
+  thr_mouse: 3.23
+  range_lizard:
+  - 0.0
+  - 0.30959752321981426
+  range_mouse:
+  - 0.0
+  - 1.25
+  bins: 60

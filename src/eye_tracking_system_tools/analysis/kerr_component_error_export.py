@@ -20,7 +20,14 @@ AXIS_ORDER = ("phi", "theta", "hypot")
 EYE_ORDER = ("L", "R")
 PICKLE_NAME = "kerr_component_error.pkl"
 
-KERR_OUTPUTS = Path(__file__).resolve().parents[3] / "development" / "kerr_relative_error" / "outputs"
+KERR_OUTPUTS = (
+    Path(__file__).resolve().parents[1]
+    / "figures"
+    / "reproduction"
+    / "supplementary"
+    / "S1"
+    / "metadata"
+)
 
 
 def animal_level_from_blocks(per_block: pd.DataFrame) -> pd.DataFrame:

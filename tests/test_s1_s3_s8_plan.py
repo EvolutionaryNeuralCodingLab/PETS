@@ -81,7 +81,16 @@ def test_neighbor_on_off_groups_by_eye():
 
 
 def test_s1c_overall_from_csv(tmp_path: Path):
-    kerr = Path("/Users/nimi/Projects/PETS/development/kerr_relative_error/outputs")
+    kerr = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "eye_tracking_system_tools"
+        / "figures"
+        / "reproduction"
+        / "supplementary"
+        / "S1"
+        / "metadata"
+    )
     written = export_s1_kerr_bars(tmp_path, show=False)
     assert written["cohort_component_error_overall_phi_theta.pdf"].is_file()
     assert written["cohort_component_error_across_animals.pdf"].is_file()

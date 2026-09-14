@@ -1,0 +1,12 @@
+created_utc: '2026-08-17T11:55:13.850129+00:00'
+pickle: metadata/trace_mouse_alt_series.pkl
+entrypoint: eye_tracking_system_tools.analysis.species_traces.export_species_traces
+source: outputs/replotting_standalone/trace_mouse/metadata/trace_series.pkl
+species: mouse
+animal: M_002
+block: '012'
+window_start_s: 39.0161
+window_end_s: 119.0161
+requested_start_s: 30.0
+requested_end_s: 110.0
+pdf_name: S8_mouse_alt.pdf

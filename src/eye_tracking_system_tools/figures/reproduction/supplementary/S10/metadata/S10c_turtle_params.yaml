@@ -1,0 +1,22 @@
+kind: rayleigh_noise_core
+plot_id: rayleigh_noise_core_turtle
+git_hash: 30a8fe1009b8d48f70f3ab3b7cee9e1afeaeda34
+params:
+  quiet_segments_ms:
+  - - 230822.6
+    - 240723.8
+  - - 241645.8
+    - 244576.2
+  - - 352584.8
+    - 356664.0
+  - - 393497.5
+    - 398988.3
+  eye: both
+  n_bins: 40
+  detection_threshold_deg_per_frame: .nan
+  snr_definition: detection_threshold / (2 * B_med)
+block_label: T_18 / block_001
+block_path: /Volumes/Data/Nimrod/experiments/T_18/block_001
+metric: hypot(d_k_phi, d_k_theta) deg/frame
+noise_measure: Rayleigh B_med = median(D)/sqrt(2 ln 2)
+marker_2sigma: "2 * B_med (2 axis-\u03C3 radius on D)"

@@ -1,0 +1,24 @@
+kind: rayleigh_noise_core
+plot_id: rayleigh_noise_core
+git_hash: 30a8fe1009b8d48f70f3ab3b7cee9e1afeaeda34
+params:
+  quiet_segments_ms:
+  - - 270832.3
+    - 275651.2
+  - - 280781.3
+    - 294756.1
+  - - 306956.8
+    - 317794.8
+  - - 356120.4
+    - 360663.0
+  - - 366913.9
+    - 379949.3
+  eye: both
+  n_bins: 40
+  detection_threshold_deg_per_frame: 0.8
+  snr_definition: detection_threshold / (2 * B_med)
+block_label: PV_228 / 2026_06_15 / block_016
+block_path: /Volumes/Data/Nimrod/experiments/PV_228/2026_06_15/block_016
+metric: hypot(d_k_phi, d_k_theta) deg/frame
+noise_measure: Rayleigh B_med = median(D)/sqrt(2 ln 2)
+marker_2sigma: "2 * B_med (2 axis-\u03C3 radius on D)"

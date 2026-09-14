@@ -1,0 +1,6 @@
+kind: kerr_component_error
+plot_id: kerr_component_error
+git_hash: 30a8fe1009b8d48f70f3ab3b7cee9e1afeaeda34
+params:
+  source_csvs: cohort_component_error_per_block + across_animals
+n_animals: 5

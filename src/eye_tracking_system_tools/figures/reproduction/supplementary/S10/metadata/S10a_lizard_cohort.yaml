@@ -1,0 +1,7 @@
+cohort: rigid
+animals:
+- PV_228
+block_keys:
+- /Volumes/Data/Nimrod/experiments/PV_228/2026_06_15/block_016
+rule: quiet_window_export
+mount_type: rigid

@@ -1,0 +1,75 @@
+created_utc: '2026-09-08T10:06:50.647825+00:00'
+pickle: metadata/pos_vel_by_amp_bins_bundle.pkl
+entrypoint: eye_tracking_system_tools.analysis.figures_2c_2e.export_pos_vel_bundle
+git_hash: 30a8fe1009b8d48f70f3ab3b7cee9e1afeaeda34
+csv_choices:
+- animal: M_002
+  block_num: '012'
+  block_path: /Volumes/Data/Nimrod/experiments/M_002/2026_07_28/block_012
+  left_csv: /Volumes/Data/Nimrod/experiments/M_002/2026_07_28/block_012/analysis/left_eye_data_raw_verified.csv
+  left_rule: raw_verified
+  right_csv: /Volumes/Data/Nimrod/experiments/M_002/2026_07_28/block_012/analysis/right_eye_data_raw_verified.csv
+  right_rule: raw_verified
+- animal: M_002
+  block_num: '013'
+  block_path: /Volumes/Data/Nimrod/experiments/M_002/2026_07_28/block_013
+  left_csv: /Volumes/Data/Nimrod/experiments/M_002/2026_07_28/block_013/analysis/left_eye_data_raw_verified.csv
+  left_rule: raw_verified
+  right_csv: /Volumes/Data/Nimrod/experiments/M_002/2026_07_28/block_013/analysis/right_eye_data_raw_verified.csv
+  right_rule: raw_verified
+- animal: M_002
+  block_num: '014'
+  block_path: /Volumes/Data/Nimrod/experiments/M_002/2026_07_28/block_014
+  left_csv: /Volumes/Data/Nimrod/experiments/M_002/2026_07_28/block_014/analysis/left_eye_data_raw_verified.csv
+  left_rule: raw_verified
+  right_csv: /Volumes/Data/Nimrod/experiments/M_002/2026_07_28/block_014/analysis/right_eye_data_raw_verified.csv
+  right_rule: raw_verified
+- animal: M_002
+  block_num: '015'
+  block_path: /Volumes/Data/Nimrod/experiments/M_002/2026_07_28/block_015
+  left_csv: /Volumes/Data/Nimrod/experiments/M_002/2026_07_28/block_015/analysis/left_eye_data_raw_verified.csv
+  left_rule: raw_verified
+  right_csv: /Volumes/Data/Nimrod/experiments/M_002/2026_07_28/block_015/analysis/right_eye_data_raw_verified.csv
+  right_rule: raw_verified
+params:
+  amp_col: net_angular_disp
+  bin_width_deg: 5.0
+  min_amp_deg: 0.5
+  max_amp_pct: 99.5
+  t_window_ms:
+  - -100.0
+  - 100.0
+  dt_ms: 2.0
+  bandwidth_ms: 10.0
+  min_events_per_bin: 15
+  per_animal_max_bins: 8
+  plot_animals: null
+  eye_filter: null
+  subsample_peak: false
+  smoothing: true
+  plot_bins_as_scatter: false
+  min_bin_count: 3
+  normalize_velocity_to_peak: false
+  normalize_position_to_amp: false
+  normalize_final_curve: false
+  velocity_threshold: 50.0
+  legend_ncol: 2
+  bin_cmap: viridis
+  show_position: true
+  show_velocity: true
+  vel_ylim: null
+  pos_ylim: null
+  align_to: peak
+  position_calc: mov_axis
+  velocity_unit: deg/sec
+  framerate_hz: null
+  use_fixed_dt: false
+  isolation: nan_mask_neighbors
+  neighbor_pad_ms: 0.0
+  speed_threshold_deg_per_frame: 3.23
+  fig_size:
+  - 1.8
+  - 1.8
+  dpi: 300
+  lw: 1.0
+figure: 2c/2d

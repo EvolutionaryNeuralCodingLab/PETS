@@ -1,0 +1,24 @@
+block_label: M_002 / 2026_07_28 / block_012
+block_path: /Volumes/Data/Nimrod/experiments/M_002/2026_07_28/block_012
+animal: M_002
+eye: both
+mount_type: mouse
+quiet_segments_ms:
+- - 271849.4
+  - 279775.1
+- - 348573.8
+  - 364667.8
+- - 890690.2
+  - 909981.9
+- - 279871.1
+  - 270840.0
+n: 5204
+n_zero: 0
+median_D: 0.3052465091552875
+B_med: 0.25925251468740207
+floor_2B: 0.5185050293748041
+detection_threshold_deg_per_frame: 3.23
+snr_thr_over_2B: 6.229447771981354
+snr_definition: detection_threshold / (2 * B_med)
+marker_2sigma_note: "2*B_med is the 2 axis-\u03C3 noise marker on D (Rayleigh scale\
+  \ B)."

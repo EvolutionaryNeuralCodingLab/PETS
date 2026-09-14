@@ -1,0 +1,7 @@
+cohort: mouse
+animals:
+- M_002
+block_keys:
+- /Volumes/Data/Nimrod/experiments/M_002/2026_07_28/block_012
+rule: quiet_window_export
+mount_type: mouse

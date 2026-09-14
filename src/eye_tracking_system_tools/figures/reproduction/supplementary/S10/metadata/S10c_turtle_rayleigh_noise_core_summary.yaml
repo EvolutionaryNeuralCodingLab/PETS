@@ -1,0 +1,24 @@
+block_label: T_18 / block_001
+block_path: /Volumes/Data/Nimrod/experiments/T_18/block_001
+animal: T_18
+eye: both
+mount_type: turtle
+quiet_segments_ms:
+- - 230822.6
+  - 240723.8
+- - 241645.8
+  - 244576.2
+- - 352584.8
+  - 356664.0
+- - 393497.5
+  - 398988.3
+n: 2692
+n_zero: 0
+median_D: 0.16293139142221444
+B_med: 0.13838118268614708
+floor_2B: 0.27676236537229415
+detection_threshold_deg_per_frame: .nan
+snr_thr_over_2B: .nan
+snr_definition: detection_threshold / (2 * B_med)
+marker_2sigma_note: "2*B_med is the 2 axis-\u03C3 noise marker on D (Rayleigh scale\
+  \ B)."

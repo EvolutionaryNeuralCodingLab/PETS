@@ -1,0 +1,11 @@
+created_utc: '2026-09-08T11:25:41.650164+00:00'
+pickle: metadata/s8_2f_lizard_mouse_all.pkl
+entrypoint: eye_tracking_system_tools.analysis.figures_2f_2h_2i.rebin_s8j_payload
+git_hash: 30a8fe1009b8d48f70f3ab3b7cee9e1afeaeda34
+xmax_lizard: 1.0
+xmax_mouse: 1.25
+xmax_lizard_zoom: 0.2
+xmax_mouse_zoom: 0.4
+macro_pct: 99.5
+zoom_keep_pct: 50.0
+axis_mode: matched_percentile_plus_inner50

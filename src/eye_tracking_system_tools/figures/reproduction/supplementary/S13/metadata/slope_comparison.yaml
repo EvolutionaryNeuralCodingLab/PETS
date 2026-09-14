@@ -1,0 +1,33 @@
+amp_definition: onset_to_offset; length1_preonset_to_offset
+n_animals: 5
+concurrent_mean_slope: 0.022697547305288286
+concurrent_sem_slope: 0.0006845066575287068
+monocular_mean_slope: 0.025001325650131433
+monocular_sem_slope: 0.00036735283710561913
+paired_t: -3.3204483694316367
+paired_p: 0.029366232483391718
+df: 4
+slope_units: deg_per_ms_per_deg
+animals:
+- PV_106
+- PV_126
+- PV_143
+- PV_57
+- PV_62
+concurrent_slopes:
+- 0.024261377537687374
+- 0.024047246659568904
+- 0.021769088318207806
+- 0.020639309136973153
+- 0.022770714874004196
+monocular_slopes:
+- 0.024090336774625833
+- 0.02627065247800738
+- 0.025100577375275004
+- 0.02450483158658781
+- 0.025040230036161144
+n_events_all: 33294
+n_events_concurrent: 18960
+n_events_monocular: 14334
+n_length1: 11668
+n_length1_used_preonset: 11224

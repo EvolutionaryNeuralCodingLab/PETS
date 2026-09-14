@@ -1,0 +1,7 @@
+cohort: turtle
+animals:
+- T_18
+block_keys:
+- /Volumes/Data/Nimrod/experiments/T_18/block_001
+rule: quiet_window_export
+mount_type: turtle

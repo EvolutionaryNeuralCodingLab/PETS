@@ -1,0 +1,87 @@
+units: um
+n_bins: null
+bin_widths:
+  modular: 45.0
+  rigid: 50.5
+  mouse: 51.3284737549652
+  turtle: 40.0
+pixel_bin_k:
+  turtle: 1.0
+  lizard: 1.0
+  mouse: 4.0
+xmax: 379.0960956761859
+xmax_source: rigid
+xmax_percentile: 99.5
+block_keys:
+- PV_106_block_008
+- PV_106_block_009
+- PV_106_block_010
+- PV_106_block_012
+- PV_106_block_013
+- PV_106_block_014
+- PV_106_block_015
+- PV_106_block_016
+- PV_126_block_007
+- PV_126_block_008
+- PV_126_block_009
+- PV_126_block_011
+- PV_126_block_012
+- PV_126_block_013
+- PV_126_block_015
+- PV_143_block_001
+- PV_143_block_002
+- PV_143_block_003
+- PV_143_block_004
+- PV_24_block_012
+- PV_24_block_013
+- PV_24_block_034
+- PV_62_block_024
+- PV_62_block_025
+- PV_62_block_026
+- PV_62_block_027
+- M_002_block_012
+- M_002_block_013
+- M_002_block_014
+- M_002_block_015
+- PV_228_block_005
+- PV_228_block_013
+- PV_228_block_016
+- PV_228_block_017
+- T_18_block_001
+mounts:
+  rigid:
+    label: rigid lizard
+    n_samples: 1473783
+    mean: 55.285836416279075
+    median: 41.6053769016472
+    p95: 173.37884560739616
+    p99_5: 379.0960956761859
+    bin_width: 50.5
+    pixel_bin_k: 1.0
+  modular:
+    label: modular lizard
+    n_samples: 1028057
+    mean: 93.32276376561553
+    median: 90.0
+    p95: 211.3772852696525
+    p99_5: 315.0
+    bin_width: 45.0
+    pixel_bin_k: 1.0
+  mouse:
+    label: modular mouse
+    n_samples: 606045
+    mean: 37.89728437166942
+    median: 27.539746159067423
+    p95: 89.91693264478074
+    p99_5: 104.7903880801703
+    bin_width: 51.3284737549652
+    pixel_bin_k: 4.0
+  turtle:
+    label: modular turtle
+    n_samples: 62350
+    mean: 78.3658455514902
+    median: 80.0
+    p95: 178.88543819998318
+    p99_5: 178.88543819998318
+    bin_width: 40.0
+    pixel_bin_k: 1.0

@@ -1,0 +1,4 @@
+species,panel,animal,mount_type,block_label,n,n_positive,median_D,B_med,ks_statistic,ks_p,ks_p_lilliefors,d_crit_05_lilliefors,n_sim,scale_estimator,null
+lizard,S10a,PV_228,rigid,PV_228 / 2026_06_15 / block_016,5640,5638,0.11349474000306875,0.096393556902627,0.05700351701982853,2.2959937209149946e-16,0.0,0.015459539330295886,1000,B_med = median(D)/sqrt(2 ln 2),"Rayleigh(loc=0, scale=B_med)"
+mouse,S10b,M_002,mouse,M_002 / 2026_07_28 / block_012,5204,5204,0.3052465091552875,0.25925251468740207,0.0714475431959758,1.516618760117098e-23,0.0,0.01593344638964448,1000,B_med = median(D)/sqrt(2 ln 2),"Rayleigh(loc=0, scale=B_med)"
+turtle,S10c,T_18,turtle,T_18 / block_001,2692,2692,0.16293139142221444,0.13838118268614708,0.10605912588129285,8.025224482117993e-27,0.0,0.021942421111555397,1000,B_med = median(D)/sqrt(2 ln 2),"Rayleigh(loc=0, scale=B_med)"

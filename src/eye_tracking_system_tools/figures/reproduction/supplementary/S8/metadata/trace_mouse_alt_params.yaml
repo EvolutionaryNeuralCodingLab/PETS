@@ -1,0 +1,6 @@
+kind: species_trace
+plot_id: trace_mouse
+git_hash: df31e9b3f7bee34ae28d4d19e0bccf7ebb8a67d5
+params: {}
+species: mouse
+block_path: /Volumes/Data/Nimrod/experiments/M_002/2026_07_28/block_012

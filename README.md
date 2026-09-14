@@ -205,53 +205,63 @@ python scripts/validate_preprocessing_gui_load.py `
   --experiment-path D:\sample_data_for_eye_repo --animal PV_106 --block 015
 ```
 
-See `development/PREPROCESSING_GUI_ACCEPTANCE.md` for scope and known gaps.
+## Analysis GUIs
+
+Same conda env. These tools browse already-preprocessed blocks; they are not required to replot the paper figures.
+
+```bash
+python -m eye_tracking_system_tools.analysis.paper_gui
+python -m eye_tracking_system_tools.analysis.jitter_gui
+python -m eye_tracking_system_tools.analysis.span_gui
+python -m eye_tracking_system_tools.analysis.data_yield_gui
+python -m eye_tracking_system_tools.analysis.param_tune_gui --registry configs/mouse_M_002_blocks.yaml --params configs/analysis_params_mouse.yaml
+python -m eye_tracking_system_tools.analysis.saccade_viewer
+```
 
 ## Project Structure
 
 ```
 src/eye_tracking_system_tools/
-├── annotation/          # Block Annotator + Event Explorer GUIs
-├── preprocessing/       # Data synchronization and preprocessing
-│   ├── block_synchronization.ipynb
-│   ├── data_verification.ipynb
-│   ├── kerr_degree_conversion.ipynb
-│   ├── add_accelerometer_state_annotations.ipynb
-│   ├── lfp_led_validation.ipynb   # LED-based LFP alignment verification
-│   ├── BlockSync_class.py
-│   ├── OERecording.py             # Open Ephys continuous data access (standalone)
-│   └── ...
-├── analysis_pipelines/   # Downstream analysis (electrophysiology under development)
-│   ├── saccade_collection_pipeline.ipynb
-│   └── saccade_lfp_average_pipeline.ipynb
-├── figures/             # Figure reproduction scripts
-├── raspberry_pi/        # Raspberry Pi video capture utilities
-└── utils/               # General utilities
-    ├── 3D_printing_files/  # 3D printing files and virtual fitting guide
+├── annotation/          # Block Annotator, Event Explorer, Preprocessing GUI
+├── preprocessing/       # Sync / Kerr notebooks + BlockSync / OERecording
+├── analysis/            # Event tables, figure exporters, analysis GUIs
+├── figures/reproduction/
+│   ├── main_figures/    # Fig 1–3: one folder per panel (script + pickle)
+│   ├── supplementary/   # S1, S3, S8–S13: figure_S*.py + pickle + metadata
+│   └── video_creation/
+├── raspberry_pi/
+└── utils/
+    ├── 3D_printing_files/
     └── meshroom_pipeline_template.mg
 ```
 
-## Electrophysiology (under development)
+## Electrophysiology
 
-Open Ephys integration and LFP-related workflows are **still under development**. The following are available on feature branches but APIs and pipelines may change:
+`OERecording` in `preprocessing/OERecording.py` reads Open Ephys `.continuous` files and events without MATLAB (`get_data(..., convert_microvolts=True)` returns µV). Saccade-triggered LFP averaging is not in this branch.
 
-- **Standalone Open Ephys access**: `OERecording` in `preprocessing/OERecording.py` reads `.continuous` and events without MATLAB; `get_data(..., convert_microvolts=True)` returns data in µV.
-- **LED-based LFP verification**: `preprocessing/lfp_led_validation.ipynb` checks temporal alignment of LFP to LED events.
-- **Analysis pipelines**: `analysis_pipelines/saccade_collection_pipeline.ipynb` and `saccade_lfp_average_pipeline.ipynb` for saccade collection and saccade-triggered LFP averages.
-
-See `src/eye_tracking_system_tools/preprocessing/README.md` for preprocessing details and `src/eye_tracking_system_tools/analysis_pipelines/` for pipeline notebooks.
+See `src/eye_tracking_system_tools/preprocessing/README.md` for preprocessing details.
 
 ## Usage
 
 ### Figure Reproduction
 
-The figure reproduction scripts are straightforward to use. Each script in `src/eye_tracking_system_tools/figures/reproduction/main_figures/` can be run directly to reproduce the corresponding paper figure.
+Each main-text and supplementary folder is self-contained: a Python script plus the pickle/metadata used to draw it. Scripts do not open recording blocks or Jupyter notebooks.
 
-**Example:**
+**Main text (example):**
 ```bash
 cd src/eye_tracking_system_tools/figures/reproduction/main_figures/Fig_1_e
 python figure_1e.py
 ```
+
+**Supplementary (example):**
+```bash
+cd src/eye_tracking_system_tools/figures/reproduction/supplementary/S3
+python figure_S3.py
+```
+
+See `src/eye_tracking_system_tools/figures/reproduction/supplementary/README.md` for the S1–S13 map. S2 and S4–S7 are not yet frozen as pickle bundles.
+
+Raw videos and Open Ephys recordings are not in this repository. Generated run trees stay in a local `outputs/` folder (gitignored).
 
 ### Data Preprocessing and Synchronization
 

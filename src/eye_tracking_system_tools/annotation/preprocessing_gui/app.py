@@ -442,7 +442,7 @@ class PreprocessingGuiWindow(QtWidgets.QMainWindow):
             "About",
             "PETS Preprocessing GUI\n\n"
             "Wraps the preprocessing notebooks in a single PyQt6 dashboard.\n"
-            "See development/plans/PREPROCESSING_GUI_AGENT_PLAN.md for the implementation plan.",
+            "Open Ephys / LFP averaging tools are not part of this preprocessing GUI.",
         )
 
     def _show_help_guide(self) -> None:

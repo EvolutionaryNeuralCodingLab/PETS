@@ -1,0 +1,9 @@
+cohort: mouse
+animals:
+- M_002
+block_keys:
+- M_002_block_012
+- M_002_block_013
+- M_002_block_014
+- M_002_block_015
+rule: animal_ids

@@ -1,0 +1,18 @@
+kind: unified_jitter
+plot_id: unified jitter quantification across animals
+git_hash: 30a8fe1009b8d48f70f3ab3b7cee9e1afeaeda34
+params: {}
+units: um
+n_bins: null
+bin_widths:
+  modular: 45.0
+  rigid: 50.5
+  mouse: 51.3284737549652
+  turtle: 40.0
+pixel_bin_k:
+  turtle: 1.0
+  lizard: 1.0
+  mouse: 4.0
+xmax: 379.0960956761859
+xmax_source: rigid
+xmax_percentile: 99.5

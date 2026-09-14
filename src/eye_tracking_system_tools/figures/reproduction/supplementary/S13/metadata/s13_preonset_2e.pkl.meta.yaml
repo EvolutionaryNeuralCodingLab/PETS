@@ -1,0 +1,7 @@
+created_utc: '2026-09-06T12:39:02.326643+00:00'
+pickle: metadata/s13_preonset_2e.pkl
+entrypoint: eye_tracking_system_tools.analysis.diagnostics_2e.export_s13_preonset_main_sequence
+git_hash: 30a8fe1009b8d48f70f3ab3b7cee9e1afeaeda34
+amp_col: amp_s13
+paired_p: 0.029366232483391718
+n_length1: 11668

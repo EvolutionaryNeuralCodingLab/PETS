@@ -1,0 +1,34 @@
+snr_definition: detection_threshold / median(D)
+noise_marker: median(D)
+rayleigh_scale: B = median(D)/sqrt(2 ln 2)
+panels:
+- species: lizard
+  panel: S10a_lizard
+  block_label: PV_228 / 2026_06_15 / block_016
+  animal: PV_228
+  n: 5640
+  median_D: 0.11349474000306875
+  B_med: 0.096393556902627
+  threshold: 0.8
+  snr_thr_over_median: 7.048784815740087
+  ks_statistic: 0.0570035170198285
+- species: mouse
+  panel: S10b_mouse
+  block_label: M_002 / 2026_07_28 / block_012
+  animal: M_002
+  n: 5204
+  median_D: 0.3052465091552875
+  B_med: 0.25925251468740207
+  threshold: 3.23
+  snr_thr_over_median: 10.581611592998785
+  ks_statistic: 0.0714475431959758
+- species: turtle
+  panel: S10c_turtle
+  block_label: T_18 / block_001
+  animal: T_18
+  n: 2692
+  median_D: 0.16293139142221444
+  B_med: 0.13838118268614708
+  threshold: 2.0
+  snr_thr_over_median: 12.275105383573834
+  ks_statistic: 0.1060591258812928

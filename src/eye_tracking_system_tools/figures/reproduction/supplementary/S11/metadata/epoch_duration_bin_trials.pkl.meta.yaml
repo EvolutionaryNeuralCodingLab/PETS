@@ -1,0 +1,9 @@
+created_utc: '2026-08-31T11:49:00.440963+00:00'
+pickle: metadata/epoch_duration_bin_trials.pkl
+entrypoint: eye_tracking_system_tools.analysis.figures_3d_isi.export_epoch_duration_bin_trials
+git_hash: 30a8fe1009b8d48f70f3ab3b7cee9e1afeaeda34
+n_active: 174
+n_quiet: 191
+zoom_xmax_s: 70.0
+n_trials: 6
+plot_id: epoch_duration_bin_trials

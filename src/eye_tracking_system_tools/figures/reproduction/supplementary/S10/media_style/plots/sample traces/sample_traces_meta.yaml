@@ -1,0 +1,52 @@
+duration_s: 2.0
+figsize_in:
+- 3.2
+- 2.0
+style: "S8 \u03C6/\u03B8 L+R recentred; 3.2x2.0; lizard=quiet window matching noise-core\
+  \ median D; turtle=flat; mouse=first segment"
+panels:
+- species: lizard
+  animal: PV_228
+  block: '016'
+  block_path: /Volumes/Data/Nimrod/experiments/PV_228/2026_06_15/block_016
+  window_start_s: 314.35680000000167
+  window_end_s: 316.35680000000167
+  duration_s: 2.0
+  n_samples: 120
+  start_end_drift_score_deg: 0.25040975140049304
+  figsize_in:
+  - 3.2
+  - 2.0
+  pdf: S10a_lizard_quiet_trace.pdf
+  selection: quiet_representative_median_D
+  window_median_D: 0.09364615843822616
+  window_p95_D: 0.27535784412229336
+  window_max_D: 0.4067923229735394
+- species: mouse
+  animal: M_002
+  block: '012'
+  block_path: /Volumes/Data/Nimrod/experiments/M_002/2026_07_28/block_012
+  window_start_s: 271.8494
+  window_end_s: 273.8494
+  duration_s: 2.0
+  n_samples: 120
+  start_end_drift_score_deg: 0.8355919066286037
+  figsize_in:
+  - 3.2
+  - 2.0
+  pdf: S10b_mouse_quiet_trace.pdf
+  selection: first_listed_quiet_segment
+- species: turtle
+  animal: T_18
+  block: '001'
+  block_path: /Volumes/Data/Nimrod/experiments/T_18/block_001
+  window_start_s: 237.52260000000152
+  window_end_s: 239.52260000000152
+  duration_s: 2.0
+  n_samples: 120
+  start_end_drift_score_deg: 0.1777697803516598
+  figsize_in:
+  - 3.2
+  - 2.0
+  pdf: S10c_turtle_quiet_trace.pdf
+  selection: auto_flat_quiet

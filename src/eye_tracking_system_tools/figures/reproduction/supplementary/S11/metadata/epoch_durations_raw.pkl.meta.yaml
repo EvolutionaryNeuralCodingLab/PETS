@@ -1,0 +1,13 @@
+created_utc: '2026-08-17T12:51:07.793188+00:00'
+pickle: metadata/epoch_durations.pkl
+entrypoint: eye_tracking_system_tools.analysis.figures_3d_isi.export_epoch_durations
+git_hash: df31e9b3f7bee34ae28d4d19e0bccf7ebb8a67d5
+n_active: 492
+n_quiet: 512
+scales:
+- log
+- linear
+n_bins: 30
+smooth_state: false
+min_duration_s: 0.0
+plot_id: epoch_durations_raw

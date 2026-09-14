@@ -1,8 +1,0 @@
-created_utc: '2026-09-05T15:01:38.595329+00:00'
-pickle: metadata/secondary_after_saccade.pkl
-entrypoint: eye_tracking_system_tools.analysis.secondary_after_saccade.export_secondary_after_saccade
-git_hash: 30a8fe1009b8d48f70f3ab3b7cee9e1afeaeda34
-n_qualifying: 1903
-amp_threshold_deg: 5.5
-pct_with_secondary: 59.012086179716235
-pct_first_reverse: 35.943247503941144

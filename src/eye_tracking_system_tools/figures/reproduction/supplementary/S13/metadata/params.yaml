@@ -1,0 +1,6 @@
+kind: s13_preonset_2e
+plot_id: s13_preonset_2e
+git_hash: 30a8fe1009b8d48f70f3ab3b7cee9e1afeaeda34
+params:
+  amp_col: amp_s13
+  amp_definition: onset_to_offset; length1_preonset_to_offset

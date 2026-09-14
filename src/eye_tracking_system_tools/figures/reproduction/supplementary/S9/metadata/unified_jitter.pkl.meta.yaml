@@ -1,0 +1,17 @@
+created_utc: '2026-08-27T12:10:06.732879+00:00'
+pickle: metadata/unified_jitter.pkl
+entrypoint: eye_tracking_system_tools.analysis.jitter_epochs.export_unified_jitter
+git_hash: 30a8fe1009b8d48f70f3ab3b7cee9e1afeaeda34
+xmax: 379.0960956761859
+xmax_source: rigid
+n_bins: null
+bin_widths:
+  modular: 45.0
+  rigid: 50.5
+  mouse: 51.3284737549652
+  turtle: 40.0
+pixel_bin_k:
+  turtle: 1.0
+  lizard: 1.0
+  mouse: 4.0
+n_blocks: 35

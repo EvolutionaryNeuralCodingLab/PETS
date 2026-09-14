@@ -32,15 +32,14 @@ Reproduction PDF baseline (copy into run ``figures/repro_baseline/``)::
     PYTHONPATH=src python -m eye_tracking_system_tools.analysis.repro_baseline \\
         --out-root outputs --tag paper_events
 
-Flexible per-figure paper tool (block checklist before each panel, params
-overrides, dated export): ``development/flexible_paper_figures_tool.ipynb``.
+Flexible per-figure paper tool: ``python -m eye_tracking_system_tools.analysis.paper_gui``.
 Catalog / GUI / export live in ``figure_catalog.py``, ``paper_gui.py``,
 ``paper_export.py``. Covers Fig 2c–2j, 1e (from a finalized jitter export),
-and Fig 3a–3f. The all-at-once driver remains ``analysis_figure_suite.ipynb``.
+and Fig 3a–3f. Published PDFs are redrawn from
+``figures/reproduction/`` pickle folders, not from this CLI.
 
 Velocity / threshold tool — minimal **desktop Tk window**: both-eye speed
-traces + draggable threshold (deg or px). Notebook:
-``development/parameter_visualization_tool.ipynb``, or CLI::
+traces + draggable threshold (deg or px)::
 
     MPLCONFIGDIR=.mplconfig PYTHONPATH=src python -m eye_tracking_system_tools.analysis.param_tune_gui \
         --registry configs/mouse_M_002_blocks.yaml \
@@ -50,15 +49,18 @@ Drag the dashed line (or use the spinbox). **Auto-zoom** / **Full span** for
 view. **Save thr → YAML** writes ``speed_threshold_deg_per_frame`` in degrees mode.
 
 Jitter mounts — full interactive pipeline (browse blocks → tag modular/rigid/mouse
-→ calibrate pixel size → pick epochs → histograms):
-``development/jitter_mount_pipeline.ipynb``.
+→ calibrate pixel size → pick epochs → histograms)::
+
+    python -m eye_tracking_system_tools.analysis.jitter_gui
+
 The widgets live in ``jitter_gui.py``; ``jitter_epochs.py`` stays headless.
 
-Eye-movement span (tool 1) — browse blocks with eye CSVs → full-range + p5–p95
-spans in degrees and pixels:
-``development/eye_span_pipeline.ipynb``
-(``JitterBlockBrowser(require="eye")`` + ``span_gui.SpanCharacteristicsPanel``;
-headless: ``python -m eye_tracking_system_tools.analysis.eye_movement_span``).
+Eye-movement span — browse blocks with eye CSVs → full-range + p5–p95
+spans in degrees and pixels::
+
+    python -m eye_tracking_system_tools.analysis.span_gui
+
+Headless: ``python -m eye_tracking_system_tools.analysis.eye_movement_span``.
 
 Jitter from the CLI (registry must already list blocks)::
 
@@ -80,13 +82,8 @@ Jitter from the CLI (registry must already list blocks)::
         --plot --include PV_143_block_001 PV_24_block_012
 
 Whichever blocks end up pooled are listed with their per-block stats under
-``blocks_used`` in ``metadata/jitter_pool_summary.yaml``; in the notebook the same
-choice is a checkbox list (``jitter_gui.JitterPoolSelector``).
-
-Section 7 of the jitter notebook maps pupil travel for those same blocks via
-``eye_movement_span.py`` (p5–p95 hypot of ``center_x``/``center_y`` in px and µm,
-plus Kerr degrees when present) and reports lizard/mouse ``jitter_p95 / eye_span``
-ratios into ``metadata/eye_movement_spans.csv``.
+``blocks_used`` in ``metadata/jitter_pool_summary.yaml``. The same choice is a
+checkbox list (``jitter_gui.JitterPoolSelector``).
 
 Finalizing a comparison (``jitter_export.py``) freezes the current selection into
 ``outputs/jitter_comparison_figures_<tag>_<YYYYmmdd>_<HH>_<MM>/`` holding the PDFs,
@@ -115,7 +112,7 @@ Jitter *correction* itself (video cross-correlation, ``correct_jitter``) belongs
 the preprocessing GUI; this package only reads the resulting
 ``analysis/jitter_report_dict.pkl`` and quantifies residual camera movement.
 
-Editable figure walkthrough: ``development/analysis_figure_suite.ipynb``.
+Paper figure walkthrough: ``python -m eye_tracking_system_tools.analysis.paper_gui``.
 
 Per-block saccade finalize (preprocessing GUI **Saccades** tab)
 ----------------------------------------------------------------
@@ -136,13 +133,13 @@ After Kerr angles exist, use the preprocessing GUI:
 
 ``pipeline.build_event_tables(..., prefer_finalized=True)`` (default) loads those
 files when present instead of re-detecting. Compile across a registry with
-``development/compile_block_saccades.ipynb``; the flexible paper tool exposes
-``USE_FINALIZED_SACCADES`` (default True). Helpers live in ``saccade_export.py``.
+``python -m eye_tracking_system_tools.analysis``; the paper GUI uses
+finalized saccades by default. Helpers live in ``saccade_export.py``.
 
-Mouse / pogona supplementary: point ``flexible_paper_figures_tool.ipynb`` at
-``configs/mouse_M_002_blocks.yaml`` + ``configs/analysis_params_mouse.yaml``
-(data under ``/Volumes/Data/Nimrod/experiments``). Mouse blocks have no
-behavior-state files, so Fig 3c/3e/3f correctly show as ineligible.
+Mouse / pogona supplementary: point the paper GUI at
+``configs/mouse_M_002_blocks.yaml`` + ``configs/analysis_params_mouse.yaml``.
+Mouse blocks have no behavior-state files, so Fig 3c/3e/3f correctly show as
+ineligible.
 
 Eye CSV selection prefers ``*raw_verified*`` (else newest) and always logs /
 records the chosen left/right paths in ``*.meta.yaml`` sidecars.

@@ -1,0 +1,22 @@
+kind: rayleigh_noise_core
+plot_id: rayleigh_noise_core_mouse
+git_hash: 30a8fe1009b8d48f70f3ab3b7cee9e1afeaeda34
+params:
+  quiet_segments_ms:
+  - - 271849.4
+    - 279775.1
+  - - 348573.8
+    - 364667.8
+  - - 890690.2
+    - 909981.9
+  - - 279871.1
+    - 270840.0
+  eye: both
+  n_bins: 40
+  detection_threshold_deg_per_frame: 3.23
+  snr_definition: detection_threshold / (2 * B_med)
+block_label: M_002 / 2026_07_28 / block_012
+block_path: /Volumes/Data/Nimrod/experiments/M_002/2026_07_28/block_012
+metric: hypot(d_k_phi, d_k_theta) deg/frame
+noise_measure: Rayleigh B_med = median(D)/sqrt(2 ln 2)
+marker_2sigma: "2 * B_med (2 axis-\u03C3 radius on D)"

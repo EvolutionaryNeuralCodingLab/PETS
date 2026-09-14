@@ -1,0 +1,64 @@
+created_utc: '2026-09-08T18:01:35.816900+00:00'
+pickle: metadata/amplitude_velocity_linear_fit_bundle.pkl
+entrypoint: eye_tracking_system_tools.analysis.figures_2c_2e.export_amplitude_velocity_fit
+git_hash: 30a8fe1009b8d48f70f3ab3b7cee9e1afeaeda34
+csv_choices:
+- animal: M_002
+  block_num: '012'
+  block_path: /Volumes/Data/Nimrod/experiments/M_002/2026_07_28/block_012
+  left_csv: /Volumes/Data/Nimrod/experiments/M_002/2026_07_28/block_012/analysis/left_eye_data_raw_verified.csv
+  left_rule: raw_verified
+  right_csv: /Volumes/Data/Nimrod/experiments/M_002/2026_07_28/block_012/analysis/right_eye_data_raw_verified.csv
+  right_rule: raw_verified
+- animal: M_002
+  block_num: '013'
+  block_path: /Volumes/Data/Nimrod/experiments/M_002/2026_07_28/block_013
+  left_csv: /Volumes/Data/Nimrod/experiments/M_002/2026_07_28/block_013/analysis/left_eye_data_raw_verified.csv
+  left_rule: raw_verified
+  right_csv: /Volumes/Data/Nimrod/experiments/M_002/2026_07_28/block_013/analysis/right_eye_data_raw_verified.csv
+  right_rule: raw_verified
+- animal: M_002
+  block_num: '014'
+  block_path: /Volumes/Data/Nimrod/experiments/M_002/2026_07_28/block_014
+  left_csv: /Volumes/Data/Nimrod/experiments/M_002/2026_07_28/block_014/analysis/left_eye_data_raw_verified.csv
+  left_rule: raw_verified
+  right_csv: /Volumes/Data/Nimrod/experiments/M_002/2026_07_28/block_014/analysis/right_eye_data_raw_verified.csv
+  right_rule: raw_verified
+- animal: M_002
+  block_num: '015'
+  block_path: /Volumes/Data/Nimrod/experiments/M_002/2026_07_28/block_015
+  left_csv: /Volumes/Data/Nimrod/experiments/M_002/2026_07_28/block_015/analysis/left_eye_data_raw_verified.csv
+  left_rule: raw_verified
+  right_csv: /Volumes/Data/Nimrod/experiments/M_002/2026_07_28/block_015/analysis/right_eye_data_raw_verified.csv
+  right_rule: raw_verified
+params:
+  amp_col: amp_s13
+  amp_definition: onset_to_offset; length1_preonset_to_offset
+  bin_width_deg: 5.0
+  min_amp_deg: 0.5
+  max_amp_pct: 99.5
+  min_events_per_bin: 10
+  frame_rate_fps: 60.0
+  figsize:
+  - 1.5
+  - 1.7
+  dpi: 300
+  lw: 1.0
+  density_nbins: 200
+  density_cmap: turbo
+  density_figsize:
+  - 3.8
+  - 3.2
+  scatter_animal: M_002
+  speed_threshold_deg_per_frame: 3.23
+figure: 2e
+amp_definition: onset_to_offset; length1_preonset_to_offset
+n: 17202
+n_concurrent: 10343
+n_monocular: 6859
+n_pooled: 17202
+pooled_cohort: all
+slope: 0.03234849622269229
+pearson_r: 0.7317239672467067
+R2: 0.5354199642432595
+density_method: gaussian_kde

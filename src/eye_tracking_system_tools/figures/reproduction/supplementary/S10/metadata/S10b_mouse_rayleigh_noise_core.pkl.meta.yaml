@@ -1,0 +1,18 @@
+created_utc: '2026-09-07T16:17:37.600735+00:00'
+pickle: metadata/rayleigh_noise_core.pkl
+entrypoint: eye_tracking_system_tools.analysis.rayleigh_noise_core_export.export_rayleigh_noise_core_window
+git_hash: 30a8fe1009b8d48f70f3ab3b7cee9e1afeaeda34
+n: 5204
+quiet_segments_ms:
+- - 271849.4
+  - 279775.1
+- - 348573.8
+  - 364667.8
+- - 890690.2
+  - 909981.9
+- - 279871.1
+  - 270840.0
+B_med: 0.25925251468740207
+floor_2B: 0.5185050293748041
+snr_thr_over_2B: 6.229447771981354
+threshold: 3.23

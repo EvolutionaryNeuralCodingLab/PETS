@@ -1,0 +1,5 @@
+mount_type,label,n_samples,median_um,p95_um,units
+rigid,rigid lizard,1473783,41.6053769016472,173.37884560739616,um
+modular,modular lizard,1028057,90.0,211.3772852696525,um
+mouse,modular mouse,606045,27.539746159067423,89.91693264478074,um
+turtle,modular turtle,62350,80.0,178.88543819998318,um

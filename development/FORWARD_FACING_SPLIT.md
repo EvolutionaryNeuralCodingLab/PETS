@@ -60,7 +60,7 @@ Canonical source copied into the public tree:
 | Figure | Public status | Notes |
 |---|---|---|
 | S1b, S1c | Shipped | `kerr_component_error.pkl` + `figure_S1.py` |
-| S1a | PDF shipped, **not replottable** | Static Blender crop from Document S2; no pickle |
+| S1a | Shipped | `development/s1a_kerr_simulation/figure_S1a.py` from the 8 mm / 13 mm ellipse CSV |
 | S2 | **Missing** | No plot-bundle in the agg pack |
 | S3 | Shipped | `figure_S3.pickle` + `figure_S3.py` |
 | S4–S7 | **Missing** | No plot-bundles in the agg pack |
@@ -80,8 +80,7 @@ Canonical source copied into the public tree:
 ## Finalization still required (before the paper plot bundle is complete)
 
 1. Identify S2 and S4–S7 (manuscript vs video vs table vs figure) and freeze pickle+script folders if they are plots.
-2. Replace S1a with a pickle-backed Blender/occupancy export, or document it as a static illustration.
-3. Freeze S12b example traces into a pickle, or document the example as a static PDF.
-4. Decide whether R3-4 `s1_occupancy` belongs in the public S1 folder.
-5. Optional: license file; saccade-LFP GUI once it matches Preprocessing GUI quality.
-6. Optional: drop undocumented analysis GUIs (`eye_size_gui`, DLC validation) from `src/` or promote them.
+2. Freeze S12b example traces into a pickle, or document the example as a static PDF.
+3. Decide whether R3-4 `s1_occupancy` belongs in the public S1 folder.
+4. Optional: license file; saccade-LFP GUI once it matches Preprocessing GUI quality.
+5. Optional: drop undocumented analysis GUIs (`eye_size_gui`, DLC validation) from `src/` or promote them.

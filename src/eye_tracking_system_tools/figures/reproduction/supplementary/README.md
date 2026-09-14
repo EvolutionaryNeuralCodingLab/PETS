@@ -14,7 +14,7 @@ PDFs are written into `plots/` (`--overwrite` is the default for `figure_S*.py`)
 
 | Folder | Script | Regenerates from pickle | Static (shipped, not replotted) |
 |---|---|---|---|
-| S1 | `figure_S1.py` | S1b, S1c Kerr bars | S1a Blender crop |
+| S1 | `figure_S1.py` / `figure_S1a.py` | S1a simulation curve, S1b/S1c Kerr bars | — |
 | S3 | `figure_S3.py` | S3a–c | — |
 | S8 | `figure_S8.py` | traces, mouse 2c/2d/2e, S8j | S8a/c/e eye stills |
 | S9 | `figure_S9.py` | S9a unified jitter | — |

@@ -4,7 +4,8 @@ Figure S1. Angular reconstruction validation.
 monotonously spanning (−60, −60) to (60, 60) degrees (1° step) was compared with ground truth.
 Mean total error sqrt((φ − X)² + (θ − Y)²) versus eccentricity (bottom) and ellipse ratio
 (minor/major; top). Dashed line: P. vitticeps extended span (±35° Euclidean; max radial 50°).
-This panel is the published Document S2 plot (page 1 cropped to the axes; not a Kerr heatmap).
+This panel is redrawn from `metadata/ellipse_angle_mapping_correct_diameter_08mm_distance_13mm.csv`
+(`python figure_S1a.py`).
 
 **(b)** Relative rest-centered reprojection error, per animal. Raw and Kerr-corrected
 estimates were independently zeroed to rest; residual |Δ| on the measurements used in the study.

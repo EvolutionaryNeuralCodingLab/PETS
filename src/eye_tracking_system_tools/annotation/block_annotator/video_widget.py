@@ -20,13 +20,23 @@ MAX_SEQUENTIAL_ADVANCE = 8
 class VideoReader:
     """OpenCV video reader with LRU cache and sequential read() when possible."""
 
-    def __init__(self, path: Path | str | None):
+    def __init__(
+        self,
+        path: Path | str | None,
+        *,
+        max_sequential_advance: int | None = None,
+    ):
         self.path = Path(path) if path else None
         self._cap: cv2.VideoCapture | None = None
         self._nframes = 0
         self._cache: OrderedDict[int, np.ndarray] = OrderedDict()
         # Index of the frame the next read() would return; None if unknown.
         self._next_frame: int | None = None
+        self._max_sequential_advance = (
+            MAX_SEQUENTIAL_ADVANCE
+            if max_sequential_advance is None
+            else max(0, int(max_sequential_advance))
+        )
         if self.path and self.path.exists():
             self._cap = cv2.VideoCapture(str(self.path))
             self._nframes = int(self._cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -103,7 +113,7 @@ class VideoReader:
 
         if self._next_frame is not None and frame_idx >= self._next_frame:
             advance = frame_idx - self._next_frame
-            if advance <= MAX_SEQUENTIAL_ADVANCE:
+            if advance <= self._max_sequential_advance:
                 return self._read_sequential_to(frame_idx)
 
         return self._seek_and_read(frame_idx)
@@ -149,23 +159,78 @@ def draw_ellipse_overlay(
     df: pd.DataFrame | None,
     frame_col: str,
     frame_idx: int,
+    *,
+    color: tuple[int, int, int] = (0, 255, 0),
+    column_suffix: str = "",
+    phi_unit: str = "radians",
+    thickness: int = 2,
 ) -> np.ndarray:
+    """Draw one ellipse from an eye table onto ``frame``.
+
+    Table ``phi`` is stored in radians (``LsqEllipse.as_parameters`` and
+    ``project_circle``). OpenCV wants degrees, so the default converts.
+    ``column_suffix="refined"`` reads ``center_x_refined`` etc. and draws
+    nothing if those columns are missing or NaN (no fallback to original).
+    """
     if df is None or frame_col not in df.columns:
         return frame
     mask = df[frame_col] == frame_idx
     if not mask.any():
         return frame
     row = df.loc[mask].iloc[0]
-    cx, cy = row.get("center_x"), row.get("center_y")
-    if pd.isna(cx) or pd.isna(cy):
+    suffix = f"_{column_suffix}" if column_suffix else ""
+
+    def _col(base: str):
+        key = f"{base}{suffix}"
+        if suffix and key not in row.index:
+            return None
+        return row.get(key) if suffix else row.get(base)
+
+    cx, cy = _col("center_x"), _col("center_y")
+    w_raw, h_raw, phi_raw = _col("width"), _col("height"), _col("phi")
+    if any(v is None or pd.isna(v) for v in (cx, cy, w_raw, h_raw, phi_raw)):
         return frame
     out = frame.copy()
     x = int(round(float(cx)))
     y = int(round(float(cy)))
-    w = max(int(row.get("width", 1) or 1), 1)
-    h = max(int(row.get("height", 1) or 1), 1)
-    phi = float(row.get("phi", 0.0))
-    cv2.ellipse(out, (x, y), (w, h), phi, 0, 360, (0, 255, 0), 2)
+    w = max(int(w_raw), 1)
+    h = max(int(h_raw), 1)
+    phi = float(phi_raw)
+    unit = str(phi_unit).strip().lower()
+    if unit == "radians":
+        phi = float(np.degrees(phi))
+    cv2.ellipse(out, (x, y), (w, h), phi, 0, 360, tuple(int(c) for c in color), int(thickness))
+    return out
+
+
+def draw_gaze_line(
+    frame: np.ndarray,
+    df: pd.DataFrame | None,
+    frame_col: str,
+    frame_idx: int,
+    *,
+    color: tuple[int, int, int] = (0, 200, 255),
+    length: int = 40,
+) -> np.ndarray:
+    """Draw a short line from the ellipse centre along ``(c_nx, c_ny)``."""
+    if df is None or frame_col not in df.columns:
+        return frame
+    if "c_nx" not in df.columns or "c_ny" not in df.columns:
+        return frame
+    mask = df[frame_col] == frame_idx
+    if not mask.any():
+        return frame
+    row = df.loc[mask].iloc[0]
+    cx, cy = row.get("center_x"), row.get("center_y")
+    nx, ny = row.get("c_nx"), row.get("c_ny")
+    if pd.isna(cx) or pd.isna(cy) or pd.isna(nx) or pd.isna(ny):
+        return frame
+    out = frame.copy()
+    x0 = int(round(float(cx)))
+    y0 = int(round(float(cy)))
+    x1 = int(round(x0 + float(length) * float(nx)))
+    y1 = int(round(y0 + float(length) * float(ny)))
+    cv2.line(out, (x0, y0), (x1, y1), tuple(int(c) for c in color), 2, cv2.LINE_AA)
     return out
 
 

@@ -17,7 +17,6 @@ import numpy as np
 import pandas as pd
 import yaml
 from matplotlib.figure import Figure
-from scipy import stats
 
 from eye_tracking_system_tools.analysis.binocular import find_synced_saccades_ms
 from eye_tracking_system_tools.analysis.block_registry import BlockSpec
@@ -471,6 +470,8 @@ def figure_main_sequence_preview(
 
     ax.scatter(amp_p, peak_plot, s=8, alpha=0.45, color="#1f77b4", edgecolors="none")
     if amp_p.size >= 5:
+        from scipy import stats
+
         slope, intercept, r, p, _ = stats.linregress(amp_p, peak_plot)
         xs = np.linspace(float(np.nanmin(amp_p)), float(np.nanmax(amp_p)), 50)
         ax.plot(xs, slope * xs + intercept, color="#d62728", lw=1.2,

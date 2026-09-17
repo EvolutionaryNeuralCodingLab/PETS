@@ -3,7 +3,7 @@
 Phase 0 ships:
 
 * MainWindow with a tabbed dashboard
-  (Sync / Verify / Kerr / Calibration / Data Exploration / Saccades / Behavior / Sync-free).
+  (Sync / Verify / Refine / Conicoid / Kerr / Calibration / Data Exploration / Saccades / Behavior / Sync-free).
 * StartupDialog asking for experiment path, animal, block(s), output folder.
 * argparse + env-var support so the dialog can be skipped.
 * Per-tab status-icon plumbing via :class:`StatusBus`.
@@ -43,8 +43,10 @@ from eye_tracking_system_tools.annotation.preprocessing_gui.status_bus import St
 from eye_tracking_system_tools.annotation.preprocessing_gui.tabs import (
     BehaviorTab,
     CalibrationTab,
+    ConicoidTab,
     ExploreTab,
     KerrTab,
+    RefineTab,
     SaccadesTab,
     SyncFreeTab,
     SyncTab,
@@ -55,6 +57,8 @@ from eye_tracking_system_tools.annotation.preprocessing_gui.tabs import (
 _TAB_CLASSES = (
     SyncTab,
     VerifyTab,
+    RefineTab,
+    ConicoidTab,
     KerrTab,
     CalibrationTab,
     ExploreTab,
@@ -540,6 +544,8 @@ def _upstream_tabs(tab_id: str) -> list[str]:
     return {
         "sync": [],
         "verify": ["sync"],
+        "refine": ["sync", "verify"],
+        "conicoid": ["sync", "verify"],
         "kerr": ["sync", "verify"],
         "calibration": [],
         "saccades": ["kerr"],

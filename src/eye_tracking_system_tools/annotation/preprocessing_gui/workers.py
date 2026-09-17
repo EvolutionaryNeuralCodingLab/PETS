@@ -13,10 +13,14 @@ class CallableWorker(QtCore.QThread):
 
     finished_ok = QtCore.pyqtSignal(object)
     failed = QtCore.pyqtSignal(str)
+    progress = QtCore.pyqtSignal(str)
 
     def __init__(self, work_fn: Callable[[], Any], parent: QtCore.QObject | None = None):
         super().__init__(parent)
         self._work_fn = work_fn
+
+    def report(self, message: str) -> None:
+        self.progress.emit(str(message))
 
     def run(self) -> None:
         try:

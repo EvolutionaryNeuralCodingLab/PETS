@@ -884,6 +884,7 @@ class EllipseVerifierWidget(QtWidgets.QWidget):
             self._df_current,
             self._frame_col(),
             int(frame_idx),
+            phi_unit="radians",
         )
         if self._current_ref is not None:
             cv2.circle(

@@ -31,13 +31,15 @@ def load_eye_data(block):
 def horizontal_flip_eye_data(df: pd.DataFrame, frame_width: int) -> pd.DataFrame:
     df2 = df.copy()
     df2["center_x"] = frame_width - df2["center_x"]
-    df2["phi"] = (180 - df2["phi"]) % 360
+    # Stored phi is radians (LsqEllipse); reflect about the vertical axis.
+    df2["phi"] = np.pi - df2["phi"]
     return df2
 
 
 def rotate_phi_only(df: pd.DataFrame) -> pd.DataFrame:
     df2 = df.copy()
-    df2["phi"] = (df2["phi"] + 90) % 360
+    # "+90" in the Verify UI means a quarter-turn of the overlay, in radians.
+    df2["phi"] = df2["phi"] + 0.5 * np.pi
     return df2
 
 
@@ -221,7 +223,16 @@ def interactive_ellipse_corrector(
                 phi = float(row.get("phi", 0.0))
                 w = max(w, 1)
                 h = max(h, 1)
-                cv2.ellipse(annotated, (x, y), (w, h), phi, 0, 360, (0, 255, 0), 2)
+                cv2.ellipse(
+                    annotated,
+                    (x, y),
+                    (w, h),
+                    float(np.degrees(phi)),
+                    0,
+                    360,
+                    (0, 255, 0),
+                    2,
+                )
 
         disp = cv2.flip(annotated, 0)
         cv2.imshow("Frame", disp)

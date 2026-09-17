@@ -30,6 +30,7 @@ def test_tab_order_explore_before_saccades():
     )
 
     ids = [cls.tab_id for cls in _TAB_CLASSES]
+    assert ids.index("verify") < ids.index("refine") < ids.index("conicoid") < ids.index("kerr")
     assert ids.index("explore") < ids.index("saccades")
     assert ExploreTab.tab_label == "Data Exploration"
     assert SaccadesTab.tab_label == "Saccades"

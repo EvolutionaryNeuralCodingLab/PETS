@@ -17,6 +17,12 @@ from eye_tracking_system_tools.annotation.preprocessing_gui.tabs.sync_tab import
 from eye_tracking_system_tools.annotation.preprocessing_gui.tabs.verify_tab import (
     VerifyTab,
 )
+from eye_tracking_system_tools.annotation.preprocessing_gui.tabs.refine_tab import (
+    RefineTab,
+)
+from eye_tracking_system_tools.annotation.preprocessing_gui.tabs.conicoid_tab import (
+    ConicoidTab,
+)
 from eye_tracking_system_tools.annotation.preprocessing_gui.tabs.kerr_tab import KerrTab
 from eye_tracking_system_tools.annotation.preprocessing_gui.tabs.calibration_tab import (
     CalibrationTab,
@@ -38,6 +44,8 @@ __all__ = [
     "BaseTab",
     "SyncTab",
     "VerifyTab",
+    "RefineTab",
+    "ConicoidTab",
     "KerrTab",
     "CalibrationTab",
     "SaccadesTab",

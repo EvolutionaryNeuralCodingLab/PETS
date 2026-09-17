@@ -14,7 +14,6 @@ import json
 from . import _enum_compat
 import open_ephys.analysis as oea
 import pandas as pd
-import scipy.stats as stats
 from bokeh.io import output as b_output
 from bokeh.models import HoverTool, ColumnDataSource
 from bokeh.plotting import figure, show
@@ -22,17 +21,41 @@ from bokeh.palettes import Category10
 from eye_tracking_system_tools.preprocessing.ellipse_fit import LsqEllipse
 from eye_tracking_system_tools.preprocessing.dlc_csv_io import resolve_dlc_csv
 from lxml import etree
-from scipy import signal
 from tqdm import tqdm
 import pickle
 from .OERecording import OERecording
-from scipy.signal import welch, fftconvolve
-from scipy.stats import zscore as scipy_zscore
-from scipy.signal import find_peaks as scipy_find_peaks
 from matplotlib import pyplot as plt
 from itertools import cycle
 import datetime
 # Note: bokeh_plotter is imported lazily within methods that use it to avoid circular import
+# SciPy is imported on first use: some conda wheels fail to dlopen on Darwin 27+
+# (broken PROPACK/COBYLA .so) and a top-level import would block the GUI.
+
+
+def _scipy_stats():
+    import scipy.stats as stats
+    return stats
+
+
+def _scipy_signal():
+    from scipy import signal
+    return signal
+
+
+def _fftconvolve(*args, **kwargs):
+    from scipy.signal import fftconvolve
+    return fftconvolve(*args, **kwargs)
+
+
+def _scipy_zscore(*args, **kwargs):
+    from scipy.stats import zscore
+    return zscore(*args, **kwargs)
+
+
+def _scipy_find_peaks(*args, **kwargs):
+    from scipy.signal import find_peaks
+    return find_peaks(*args, **kwargs)
+
 
 '''
 This script defines the BlockSync class which takes all of the relevant data for a given trial and can be utilized
@@ -1850,7 +1873,7 @@ class BlockSync:
         # arrange into dataframe:
         self.arena_brightness_df = pd.DataFrame(index=self.arena_sync_df[self.anchor_vid_name].values)
         for ind, vid in enumerate(self.arena_vidnames):
-            vid_val_arr = stats.zscore(self.arena_frame_val_list[ind][1])
+            vid_val_arr = _scipy_stats().zscore(self.arena_frame_val_list[ind][1])
             sync_list = self.arena_sync_df[vid].astype(int)
             sync_list[sync_list >= len(vid_val_arr)] = len(vid_val_arr) - 1
             self.arena_brightness_df.insert(loc=0,
@@ -1903,11 +1926,11 @@ class BlockSync:
                 self.re_frame_val_list = self.produce_frame_val_list(self.re_videos, threshold_value)
 
             try:  # This is for legacy version of the produce_eye_brightness_values function
-                self.l_eye_values = stats.zscore(self.le_frame_val_list[0][1])
-                self.r_eye_values = stats.zscore(self.re_frame_val_list[0][1])
+                self.l_eye_values = _scipy_stats().zscore(self.le_frame_val_list[0][1])
+                self.r_eye_values = _scipy_stats().zscore(self.re_frame_val_list[0][1])
             except IndexError:
-                self.l_eye_values = stats.zscore(self.le_frame_val_list)
-                self.r_eye_values = stats.zscore(self.re_frame_val_list)
+                self.l_eye_values = _scipy_stats().zscore(self.le_frame_val_list)
+                self.r_eye_values = _scipy_stats().zscore(self.re_frame_val_list)
 
             df = self.blocksync_df.merge(
                 right=pd.DataFrame(self.l_eye_values, columns=['L_values']).reset_index(),
@@ -1999,7 +2022,7 @@ class BlockSync:
             sub_list.append(self.find_min_dist(n, rising_d[k_longer]))
 
         self.eye_diff_list = rising_d[k_shorter] - np.array(sub_list)
-        self.eye_diff_mode = stats.mode(self.eye_diff_list)[0][0]
+        self.eye_diff_mode = _scipy_stats().mode(self.eye_diff_list)[0][0]
 
         # determine lag directionality
         if k_shorter == 'right':
@@ -2162,10 +2185,10 @@ class BlockSync:
         normalized_cutoff = cutoff_frequency / (0.5 * sampling_rate)
 
         # Design a high-pass Butterworth filter in second-order sections (SOS)
-        sos = signal.butter(order, normalized_cutoff, btype='high', analog=False, output='sos')
+        sos = _scipy_signal().butter(order, normalized_cutoff, btype='high', analog=False, output='sos')
 
         # Apply the SOS filter to the data
-        filtered_data = signal.sosfilt(sos, data)
+        filtered_data = _scipy_signal().sosfilt(sos, data)
 
         return filtered_data
 
@@ -2592,7 +2615,7 @@ class BlockSync:
             window_data = data[i:i + roll_w_size]
 
             std_value = np.std(window_data)
-            zscores = scipy_zscore(window_data)
+            zscores = _scipy_zscore(window_data)
 
             # threshold_crossing_indices = np.where(window_data < std_value*threshold)[0]
             if i == 0:
@@ -2605,7 +2628,7 @@ class BlockSync:
         last_window_data = data[last_window_start:]
 
         std_value_last = np.std(last_window_data)
-        zscores_last = scipy_zscore(last_window_data)
+        zscores_last = _scipy_zscore(last_window_data)
         result = np.concatenate([result, zscores_last])
 
         return result
@@ -2682,7 +2705,7 @@ class BlockSync:
         # Detect local minima (peaks in -z_score) and get prominence (depth of each minimum).
         # Require height >= min_depth_zscore so z_score at minimum <= -min_depth_zscore (reject noise).
         neg_z = -1 * z_score_data
-        raw_peaks, props = scipy_find_peaks(
+        raw_peaks, props = _scipy_find_peaks(
             neg_z,
             width=1,
             distance=min_distance_frames,
@@ -2847,10 +2870,10 @@ class BlockSync:
         a1 = np.ones(template.shape)
         # Faster to flip up down and left right then use fftconvolve instead of scipy's correlate
         ar = np.flipud(np.fliplr(template))
-        out = fftconvolve(image, ar.conj(), mode=mode)
+        out = _fftconvolve(image, ar.conj(), mode=mode)
 
-        image = fftconvolve(np.square(image), a1, mode=mode) - \
-                np.square(fftconvolve(image, a1, mode=mode)) / (np.prod(template.shape))
+        image = _fftconvolve(np.square(image), a1, mode=mode) - \
+                np.square(_fftconvolve(image, a1, mode=mode)) / (np.prod(template.shape))
 
         # Remove small machine precision errors after subtraction
         image[np.where(image < 0)] = 0
@@ -3102,9 +3125,9 @@ class BlockSync:
         # according to previous sync -> perform column based addition / subtraction to correct the jitter
         # -> measure std decline to validate correction
         # right eye:
-        rx_median_series = pd.Series(signal.medfilt(self.re_jitter_dict['x_displacement'], kernel_size=13),
+        rx_median_series = pd.Series(_scipy_signal().medfilt(self.re_jitter_dict['x_displacement'], kernel_size=13),
                                      name='x_correction')
-        ry_median_series = pd.Series(signal.medfilt(self.re_jitter_dict['y_displacement'], kernel_size=13),
+        ry_median_series = pd.Series(_scipy_signal().medfilt(self.re_jitter_dict['y_displacement'], kernel_size=13),
                                      name='y_correction')
         r_correction_df = pd.concat([ry_median_series, rx_median_series], axis=1)
         r_corrected = self.re_df[['Arena_TTL', 'R_eye_frame', 'center_y', 'center_x']].set_index('R_eye_frame').merge(
@@ -3120,9 +3143,9 @@ class BlockSync:
         print('The right eye std of the Y coord was', np.std(r_corrected['center_y']))
         print('After correction it is:', np.std(r_corrected['center_y_corrected']))
         # left eye:
-        lx_median_series = pd.Series(signal.medfilt(self.le_jitter_dict['x_displacement'], kernel_size=13),
+        lx_median_series = pd.Series(_scipy_signal().medfilt(self.le_jitter_dict['x_displacement'], kernel_size=13),
                                      name='x_correction')
-        ly_median_series = pd.Series(signal.medfilt(self.le_jitter_dict['y_displacement'], kernel_size=13),
+        ly_median_series = pd.Series(_scipy_signal().medfilt(self.le_jitter_dict['y_displacement'], kernel_size=13),
                                      name='y_correction')
         l_correction_df = pd.concat([ly_median_series, lx_median_series], axis=1)
         l_corrected = self.le_df[['Arena_TTL', 'L_eye_frame', 'center_x', 'center_y']].set_index('L_eye_frame').merge(
@@ -3362,9 +3385,9 @@ class BlockSync:
             center_y = int(current_frame_data['center_y'])
             width = int(current_frame_data['width'])
             height = int(current_frame_data['height'])
-            phi = float(current_frame_data['phi'])
+            phi = float(np.degrees(float(current_frame_data['phi'])))
 
-            # Draw the ellipse on the frame
+            # Draw the ellipse on the frame. Table phi is radians; OpenCV wants degrees.
             cv2.ellipse(frame, (center_x, center_y), (width, height), phi, 0, 360, (0, 255, 0), 2)
         except ValueError:
             print('could not paint ellipse, missing values')

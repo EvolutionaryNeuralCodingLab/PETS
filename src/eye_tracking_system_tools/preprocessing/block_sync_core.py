@@ -17,7 +17,6 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import cv2
-from scipy.signal import fftconvolve
 
 try:
     import seaborn as sns
@@ -1492,6 +1491,8 @@ def _normxcorr2_jitter(template, image, mode="full"):
     image = np.asarray(image, dtype=np.float32) - np.mean(image)
     a1 = np.ones(template.shape, dtype=np.float32)
     ar = np.flipud(np.fliplr(template))
+    from scipy.signal import fftconvolve
+
     out = fftconvolve(image, ar.conj(), mode=mode)
     image = fftconvolve(np.square(image), a1, mode=mode) - np.square(
         fftconvolve(image, a1, mode=mode)

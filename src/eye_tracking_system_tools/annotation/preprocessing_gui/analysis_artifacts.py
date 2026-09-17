@@ -419,6 +419,135 @@ def kerr_artifact_profile(name_tag: str) -> TabArtifactProfile:
     )
 
 
+def refine_artifact_profile(name_tag: str) -> TabArtifactProfile:
+    tag = name_tag or "refined"
+
+    def _refined_paths(block: BlockHandle, _config: PreprocConfig) -> list[Path]:
+        ap = block.analysis_path
+        return [
+            ap / f"left_eye_data_refined_{tag}.csv",
+            ap / f"right_eye_data_refined_{tag}.csv",
+        ]
+
+    def _rotation_fixed_paths(block: BlockHandle, _config: PreprocConfig) -> list[Path]:
+        from eye_tracking_system_tools.preprocessing.conicoid.refined_io import (
+            resolve_rotation_fixed_eye_csv,
+            rotation_fixed_eye_csv_path,
+        )
+
+        ap = block.analysis_path
+        left = resolve_rotation_fixed_eye_csv(ap, "left")
+        right = resolve_rotation_fixed_eye_csv(ap, "right")
+        return [
+            left or rotation_fixed_eye_csv_path(ap, "left"),
+            right or rotation_fixed_eye_csv_path(ap, "right"),
+        ]
+
+    return TabArtifactProfile(
+        tab_id="refine",
+        artifacts=(
+            ArtifactSpec(
+                "le_df",
+                "le_df.csv",
+                lambda b, c: [b.analysis_path / "le_df.csv"],
+                _load_le_df,
+            ),
+            ArtifactSpec(
+                "re_df",
+                "re_df.csv",
+                lambda b, c: [b.analysis_path / "re_df.csv"],
+                _load_re_df,
+            ),
+            ArtifactSpec(
+                "left_eye_data",
+                "left_eye_data.csv",
+                lambda b, c: [b.analysis_path / "left_eye_data.csv"],
+                _load_left_eye_data,
+            ),
+            ArtifactSpec(
+                "right_eye_data",
+                "right_eye_data.csv",
+                lambda b, c: [b.analysis_path / "right_eye_data.csv"],
+                lambda s, bs, b, st, c: load_eye_data_verify(bs),
+            ),
+            ArtifactSpec(
+                "refined_ellipses",
+                f"refined ellipses ({tag})",
+                _refined_paths,
+                lambda s, bs, b, st, c: None,
+            ),
+            ArtifactSpec(
+                "rotation_params",
+                "rotation_correction_params.yaml",
+                lambda b, c: [b.analysis_path / "rotation_correction_params.yaml"],
+                lambda s, bs, b, st, c: None,
+            ),
+            ArtifactSpec(
+                "rotation_fixed",
+                "ellipse rotation-corrected",
+                _rotation_fixed_paths,
+                lambda s, bs, b, st, c: None,
+            ),
+        ),
+    )
+
+
+def conicoid_artifact_profile(name_tag: str) -> TabArtifactProfile:
+    tag = name_tag or "raw_verified"
+
+    def _angle_paths(block: BlockHandle, _config: PreprocConfig) -> list[Path]:
+        ap = block.analysis_path
+        return [
+            ap / f"left_conicoid_angle_{tag}.csv",
+            ap / f"right_conicoid_angle_{tag}.csv",
+        ]
+
+    def _load_conicoid_angles(session, bs, block, state, config) -> None:
+        load_eye_data(bs)
+        left_angle = block.analysis_path / f"left_conicoid_angle_{tag}.csv"
+        right_angle = block.analysis_path / f"right_conicoid_angle_{tag}.csv"
+        if left_angle.is_file():
+            left_angles = pd.read_csv(left_angle)
+            from eye_tracking_system_tools.preprocessing.calculate_conicoid_angles import (
+                append_conicoid_angle_data,
+            )
+
+            bs.left_eye_data = append_conicoid_angle_data(bs.left_eye_data, left_angles)
+        if right_angle.is_file():
+            right_angles = pd.read_csv(right_angle)
+            from eye_tracking_system_tools.preprocessing.calculate_conicoid_angles import (
+                append_conicoid_angle_data,
+            )
+
+            bs.right_eye_data = append_conicoid_angle_data(
+                bs.right_eye_data, right_angles
+            )
+
+    return TabArtifactProfile(
+        tab_id="conicoid",
+        artifacts=(
+            ArtifactSpec(
+                "left_eye_data",
+                "left_eye_data.csv",
+                lambda b, c: [b.analysis_path / "left_eye_data.csv"],
+                lambda s, bs, b, st, c: load_eye_data(bs),
+            ),
+            ArtifactSpec(
+                "right_eye_data",
+                "right_eye_data.csv",
+                lambda b, c: [b.analysis_path / "right_eye_data.csv"],
+                lambda s, bs, b, st, c: None,
+            ),
+            ArtifactSpec(
+                "conicoid_angles",
+                f"Conicoid angles ({tag})",
+                _angle_paths,
+                _load_conicoid_angles,
+            ),
+        ),
+    )
+
+
 BEHAVIOR_ARTIFACT_PROFILE = TabArtifactProfile(
     tab_id="behavior",
     artifacts=(

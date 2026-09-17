@@ -4,6 +4,32 @@ import numpy.linalg as la
 __version__ = '2.0.1'
 
 
+def canonicalize_ellipse_phi(width, height, phi):
+    """Order semi-axes so ``width >= height`` and wrap ``phi`` to ``[0, π)``.
+
+    OpenCV draws the first axis along ``phi``. If ``height > width`` the visual
+    long axis is at ``phi + π/2``; swapping and adding that offset removes a
+    class of 90° overlay flips. Ellipse orientation is 180°-periodic.
+    """
+    w = np.asarray(width, dtype=float)
+    h = np.asarray(height, dtype=float)
+    ang = np.asarray(phi, dtype=float)
+    scalar = w.ndim == 0
+    w = np.atleast_1d(np.array(w, dtype=float, copy=True))
+    h = np.atleast_1d(np.array(h, dtype=float, copy=True))
+    ang = np.atleast_1d(np.array(ang, dtype=float, copy=True))
+    swap = np.isfinite(w) & np.isfinite(h) & (h > w)
+    w2 = np.where(swap, h, w)
+    h2 = np.where(swap, w, h)
+    ang2 = np.where(swap, ang + 0.5 * np.pi, ang)
+    ang2 = np.mod(ang2, np.pi)
+    bad = ~(np.isfinite(w2) & np.isfinite(h2) & np.isfinite(ang2))
+    ang2 = np.where(bad, np.nan, ang2)
+    if scalar:
+        return float(w2[0]), float(h2[0]), float(ang2[0])
+    return w2, h2, ang2
+
+
 class LsqEllipse:
     """Lest Squares fitting of Elliptical data
 
@@ -144,8 +170,9 @@ class LsqEllipse:
         height : float
             Semiminor axis
         phi : float
-            The counterclockwise angle of rotation from the x-axis to the major
-            axis of the ellipse
+            The counterclockwise angle of rotation from the x-axis to the
+            first semi-axis (``width``), in radians. Axes are ordered so
+            ``width >= height``; ``phi`` is wrapped to ``[0, π)``.
         """
 
         # Eigenvectors are the coefficients of an ellipse in general form
@@ -174,9 +201,10 @@ class LsqEllipse:
         width = np.sqrt(numerator / denominator1)
         height = np.sqrt(numerator / denominator2)
 
-        # Angle of counterclockwise rotation of major-axis of ellipse to x-axis
-        # [eqn. 23] from (**) or [eqn. 26] from (***).
-        phi = .5 * np.arctan((2.*b) / (a - c))
+        # Angle of counterclockwise rotation of major-axis of ellipse to x-axis.
+        # arctan2 covers the full ±π/2 before the 1/2 factor (unlike arctan).
+        phi = .5 * np.arctan2(2. * b, a - c)
+        width, height, phi = canonicalize_ellipse_phi(width, height, phi)
 
         return center, width, height, phi
 

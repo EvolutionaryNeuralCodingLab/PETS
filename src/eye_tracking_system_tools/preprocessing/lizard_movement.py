@@ -12,9 +12,6 @@ from typing import Any
 import h5py
 import numpy as np
 import pandas as pd
-from scipy import signal
-from scipy.ndimage import maximum_filter1d, minimum_filter1d, uniform_filter1d
-from scipy.stats import kurtosis as scipy_kurtosis
 
 from eye_tracking_system_tools.annotation.block_annotator.oe_streams import (
     list_oe_streams,
@@ -158,6 +155,8 @@ def _fetch_accel_chunk(
 
 def _decimate_to_250hz(raw_uv: np.ndarray, fs_hz: float) -> tuple[np.ndarray, np.ndarray]:
     """Low-pass decimate each axis to 250 Hz."""
+    from scipy import signal
+
     factor = max(1, int(round(fs_hz / TARGET_FS_HZ)))
     if factor <= 1:
         return raw_uv, np.arange(raw_uv.shape[1]) * (1000.0 / fs_hz)
@@ -169,12 +168,16 @@ def _decimate_to_250hz(raw_uv: np.ndarray, fs_hz: float) -> tuple[np.ndarray, np
 
 
 def _highpass_1hz(x: np.ndarray, fs_hz: float = TARGET_FS_HZ) -> np.ndarray:
+    from scipy import signal
+
     sos = signal.butter(4, HP_CUTOFF_HZ, btype="high", fs=fs_hz, output="sos")
     return signal.sosfiltfilt(sos, np.asarray(x, dtype=np.float64))
 
 
 def _peak_envelope(x: np.ndarray, span: int) -> np.ndarray:
     """Approximate MATLAB ``envelope(x, span, 'peak')`` as upper - lower."""
+    from scipy.ndimage import maximum_filter1d, minimum_filter1d
+
     x = np.asarray(x, dtype=np.float64).ravel()
     size = max(3, int(span) | 1)
     upper = maximum_filter1d(x, size=size, mode="nearest")
@@ -204,6 +207,9 @@ def _process_chunk(
     sensitivity: np.ndarray,
     static_samples: int,
 ) -> tuple[list, list, list, list, list, list]:
+    from scipy.ndimage import uniform_filter1d
+    from scipy.stats import kurtosis as scipy_kurtosis
+
     fs_hz = 1000.0 / (t_ms[1] - t_ms[0]) if len(t_ms) > 1 else TARGET_FS_HZ
     filtered, t_filt = _decimate_to_250hz(raw_uv, fs_hz)
 

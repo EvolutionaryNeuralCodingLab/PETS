@@ -10,46 +10,41 @@ Explore (Data Exploration) is a post-sync inspection tab.
 Calibration writes ``LR_pix_size.csv``.
 Saccades (after Kerr) covers velocity thresholding, detection, and finalize
 to ``analysis/saccades/``.
+
+Imports are lazy so ``tabs.spin_max_dialog`` (used by the Jupyter tuner) does
+not pull in Refine / the rest of the GUI and create a circular import.
 """
 
-from eye_tracking_system_tools.annotation.preprocessing_gui.tabs.base import BaseTab
-from eye_tracking_system_tools.annotation.preprocessing_gui.tabs.sync_tab import SyncTab
-from eye_tracking_system_tools.annotation.preprocessing_gui.tabs.verify_tab import (
-    VerifyTab,
-)
-from eye_tracking_system_tools.annotation.preprocessing_gui.tabs.refine_tab import (
-    RefineTab,
-)
-from eye_tracking_system_tools.annotation.preprocessing_gui.tabs.conicoid_tab import (
-    ConicoidTab,
-)
-from eye_tracking_system_tools.annotation.preprocessing_gui.tabs.kerr_tab import KerrTab
-from eye_tracking_system_tools.annotation.preprocessing_gui.tabs.calibration_tab import (
-    CalibrationTab,
-)
-from eye_tracking_system_tools.annotation.preprocessing_gui.tabs.saccades_tab import (
-    SaccadesTab,
-)
-from eye_tracking_system_tools.annotation.preprocessing_gui.tabs.behavior_tab import (
-    BehaviorTab,
-)
-from eye_tracking_system_tools.annotation.preprocessing_gui.tabs.syncfree_tab import (
-    SyncFreeTab,
-)
-from eye_tracking_system_tools.annotation.preprocessing_gui.tabs.explore_tab import (
-    ExploreTab,
-)
+from __future__ import annotations
 
-__all__ = [
-    "BaseTab",
-    "SyncTab",
-    "VerifyTab",
-    "RefineTab",
-    "ConicoidTab",
-    "KerrTab",
-    "CalibrationTab",
-    "SaccadesTab",
-    "BehaviorTab",
-    "SyncFreeTab",
-    "ExploreTab",
-]
+from importlib import import_module
+from typing import Any
+
+_EXPORTS = {
+    "BaseTab": ".base",
+    "SyncTab": ".sync_tab",
+    "VerifyTab": ".verify_tab",
+    "RefineTab": ".refine_tab",
+    "ConicoidTab": ".conicoid_tab",
+    "KerrTab": ".kerr_tab",
+    "CalibrationTab": ".calibration_tab",
+    "SaccadesTab": ".saccades_tab",
+    "BehaviorTab": ".behavior_tab",
+    "SyncFreeTab": ".syncfree_tab",
+    "ExploreTab": ".explore_tab",
+}
+
+__all__ = list(_EXPORTS)
+
+
+def __getattr__(name: str) -> Any:
+    modname = _EXPORTS.get(name)
+    if modname is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(import_module(modname, __name__), name)
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(_EXPORTS))

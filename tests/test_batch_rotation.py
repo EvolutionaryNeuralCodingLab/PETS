@@ -64,7 +64,9 @@ def _fake_reader_cls(image: np.ndarray):
         def close(self) -> None:
             return None
 
-        def read_frame(self, idx: int | None):
+        def read_frame(self, idx: int | None, as_gray: bool = False):
+            if as_gray and image.ndim == 3:
+                return image[..., 0]
             return image
 
         def frame_width(self) -> float:
@@ -214,6 +216,17 @@ def test_load_rotation_registry_animals_and_blocks(tmp_path: Path):
     assert specs2[0].animal == "PV_2"
 
 
+def test_rotation_tuner_import_does_not_cycle():
+    pytest.importorskip("PyQt6")
+    from eye_tracking_system_tools.annotation.preprocessing_gui.rotation_tuner import (
+        launch_rotation_param_tuner,
+        save_dialog_params,
+    )
+
+    assert callable(save_dialog_params)
+    assert callable(launch_rotation_param_tuner)
+
+
 def test_dialog_ok_saves_params_label():
     pytest.importorskip("PyQt6")
     from PyQt6 import QtWidgets
@@ -265,3 +278,22 @@ def test_run_registry_continues_after_failure(tmp_path: Path):
     )
     assert results[0].status == STATUS_SKIPPED_NO_PARAMS
     assert results[1].status == STATUS_FAILED
+
+
+def test_run_registry_prints_block_and_eye_titles(
+    tmp_path: Path, monkeypatch, capsys
+):
+    analysis = tmp_path / "analysis"
+    analysis.mkdir()
+    write_rotation_params(tmp_path, _params())
+    _dlc_csv(analysis / "le_df.csv", "left")
+    _dlc_csv(analysis / "re_df.csv", "right")
+    img = np.full((16, 16, 3), 180, dtype=np.uint8)
+    _patch_videos(monkeypatch, img)
+    run_registry([tmp_path], overwrite=True, show_tqdm=False)
+    out = capsys.readouterr().out
+    assert "Working on block 1 out of 1" in out
+    assert ", left:" in out
+    assert ", right:" in out
+    assert "left done:" in out
+    assert "right done:" in out

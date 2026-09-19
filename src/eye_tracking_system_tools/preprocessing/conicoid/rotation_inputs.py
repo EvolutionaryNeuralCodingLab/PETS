@@ -80,9 +80,32 @@ class SequentialVideoReader:
         self._nframes = 0
         self._next_frame: int | None = None
         self._max_sequential_advance = max(0, int(max_sequential_advance))
+        self._last_idx: int | None = None
+        self._last_gray: bool | None = None
+        self._last_image: np.ndarray | None = None
         if self.path is not None and self.path.exists():
-            self._cap = cv2.VideoCapture(str(self.path))
-            self._nframes = int(self._cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            self._cap = self._open(self.path)
+            if self._cap is not None and self._cap.isOpened():
+                self._nframes = int(self._cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            else:
+                self._cap = None
+
+    @staticmethod
+    def _open(path: Path) -> cv2.VideoCapture | None:
+        attempts: list[int | None] = []
+        if hasattr(cv2, "CAP_FFMPEG"):
+            attempts.append(int(cv2.CAP_FFMPEG))
+        attempts.append(None)
+        for backend in attempts:
+            cap = (
+                cv2.VideoCapture(str(path))
+                if backend is None
+                else cv2.VideoCapture(str(path), backend)
+            )
+            if cap.isOpened():
+                return cap
+            cap.release()
+        return None
 
     @property
     def nframes(self) -> int:
@@ -93,8 +116,15 @@ class SequentialVideoReader:
             self._cap.release()
             self._cap = None
         self._next_frame = None
+        self._last_idx = None
+        self._last_gray = None
+        self._last_image = None
 
-    def _decode(self, bgr: np.ndarray) -> np.ndarray:
+    def _decode(self, bgr: np.ndarray, *, as_gray: bool) -> np.ndarray:
+        if as_gray:
+            if bgr.ndim == 2:
+                return bgr
+            return cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
         return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
 
     def _read_bgr(self) -> np.ndarray | None:
@@ -105,7 +135,7 @@ class SequentialVideoReader:
             return None
         return frame
 
-    def _seek_and_read(self, frame_idx: int) -> np.ndarray | None:
+    def _seek_and_read(self, frame_idx: int, *, as_gray: bool) -> np.ndarray | None:
         if self._cap is None:
             return None
         self._cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
@@ -114,14 +144,23 @@ class SequentialVideoReader:
             self._next_frame = None
             return None
         self._next_frame = frame_idx + 1
-        return self._decode(bgr)
+        return self._decode(bgr, as_gray=as_gray)
 
-    def read_frame(self, frame_idx: int | None) -> np.ndarray | None:
+    def read_frame(
+        self, frame_idx: int | None, *, as_gray: bool = False
+    ) -> np.ndarray | None:
         if self._cap is None or frame_idx is None:
             return None
         frame_idx = int(frame_idx)
         if frame_idx < 0 or (self._nframes > 0 and frame_idx >= self._nframes):
             return None
+        if (
+            self._last_idx == frame_idx
+            and self._last_gray is as_gray
+            and self._last_image is not None
+        ):
+            return self._last_image
+        image: np.ndarray | None
         if self._next_frame is not None and frame_idx >= self._next_frame:
             advance = frame_idx - self._next_frame
             if advance <= self._max_sequential_advance:
@@ -129,15 +168,26 @@ class SequentialVideoReader:
                     bgr = self._read_bgr()
                     if bgr is None:
                         self._next_frame = None
-                        return self._seek_and_read(frame_idx)
+                        image = self._seek_and_read(frame_idx, as_gray=as_gray)
+                        break
                     self._next_frame += 1
-                bgr = self._read_bgr()
-                if bgr is None:
-                    self._next_frame = None
-                    return self._seek_and_read(frame_idx)
-                self._next_frame = frame_idx + 1
-                return self._decode(bgr)
-        return self._seek_and_read(frame_idx)
+                else:
+                    bgr = self._read_bgr()
+                    if bgr is None:
+                        self._next_frame = None
+                        image = self._seek_and_read(frame_idx, as_gray=as_gray)
+                    else:
+                        self._next_frame = frame_idx + 1
+                        image = self._decode(bgr, as_gray=as_gray)
+            else:
+                image = self._seek_and_read(frame_idx, as_gray=as_gray)
+        else:
+            image = self._seek_and_read(frame_idx, as_gray=as_gray)
+        if image is not None:
+            self._last_idx = frame_idx
+            self._last_gray = as_gray
+            self._last_image = image
+        return image
 
     def frame_width(self) -> float | None:
         if self._cap is None:

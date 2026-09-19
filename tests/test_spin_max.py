@@ -156,7 +156,7 @@ def test_spin_maximize_eye_table_writes_spin_columns():
         return img
 
     out = spin_maximize_eye_table(
-        df, grab, settings=SpinMaxSettings(threshold=80)
+        df, grab, settings=SpinMaxSettings(threshold=80), show_tqdm=False
     )
     assert "phi_spin" in out.columns
     assert np.isfinite(out.loc[0, "phi_spin"])
@@ -262,7 +262,9 @@ def test_spin_then_jitter_xy_matches_eye_data():
     def grab(_idx: int):
         return img
 
-    spun = spin_maximize_eye_table(raw, grab, settings=SpinMaxSettings(threshold=80))
+    spun = spin_maximize_eye_table(
+        raw, grab, settings=SpinMaxSettings(threshold=80), show_tqdm=False
+    )
     jittered = apply_jitter_to_spin_table(spun, jitter)
     again = apply_jitter_to_spin_table(jittered, jitter)
 
@@ -302,7 +304,34 @@ def test_x_flip_spin_stores_mirrored_xy():
         df,
         grab,
         settings=SpinMaxSettings(threshold=80, x_flip=True, frame_width=100.0),
+        show_tqdm=False,
     )
     assert out.loc[0, "center_x_spin"] == pytest.approx(80.0)
     assert out.loc[0, "center_y_spin"] == pytest.approx(10.0)
     assert out.loc[0, "center_x"] == pytest.approx(20.0)
+
+
+def test_spin_maximize_eye_table_reads_frames_in_order():
+    img = _dark_blob(30.0)
+    df = pd.DataFrame(
+        {
+            "eye_frame": [4, 1, 3],
+            "center_x": [64.0, 64.0, 64.0],
+            "center_y": [64.0, 64.0, 64.0],
+            "width": [40.0, 40.0, 40.0],
+            "height": [15.0, 15.0, 15.0],
+            "phi": [0.1, 0.1, 0.1],
+        }
+    )
+    seen: list[int] = []
+
+    def grab(idx: int):
+        seen.append(int(idx))
+        return img
+
+    out = spin_maximize_eye_table(
+        df, grab, settings=SpinMaxSettings(threshold=80), show_tqdm=False
+    )
+    assert seen == [1, 3, 4]
+    assert list(out["eye_frame"]) == [4, 1, 3]
+    assert np.isfinite(out["phi_spin"]).all()

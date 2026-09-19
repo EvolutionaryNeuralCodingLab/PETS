@@ -8,12 +8,13 @@ Round pupils are not skipped.
 
 from __future__ import annotations
 
+import sys
+import time
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
 import numpy as np
 import pandas as pd
-import sys
 
 from eye_tracking_system_tools.preprocessing.ellipse_fit import canonicalize_ellipse_phi
 
@@ -184,17 +185,71 @@ class SpinMaxSettings:
 def _as_gray_u8(image: np.ndarray) -> np.ndarray:
     arr = np.asarray(image)
     if arr.ndim == 2:
-        gray = arr
-    elif arr.shape[-1] == 3:
-        r = arr[..., 0].astype(np.float64)
-        g = arr[..., 1].astype(np.float64)
-        b = arr[..., 2].astype(np.float64)
-        gray = 0.299 * r + 0.587 * g + 0.114 * b
-    elif arr.shape[-1] == 4:
+        if arr.dtype == np.uint8:
+            return arr
+        return np.clip(arr, 0, 255).astype(np.uint8)
+    import cv2
+
+    if arr.dtype != np.uint8:
+        arr = np.clip(arr, 0, 255).astype(np.uint8)
+    if arr.shape[-1] == 3:
+        # Batch passes BGR/gray; GUI frames are RGB. Channel mix is fine for
+        # a dark-vs-bright score; cv2 is far cheaper than float64 broadcasting.
+        return cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
+    if arr.shape[-1] == 4:
         return _as_gray_u8(arr[..., :3])
+    raise ValueError("Expected gray or RGB(A) image")
+
+
+def _in_notebook() -> bool:
+    try:
+        from IPython import get_ipython
+    except ImportError:
+        return False
+    ip = get_ipython()
+    return bool(ip is not None and ip.__class__.__name__ == "ZMQInteractiveShell")
+
+
+def _iter_frames_with_tqdm(items: list[int], *, desc: str, show: bool) -> Any:
+    """One leave-True bar. No nested bars; Jupyter uses stdout / notebook widget."""
+    if not show:
+        return items
+    try:
+        from tqdm.auto import tqdm
+    except Exception:
+        return items
+    kwargs: dict[str, Any] = {
+        "desc": desc,
+        "unit": "frame",
+        "leave": True,
+        "mininterval": 0.25,
+        "smoothing": 0.05,
+    }
+    if _in_notebook():
+        kwargs.update(
+            file=sys.stdout,
+            ncols=88,
+            dynamic_ncols=False,
+            bar_format=(
+                "{desc}: {percentage:3.0f}%|{bar:28}| {n_fmt}/{total_fmt} "
+                "[{elapsed}<{remaining}, {rate_fmt}]"
+            ),
+        )
+        try:
+            from tqdm.notebook import tqdm as notebook_tqdm
+
+            return notebook_tqdm(
+                items,
+                desc=desc,
+                unit="frame",
+                leave=True,
+                mininterval=0.25,
+            )
+        except Exception:
+            pass
     else:
-        raise ValueError("Expected gray or RGB(A) image")
-    return np.clip(np.rint(gray), 0, 255).astype(np.uint8)
+        kwargs.update(file=sys.stderr, dynamic_ncols=True, ascii=True)
+    return tqdm(items, **kwargs)
 
 
 def binarize_gray(gray: np.ndarray, threshold: int | None) -> tuple[np.ndarray, int]:
@@ -424,7 +479,11 @@ def spin_maximize_eye_table(
     progress_desc: str = "ellipse rotation",
     show_tqdm: bool = True,
 ) -> pd.DataFrame:
-    """Add ``*_spin`` columns. ``df`` must already be in raw DLC pixel space."""
+    """Add ``*_spin`` columns. ``df`` must already be in raw DLC pixel space.
+
+    Rows are visited in ``eye_frame`` order so a sequential video reader never
+    seeks backwards. Results are written back to the original row index.
+    """
     settings = settings or SpinMaxSettings()
     if df is None or df.empty:
         raise ValueError("ellipse_df is empty")
@@ -432,77 +491,111 @@ def spin_maximize_eye_table(
     n = len(work)
     cols = {name: np.full(n, np.nan) for name in SPIN_GEOMETRY_COLS}
     frame_col = "eye_frame" if "eye_frame" in work.columns else "frame"
-    targets = frame_indices if frame_indices is not None else list(range(n))
+    if frame_indices is not None:
+        targets = [int(i) for i in frame_indices]
+    else:
+        targets = list(range(n))
+    if frame_col in work.columns and frame_indices is None:
+        frames_for_sort = pd.to_numeric(work[frame_col], errors="coerce").to_numpy(
+            dtype=float
+        )
+        order = np.argsort(
+            np.where(np.isfinite(frames_for_sort), frames_for_sort, np.inf),
+            kind="mergesort",
+        )
+        targets = [int(i) for i in order]
     raw_phi = np.full(n, np.nan)
     total = len(targets)
-    iterator: Any = targets
-    if show_tqdm:
-        try:
-            from tqdm import tqdm
+    cx_all = (
+        pd.to_numeric(work["center_x"], errors="coerce").to_numpy(dtype=float)
+        if "center_x" in work.columns
+        else np.full(n, np.nan)
+    )
+    cy_all = (
+        pd.to_numeric(work["center_y"], errors="coerce").to_numpy(dtype=float)
+        if "center_y" in work.columns
+        else np.full(n, np.nan)
+    )
+    width_all = (
+        pd.to_numeric(work["width"], errors="coerce").to_numpy(dtype=float)
+        if "width" in work.columns
+        else np.full(n, np.nan)
+    )
+    height_all = (
+        pd.to_numeric(work["height"], errors="coerce").to_numpy(dtype=float)
+        if "height" in work.columns
+        else np.full(n, np.nan)
+    )
+    phi_all = (
+        pd.to_numeric(work["phi"], errors="coerce").to_numpy(dtype=float)
+        if "phi" in work.columns
+        else np.full(n, np.nan)
+    )
+    frames = (
+        pd.to_numeric(work[frame_col], errors="coerce").to_numpy(dtype=float)
+        if frame_col in work.columns
+        else np.arange(n, dtype=float)
+    )
+    iterator = _iter_frames_with_tqdm(targets, desc=progress_desc, show=show_tqdm)
+    last_key: int | None = None
+    last_image: np.ndarray | None = None
+    last_cb = 0.0
 
-            iterator = tqdm(
-                targets,
-                desc=progress_desc,
-                unit="frame",
-                file=sys.stderr,
-                mininterval=0.3,
-                miniters=1,
-                disable=False,
-                dynamic_ncols=True,
-                ascii=True,
-            )
-        except Exception:
-            iterator = targets
+    def _emit(cur: int) -> None:
+        nonlocal last_cb
+        if progress is None:
+            return
+        now = time.monotonic()
+        if cur == 1 or cur == total or (now - last_cb) >= 0.5:
+            last_cb = now
+            progress(cur, total)
 
-    for count, i in enumerate(iterator):
-        row = work.iloc[int(i)]
-        cx = float(row["center_x"]) if "center_x" in row.index else np.nan
-        cy = float(row["center_y"]) if "center_y" in row.index else np.nan
-        width = float(row["width"]) if "width" in row.index else np.nan
-        height = float(row["height"]) if "height" in row.index else np.nan
-        phi = float(row["phi"]) if "phi" in row.index else np.nan
-        w0, h0, ang0 = canonicalize_ellipse_phi(width, height, phi)
-        if not np.isfinite(cx) or not np.isfinite(cy):
-            if progress is not None:
-                progress(count + 1, total)
-            continue
-        frame_key = (
-            int(row[frame_col])
-            if frame_col in row.index and np.isfinite(row[frame_col])
-            else int(i)
-        )
-        image = frame_image(frame_key)
-        frame_w = settings.frame_width
-        if frame_w is None and image is not None:
-            frame_w = float(image.shape[1])
-        if settings.x_flip:
-            if frame_w is None:
-                if progress is not None:
-                    progress(count + 1, total)
-                continue
-            cx = float(frame_w) - cx
-            phi = np.pi - phi
+    try:
+        for count, i in enumerate(iterator):
+            i = int(i)
+            cx = float(cx_all[i])
+            cy = float(cy_all[i])
+            width = float(width_all[i])
+            height = float(height_all[i])
+            phi = float(phi_all[i])
             w0, h0, ang0 = canonicalize_ellipse_phi(width, height, phi)
-        cols["center_x_spin"][i] = cx
-        cols["center_y_spin"][i] = cy
-        cols["width_spin"][i] = w0
-        cols["height_spin"][i] = h0
-        if image is None:
-            raw_phi[i] = ang0 if np.isfinite(ang0) else np.nan
-            if progress is not None:
-                progress(count + 1, total)
-            continue
-        if not np.isfinite(w0) or not np.isfinite(h0):
-            raw_phi[i] = ang0 if np.isfinite(ang0) else np.nan
-            if progress is not None:
-                progress(count + 1, total)
-            continue
-        _w, _h, ang, _score = spin_maximize_frame(
-            image, cx, cy, w0, h0, ang0, settings=settings
-        )
-        raw_phi[i] = ang if np.isfinite(ang) else ang0
-        if progress is not None:
-            progress(count + 1, total)
+            if not np.isfinite(cx) or not np.isfinite(cy):
+                _emit(count + 1)
+                continue
+            frame_key = int(frames[i]) if np.isfinite(frames[i]) else i
+            if last_key == frame_key:
+                image = last_image
+            else:
+                image = frame_image(frame_key)
+                last_key = frame_key
+                last_image = image
+            frame_w = settings.frame_width
+            if frame_w is None and image is not None:
+                frame_w = float(image.shape[1])
+            if settings.x_flip:
+                if frame_w is None:
+                    _emit(count + 1)
+                    continue
+                cx = float(frame_w) - cx
+                phi = np.pi - phi
+                w0, h0, ang0 = canonicalize_ellipse_phi(width, height, phi)
+            cols["center_x_spin"][i] = cx
+            cols["center_y_spin"][i] = cy
+            cols["width_spin"][i] = w0
+            cols["height_spin"][i] = h0
+            if image is None or not np.isfinite(w0) or not np.isfinite(h0):
+                raw_phi[i] = ang0 if np.isfinite(ang0) else np.nan
+                _emit(count + 1)
+                continue
+            _w, _h, ang, _score = spin_maximize_frame(
+                image, cx, cy, w0, h0, ang0, settings=settings
+            )
+            raw_phi[i] = ang if np.isfinite(ang) else ang0
+            _emit(count + 1)
+    finally:
+        closer = getattr(iterator, "close", None)
+        if closer is not None:
+            closer()
 
     unwrapped = _unwrap_ellipse_phi(raw_phi)
     smoothed = _medfilt_1d(unwrapped, settings.median_k)

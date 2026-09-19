@@ -53,9 +53,7 @@ from eye_tracking_system_tools.preprocessing.conicoid.refraction import (
 from eye_tracking_system_tools.preprocessing.conicoid.batch_rotation import run_block
 from eye_tracking_system_tools.preprocessing.conicoid.rotation_params import (
     try_read_rotation_params,
-)
-from eye_tracking_system_tools.annotation.preprocessing_gui.rotation_tuner import (
-    save_dialog_params,
+    write_rotation_params,
 )
 from eye_tracking_system_tools.preprocessing.conicoid.spin_max import (
     apply_jitter_to_spin_table,
@@ -842,7 +840,9 @@ class RefineTab(BaseTab):
         )
         if dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
             return
-        path = save_dialog_params(self._block.analysis_path, dialog)
+        path = write_rotation_params(
+            self._block.analysis_path, dialog.correction_params()
+        )
         self._status.setText(f"Saved rotation-correction parameters: {path}")
         QtWidgets.QMessageBox.information(
             self,

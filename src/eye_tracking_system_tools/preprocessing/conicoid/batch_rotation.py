@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import sys
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -31,6 +30,7 @@ from eye_tracking_system_tools.preprocessing.conicoid.rotation_inputs import (
     load_raw_dlc_table,
 )
 from eye_tracking_system_tools.preprocessing.conicoid.rotation_params import (
+    RotationCorrectionParams,
     rotation_correction_params_path,
     try_read_rotation_params,
 )
@@ -192,6 +192,7 @@ def _correct_one_eye(
     jitter_corrected: bool,
     progress: ProgressFn | None,
     show_tqdm: bool,
+    job_title: str,
 ) -> tuple[Path, int, int]:
     settings = params.eye_settings()[side]
     raw = load_raw_dlc_table(block_path, side)
@@ -210,22 +211,23 @@ def _correct_one_eye(
                 settings.frame_width = float(width)
 
         def grab(idx: int, _reader=reader) -> np.ndarray | None:
-            return _reader.read_frame(int(idx))
+            return _reader.read_frame(int(idx), as_gray=True)
 
         def on_prog(cur: int, tot: int, _side: str = side) -> None:
-            if cur == 1 or cur == tot or cur % 25 == 0:
-                _report(progress, f"{_side} ellipse rotation: {cur}/{tot} frames")
+            if progress is None:
+                return
+            progress(f"{_side} ellipse rotation: {cur}/{tot} frames")
 
         _report(
             progress,
-            f"Starting {side} ellipse rotation ({len(raw)} synced rows, video {video})",
+            f"{job_title}, {side}:",
         )
         spun = spin_maximize_eye_table(
             raw,
             grab,
             settings=settings,
-            progress=on_prog,
-            progress_desc=f"{side} ellipse rotation",
+            progress=on_prog if progress is not None else None,
+            progress_desc=side,
             show_tqdm=show_tqdm,
         )
         if apply_jitter:
@@ -240,6 +242,10 @@ def _correct_one_eye(
         )
         write_rotation_fixed_eye_table(spun, out_path)
         n_ok = int(np.isfinite(spun["phi_spin"].to_numpy(dtype=float)).sum())
+        _report(
+            progress,
+            f"  {side} done: {n_ok}/{len(spun)} finite phi → {out_path}",
+        )
         return out_path, n_ok, len(spun)
     finally:
         reader.close()
@@ -252,11 +258,21 @@ def run_block(
     animal: str | None = None,
     progress: ProgressFn | None = None,
     show_tqdm: bool = True,
+    block_index: int | None = None,
+    n_blocks: int | None = None,
 ) -> BlockResult:
     """Correct both eyes for one block. Never aborts the caller on failure."""
     path = Path(block_path)
     animal_id = animal or _infer_animal(path)
+    if block_index is not None and n_blocks is not None:
+        job_title = (
+            f"Working on block {block_index} out of {n_blocks}: "
+            f"{animal_id} {path.name}"
+        )
+    else:
+        job_title = f"Working on {animal_id} {path.name}"
     if not path.exists():
+        _report(progress, job_title)
         return BlockResult(
             animal=animal_id,
             block_path=path,
@@ -266,6 +282,7 @@ def run_block(
     params_path = rotation_correction_params_path(path)
     params = try_read_rotation_params(path)
     if params is None:
+        _report(progress, job_title)
         return BlockResult(
             animal=animal_id,
             block_path=path,
@@ -296,6 +313,7 @@ def run_block(
 
     expected = _expected_output_paths(path, jitter_corrected=jitter_corrected)
     if not overwrite and _outputs_exist(expected):
+        _report(progress, job_title)
         return BlockResult(
             animal=animal_id,
             block_path=path,
@@ -319,12 +337,14 @@ def run_block(
                 jitter_corrected=jitter_corrected,
                 progress=progress,
                 show_tqdm=show_tqdm,
+                job_title=job_title,
             )
             paths[side] = str(out_path.resolve())
             n_ok[side] = ok_count
             n_rows[side] = n_count
         except Exception as exc:
             errors.append(f"{side}: {exc}")
+            _report(progress, f"  {side} failed: {exc}")
 
     if errors:
         return BlockResult(
@@ -374,33 +394,22 @@ def run_registry(
         else:
             items.append((None, Path(spec)))
 
-    iterator: Any = items
-    if show_tqdm:
-        try:
-            from tqdm import tqdm
-
-            iterator = tqdm(
-                items,
-                desc="blocks",
-                unit="block",
-                file=sys.stderr,
-                dynamic_ncols=True,
-                ascii=True,
-            )
-        except Exception:
-            iterator = items
-
+    n_blocks = len(items)
     results: list[BlockResult] = []
-    for animal, block_path in iterator:
-        _report(progress, f"=== {animal or '?'} {block_path} ===")
+    for index, (animal, block_path) in enumerate(items, start=1):
         result = run_block(
             block_path,
             overwrite=overwrite,
             animal=animal,
             progress=progress,
             show_tqdm=show_tqdm,
+            block_index=index,
+            n_blocks=n_blocks,
         )
-        _report(progress, f"{result.status}: {result.message}")
+        if result.status in (STATUS_OK, STATUS_OK_JITTER_MISSING):
+            _report(progress, f"  {result.status}")
+        else:
+            _report(progress, f"  {result.status}: {result.message}")
         results.append(result)
     return results
 

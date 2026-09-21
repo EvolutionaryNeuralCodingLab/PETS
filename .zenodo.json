@@ -1,0 +1,20 @@
+{
+  "title": "An open-source, adaptable eye-tracking system enables studies of visual acquisition across diverse terrestrial vertebrates",
+  "description": "Source code, hardware files, and analysis tools for a personalized head-mounted eye-tracking system demonstrated in lizards, mice, and turtles. Numerical values underlying the requested figure panels are provided as S1_Data.xlsx.",
+  "upload_type": "software",
+  "license": "mit",
+  "access_right": "open",
+  "keywords": [
+    "eye tracking",
+    "Pogona vitticeps",
+    "saccades",
+    "open source",
+    "comparative neuroethology"
+  ],
+  "creators": [
+    {"name": "Leberstein, Nimrod", "affiliation": "Tel Aviv University"},
+    {"name": "Remenick, Tali", "affiliation": "Tel Aviv University"},
+    {"name": "Becker, Milan", "affiliation": "Tel Aviv University"},
+    {"name": "Shein-Idelson, Mark", "affiliation": "Tel Aviv University"}
+  ]
+}

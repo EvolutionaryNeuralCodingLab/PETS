@@ -1,0 +1,41 @@
+# Placeholder paths for publication. Copy to paper_blocks.yaml and set BLOCK_ROOT.
+# Lizard paper cohort (Fig 2c–2j / migration notebook).
+# NOTE: Absolute block paths are machine-local (lab mount). Edit every path
+# before running on a different machine or mount layout.
+# Provenance:
+#   - development/old_pipelines_for_ref/multiple_figures_pipeline_migration.ipynb
+#     animals = ['PV_106','PV_143','PV_62','PV_126','PV_57']
+#     block_lists = [[8,9,10,11,12],[1,2,3,4],[24,26,38],[7,8,9,10,11,12],[7,8,9,12,13]]
+#     experiment_path = Z:\Nimrod\experiments  →  <BLOCK_ROOT>
+#   - Cross-checked vs Fig_2_j/saccade_angles_data.pkl (same animals/blocks;
+#     synced n=15422 + non_synced n=12724 = 28146 events).
+# Eye CSVs: prefer *degrees_raw_verified* (present on all 23 blocks).
+animals:
+  PV_106:
+    - <BLOCK_ROOT>
+    - <BLOCK_ROOT>
+    - <BLOCK_ROOT>
+    - <BLOCK_ROOT>
+    - <BLOCK_ROOT>
+  PV_143:
+    - <BLOCK_ROOT>
+    - <BLOCK_ROOT>
+    - <BLOCK_ROOT>
+    - <BLOCK_ROOT>
+  PV_62:
+    - <BLOCK_ROOT>
+    - <BLOCK_ROOT>
+    - <BLOCK_ROOT>
+  PV_126:
+    - <BLOCK_ROOT>
+    - <BLOCK_ROOT>
+    - <BLOCK_ROOT>
+    - <BLOCK_ROOT>
+    - <BLOCK_ROOT>
+    - <BLOCK_ROOT>
+  PV_57:
+    - <BLOCK_ROOT>
+    - <BLOCK_ROOT>
+    - <BLOCK_ROOT>
+    - <BLOCK_ROOT>
+    - <BLOCK_ROOT>

@@ -1,6 +1,15 @@
 # PETS (Personalized Eye Tracking System)
 
-This repository supplements research work under review.
+Code and hardware for **An open-source, adaptable eye-tracking system enables studies of visual acquisition across diverse terrestrial vertebrates** (PLOS Biology).
+
+- **License:** MIT for software ([LICENSE](LICENSE)); CC BY 4.0 for data and printable hardware ([LICENSE-DATA.md](LICENSE-DATA.md)).
+- **Cite:** [CITATION.cff](CITATION.cff)
+- **Numerical source data** for the editor-requested figure panels: `publication/S1_Data.xlsx` (see [publication/README.md](publication/README.md)). Rebuild with `python scripts/export_s1_data.py`.
+- **Text-only statistics** (timing, corrective events, Monte Carlo): [publication/TEXT_ONLY_STATISTICS.md](publication/TEXT_ONLY_STATISTICS.md)
+
+This repository contains the 3D models and Fusion360 environment used to define camera-eye geometry and create printable personalized eye-tracking headstages, Raspberry Pi capture code, tools for synchronizing eye-tracking with arena video and electrophysiology, preprocessing, and figure-reproduction scripts.
+
+The live development URL is https://github.com/EvolutionaryNeuralCodingLab/PETS. A versioned archive and DOI are deposited on Zenodo (see the release tag).
 
 ## Overview
 

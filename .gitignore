@@ -33,3 +33,4 @@ Thumbs.db
 /.matplotlib/
 /.pytest_cache/
 /.cursor/
+/.venv_pkgs/

@@ -112,7 +112,7 @@ def compute_arena_window(
     end_sample: int | None = None,
     gap_threshold_ms: float = 1000.0,
 ) -> dict[str, int]:
-    """Build ``arena_window`` dict using the same rules as the notebook fallback."""
+    """Build ``arena_window`` dict from the TTL samples the user entered."""
     arena_samples = _arena_rising_samples(events_csv_path, arena_line)
     if len(arena_samples) < 2:
         raise ValueError(f"Arena line {arena_line} has too few rising edges.")
@@ -770,7 +770,7 @@ class ManualTtlDialog(QtWidgets.QDialog):
         end_sample: int = 0,
         gap_threshold_ms: float = 1000.0,
     ) -> None:
-        """Programmatic preset used by pytest."""
+        """Fill the dialog from a known line map."""
         self._arena_line.setValue(int(arena_line))
         self._l_eye_line.setValue(int(l_eye_line))
         self._r_eye_line.setValue(int(r_eye_line))

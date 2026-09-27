@@ -40,7 +40,7 @@ def _block_until_window_closed(win: SaccadeViewerWindow, app: QtWidgets.QApplica
 
     ``app.exec()`` quits the whole application when the last window closes,
     which segfaults the Jupyter kernel on macOS. A local event loop tied to
-    ``win.closed`` keeps Qt alive for later notebook cells.
+    ``win.closed`` keeps Qt alive when the viewer is embedded in IPython.
     """
     if _running_in_ipython():
         loop = QtCore.QEventLoop()

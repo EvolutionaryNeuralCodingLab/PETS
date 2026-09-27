@@ -1,10 +1,8 @@
-"""Pickle + sidecar metadata helpers."""
+"""Small helpers shared by saccade export and the Preprocessing GUI."""
 
 from __future__ import annotations
 
-import pickle
 import subprocess
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -22,41 +20,6 @@ def git_hash() -> str | None:
         return out.strip()
     except Exception:
         return None
-
-
-def write_pickle_with_meta(
-    payload: Any,
-    pickle_path: Path,
-    *,
-    meta: dict[str, Any],
-    entrypoint: str,
-) -> Path:
-    """Write ``payload`` to ``pickle_path`` and a sibling ``*.meta.yaml``."""
-    pickle_path = Path(pickle_path)
-    pickle_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(pickle_path, "wb") as f:
-        pickle.dump(payload, f, protocol=pickle.HIGHEST_PROTOCOL)
-
-    rel = str(pickle_path.name)
-    if pickle_path.parent.name == "metadata":
-        rel = f"metadata/{pickle_path.name}"
-
-    meta_out = {
-        "created_utc": datetime.now(timezone.utc).isoformat(),
-        "pickle": rel,
-        "entrypoint": entrypoint,
-        "git_hash": git_hash(),
-        **meta,
-    }
-    meta_path = pickle_path.with_suffix(pickle_path.suffix + ".meta.yaml")
-    if pickle_path.suffix == ".pickle":
-        meta_path = Path(str(pickle_path) + ".meta.yaml")
-    elif pickle_path.suffix == ".pkl":
-        meta_path = Path(str(pickle_path) + ".meta.yaml")
-
-    with open(meta_path, "w", encoding="utf-8") as f:
-        yaml.safe_dump(meta_out, f, sort_keys=False)
-    return meta_path
 
 
 def load_params_yaml(path: Path | None) -> dict[str, Any]:

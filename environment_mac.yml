@@ -40,6 +40,4 @@ dependencies:
       - pyqtgraph==0.14.0
       - opencv-python-headless==4.13.0.92
       - PyYAML==6.0.3
-      - pytest>=8.0
-      - pytest-qt>=4.0
       - -e .

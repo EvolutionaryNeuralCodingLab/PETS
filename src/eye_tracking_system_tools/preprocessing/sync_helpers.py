@@ -1,22 +1,9 @@
-"""
-Notebook helpers promoted out of the preprocessing notebooks.
+"""Sync and behavior helpers used by the Preprocessing GUI.
 
-This module is the one stop import for helpers that used to be defined inline
-inside the following Jupyter notebooks under
-``src/eye_tracking_system_tools/preprocessing/``:
+Re-exports the sync builders from :mod:`block_sync_core` and adds the Bokeh
+previews and behavior-state helpers the GUI calls::
 
-* ``block_synchronization.ipynb`` (Cell 1, the big "simple approach" cell)
-* ``add_accelerometer_state_annotations.ipynb`` (Cells 1, 5, 6)
-
-The Preprocessing GUI (under ``annotation/preprocessing_gui``) cannot import
-from a notebook, so these helpers had to live in a real Python module before
-the GUI could wrap them.
-
-Wherever a helper already exists in :mod:`block_sync_core`, this module
-simply re-exports it so callers (both the notebooks and the GUI) have a
-single, stable import path::
-
-    from eye_tracking_system_tools.preprocessing.notebook_helpers import (
+    from eye_tracking_system_tools.preprocessing.sync_helpers import (
         simple_sync_build, build_arena_grid_df, build_final_sync_df_merge_nearest,
         verify_final_df_against_sources, export_final_sync_df, load_final_sync_df,
         plot_simple_sync_bokeh, sanity_plot_final_df,
@@ -24,10 +11,6 @@ single, stable import path::
         find_jittery_frames, export_eye_data_2d,
         rolling_window_analysis, create_behavior_df,
     )
-
-The helpers below are byte-for-byte copies of the original notebook code so the
-notebooks continue to produce identical outputs after they are switched over to
-importing from this module.
 """
 
 from __future__ import annotations
@@ -39,10 +22,7 @@ from itertools import cycle
 import numpy as np
 import pandas as pd
 
-# Re-exports from block_sync_core. These were originally inline in
-# block_synchronization.ipynb Cell 1 and have since been promoted into
-# block_sync_core.py for downstream code; we forward them here so the
-# notebook only needs one import line.
+# Re-exports from block_sync_core so the GUI has one import path.
 from eye_tracking_system_tools.preprocessing.block_sync_core import (
     _normalize_to_seconds,
     _read_eye_internal_seconds,
@@ -72,13 +52,8 @@ from eye_tracking_system_tools.preprocessing.block_sync_core import (
 )
 
 
-# ============================================================================
-# Bokeh visualization helpers (originally inline in block_synchronization.ipynb)
-# ============================================================================
-#
-# These are kept separate from block_sync_core.py on purpose: they require
-# Bokeh and are only used by the notebooks and by the Preprocessing GUI's
-# shift-correction tab. block_sync_core stays import-light for headless use.
+# Bokeh previews for the Sync tab. Kept out of block_sync_core so that
+# module stays importable without Bokeh.
 
 
 def plot_simple_sync_bokeh(
@@ -92,12 +67,8 @@ def plot_simple_sync_bokeh(
     """Open the slider-based shift-correction Bokeh plot.
 
     Plots both eyes' brightness against Open Ephys time (seconds) with two
-    JS sliders that index-shift the traces in place. Used in Stage 1.8 of
-    the synchronization pipeline (and by the Preprocessing GUI's
-    "Open shift plot" button).
-
-    Parameters mirror the notebook implementation; see
-    ``block_synchronization.ipynb`` Cell 1 for the original.
+    JS sliders that index-shift the traces in place. The Preprocessing GUI
+    opens this from "Open shift plot".
     """
     from bokeh.io import output_notebook, reset_output, show
     from bokeh.layouts import column, row
@@ -317,9 +288,8 @@ def sanity_plot_final_df(
 ):
     """Bokeh sanity plot of the final synchronized dataframe.
 
-    The Preprocessing GUI re-implements an equivalent plot natively with
-    pyqtgraph; this function is preserved so notebook users get the same
-    Bokeh-in-notebook experience as before.
+    The Preprocessing GUI draws the same check with pyqtgraph. This function
+    opens the Bokeh version in a browser.
     """
     from bokeh.io import output_notebook, show
     from bokeh.models import ColumnDataSource, Span
@@ -367,13 +337,7 @@ def bokeh_plotter(
     peaks_list: bool = False,
     export_path=False,
 ):
-    """Lightweight multi-trace Bokeh line plot with optional peak markers.
-
-    Original lives in ``add_accelerometer_state_annotations.ipynb`` Cell 1
-    and is also referenced (without import) by the jitter review step in
-    ``block_synchronization.ipynb``. Promoted here so both notebooks (and
-    the GUI) can share it.
-    """
+    """Lightweight multi-trace Bokeh line plot with optional peak markers."""
     import bokeh
     import bokeh.io
     import bokeh.plotting
@@ -420,11 +384,7 @@ def bokeh_plotter(
     bokeh.plotting.show(fig)
 
 
-# ============================================================================
-# Dropped-frame correction (insertion) helpers
-# ============================================================================
-# Originally inline in block_synchronization.ipynb Cell 1. These do not depend
-# on Bokeh and are usable from any context (notebook, GUI, batch script).
+# Dropped-frame correction. These do not depend on Bokeh.
 
 InsertMode = Literal["prev", "current"]
 
@@ -472,9 +432,8 @@ def insert_duplicate_frames_slide(
     """Insert duplicated frames at given positions, sliding content forward.
 
     The OE time axis (``df.index`` and ``oe_time_s``) is preserved; only the
-    ``cols`` are shifted by one row at each insertion. This is the function
-    invoked by the notebook's "frame insertion (advanced)" cell when manual
-    correction of dropped frames is required.
+    ``cols`` are shifted by one row at each insertion. The Sync tab calls this
+    when dropped frames are corrected by hand.
     """
     if len(df) == 0:
         return df.copy()
@@ -526,10 +485,7 @@ def insert_dup_by_oe_sample(df, oe_samples, **kwargs):
     return insert_duplicate_frames_slide(df, oe_samples, mode="oe_sample", **kwargs)
 
 
-# ============================================================================
-# Accelerometer / behavior state helpers
-# ============================================================================
-# Originally inline in add_accelerometer_state_annotations.ipynb Cells 5 and 6.
+# Accelerometer / behavior state helpers.
 
 
 def rolling_window_analysis(

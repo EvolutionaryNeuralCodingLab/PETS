@@ -312,7 +312,7 @@ def require_pixel_sizes(block_paths) -> dict[str, PixelSize]:
         raise ValueError(
             "Missing analysis/LR_pix_size.csv for:\n  "
             f"{listed}\n"
-            "Calibrate them (development/jitter_mount_pipeline.ipynb, section 3) "
+            "Calibrate them on the Calibration tab "
             "or pass units='px' to stay in pixel units."
         )
     return out

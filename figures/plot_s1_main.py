@@ -18,13 +18,9 @@ into the same folder.
 from __future__ import annotations
 
 import numbers
-import os
 import sys
 from pathlib import Path
 from typing import Any
-
-os.environ.setdefault("MPLCONFIGDIR", str(Path("/tmp/mplconfig")))
-Path(os.environ["MPLCONFIGDIR"]).mkdir(parents=True, exist_ok=True)
 
 import matplotlib
 
@@ -1399,7 +1395,7 @@ def normalize_label(annotation) -> str:
     ``quiet``/``stationary`` (and close synonyms: quiescent, quite, rest,
     still) → ``'quiet'``; ``active``/``explores`` → ``'active'``; anything
     else also defaults to ``'active'`` (unrecognized labels are treated as
-    non-quiescent, matching the paper notebook's mapping).
+    non-quiescent).
     """
     label = str(annotation).strip().lower()
     return "quiet" if label in _QUIET_LABELS else "active"

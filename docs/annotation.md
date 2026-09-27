@@ -37,3 +37,11 @@ python -m eye_tracking_system_tools.annotation.event_explorer \
 ```
 
 With no args, the app opens and prompts **Add sources…**. **File → Save session** writes `*.explorer_session.json`. **File → Export selection** writes `explorer_export_{timestamp}.npz` plus a sidecar JSON.
+
+Plot saved annotations with the tools in [scripts/plots/](../scripts/plots/README.md). Review detected saccades with:
+
+```bash
+python -m eye_tracking_system_tools.analysis.saccade_viewer --registry PATH.yaml
+```
+
+The registry format is in [analysis/README.md](../src/eye_tracking_system_tools/analysis/README.md).

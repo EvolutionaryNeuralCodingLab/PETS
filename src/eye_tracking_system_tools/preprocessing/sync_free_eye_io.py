@@ -1,8 +1,7 @@
 """
 Sync-free eye pipeline helpers: DLC → ellipses → Kerr → optional join to final_sync_df.
 
-Artifacts are written next to the eye video folder (LE/RE) as documented in
-sync_free_eye_ellipse_pipeline.ipynb. Open Ephys timestamps are only applied
+Artifacts are written next to the eye video folder (LE/RE). Open Ephys timestamps are only applied
 after an explicit join to ``final_sync_df``.
 """
 from __future__ import annotations
@@ -258,7 +257,7 @@ def merge_self_kerr_refs(
     rx: int,
     ry: int,
 ) -> Path:
-    """Merge one eye's Kerr ref into ``analysis/self_kerr_refs.csv`` (notebook helper)."""
+    """Merge one eye's Kerr ref into ``analysis/self_kerr_refs.csv``."""
     ap = Path(block.analysis_path)
     p = ap / "self_kerr_refs.csv"
     row = {
@@ -364,31 +363,12 @@ def default_syncfree_paths(video_path: Path, eye: str, tag: str = "v1") -> dict[
     }
 
 
-def legacy_syncfree_paths(video_path: Path, eye: str, tag: str = "v1") -> dict[str, Path]:
-    """Pre-unification artifact names (read-only migration)."""
-    d = video_path.parent
-    side = "left" if eye.lower() == "left" else "right"
-    base = f"{side}_syncfree_{tag}"
-    return {
-        "ellipses": d / f"{base}_ellipses.csv",
-        "verified": d / f"{base}_verified.csv",
-        "kerr_raw": d / f"{base}_kerr_angles.csv",
-        "degrees": d / f"{base}_degrees.csv",
-        "kerr_refs_sidecar": d / f"{base}_kerr_refs.csv",
-        "timeline_legacy": Path("unused"),
-    }
-
-
 def resolve_syncfree_working_csv(video_path: Path, eye: str, tag: str) -> Path | None:
-    """Return the best on-disk kinematic CSV for verification (draft or legacy)."""
+    """Return the on-disk kinematic CSV for verification, if one exists."""
     paths = default_syncfree_paths(video_path, eye, tag)
     for key in ("draft", "eye_data"):
         if paths[key].is_file():
             return paths[key]
-    legacy = legacy_syncfree_paths(video_path, eye, tag)
-    for key in ("verified", "ellipses"):
-        if legacy[key].is_file():
-            return legacy[key]
     return None
 
 

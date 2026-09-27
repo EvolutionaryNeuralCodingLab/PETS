@@ -1,8 +1,6 @@
-# PETS
+# PETS - Personalized Eye Tracking System
 
-Open-source eye tracking for small freely moving animals: personalized 3D-printed headmounts, Raspberry Pi cameras, and analysis code for lizards, mice, and turtles.
-
-This repository accompanies *An open-source, adaptable eye-tracking system enables studies of visual acquisition across diverse terrestrial vertebrates*.
+Open-source eye tracking for small freely moving animals as described in *An open-source, adaptable eye-tracking system enables studies of visual acquisition across diverse terrestrial vertebrates*.
 
 ## Start here
 

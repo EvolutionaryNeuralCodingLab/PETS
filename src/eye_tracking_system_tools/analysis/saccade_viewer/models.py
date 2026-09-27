@@ -21,7 +21,7 @@ _OFF_ALIASES = ("off_ms", "saccade_off_ms", "end_ms", "saccade_end_timestamp")
 
 
 class EventSelector(Protocol):
-    """Phase 2 hook: ROI / outlier pickers return an event DataFrame."""
+    """ROI / outlier pickers return an event DataFrame."""
 
     def select_events(self, tables: Any) -> pd.DataFrame: ...
 

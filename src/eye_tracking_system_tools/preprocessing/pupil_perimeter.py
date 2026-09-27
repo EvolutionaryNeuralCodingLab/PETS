@@ -101,7 +101,7 @@ def apply_perimeter_to_eye_df(
     NaN ellipse geometry columns for rows whose center falls outside ``perimeter``.
 
     Prefer Verify → Commit bad datapoints (noise-epoch catalog) for the GUI
-    workflow; this helper remains for notebooks / opt-in masking.
+    workflow. This helper masks rows whose center falls outside the perimeter.
 
     Returns ``(filtered_df, n_rows_hit)``.
     """

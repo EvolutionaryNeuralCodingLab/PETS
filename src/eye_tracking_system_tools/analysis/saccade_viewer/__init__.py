@@ -1,4 +1,4 @@
-"""Event-centric saccade verification viewer (Phase 1)."""
+"""Event-centric saccade verification viewer."""
 
 from eye_tracking_system_tools.analysis.saccade_viewer.artifacts import (
     merge_verification_tags,

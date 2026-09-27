@@ -1,8 +1,4 @@
-# ============================================================================
-# Block synchronization core logic (sync, arena grid, verification, export, jitter)
-# ============================================================================
-# Moved from block_synchronization.ipynb for maintainability.
-# ============================================================================
+# Block synchronization: sync, arena grid, verification, export, jitter.
 
 from __future__ import annotations
 

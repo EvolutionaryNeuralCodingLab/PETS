@@ -62,7 +62,7 @@ from eye_tracking_system_tools.preprocessing.block_sync_core import (
     drop_pandas_index_artifact_columns,
     load_eye_tracking_df_csv,
 )
-from eye_tracking_system_tools.preprocessing.notebook_helpers import (
+from eye_tracking_system_tools.preprocessing.sync_helpers import (
     build_arena_grid_df,
     build_final_sync_df_merge_nearest,
     describe_eye_tick,
@@ -1034,7 +1034,7 @@ class SyncTab(BaseTab):
     def _run_apply_shifts(self) -> None:
         def _do():
             df_l, df_r = self._require_simple_sync()
-            # Per notebook convention: GUI input is inverse to plot slider values.
+            # GUI spinbox sign is the inverse of the Bokeh slider sign.
             self._state.df_left_simple_sync = shift_eye_df_by_index(df_l, -int(self._left_shift.value()))
             self._state.df_right_simple_sync = shift_eye_df_by_index(df_r, -int(self._right_shift.value()))
             self._refresh_shift_ms_labels()

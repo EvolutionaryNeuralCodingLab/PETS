@@ -13,8 +13,7 @@ __pycache__/
 .DS_Store
 Thumbs.db
 
-# Preprocessing GUI Phase 0 notebook re-run sandbox (hardlinked / copied
-# sample block, do not commit).
+# Local sample-block copies (do not commit).
 /_phase0_sample_copy/
 
 # Local GUI / annotator scratch outputs (do not commit).
@@ -31,7 +30,7 @@ Thumbs.db
 /figures/*.pdf
 /figures/S1_Data.xlsx
 
-# Phase-1 local figure validation outputs / matplotlib cache
+# Local outputs and caches (do not commit)
 /outputs/
 /.mplconfig/
 /.matplotlib/

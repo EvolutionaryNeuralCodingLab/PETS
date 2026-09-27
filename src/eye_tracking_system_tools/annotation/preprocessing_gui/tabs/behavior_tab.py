@@ -26,7 +26,7 @@ from eye_tracking_system_tools.preprocessing.lizard_movement import (
     compute_and_save_lizard_movement,
     oe_rec_has_accel_channels,
 )
-from eye_tracking_system_tools.preprocessing.notebook_helpers import (
+from eye_tracking_system_tools.preprocessing.sync_helpers import (
     create_behavior_df,
     rolling_window_analysis,
 )

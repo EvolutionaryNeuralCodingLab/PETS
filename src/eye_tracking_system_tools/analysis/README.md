@@ -1,18 +1,19 @@
 # Analysis
 
-Paper figure PDFs are not built from this package. Redraw them with [`figures/plot_s1_main.py`](../../../../figures/plot_s1_main.py) and `S1_Data.xlsx` (see [figures/README.md](../../../../figures/README.md)).
+Saccade detection runs inside the Preprocessing GUI Saccades tab. That tab and the Calibration tab import `saccade_export`, `param_tune`, `eye_trace_io`, and `pixel_calibration`. Defaults are the `saccade` and `binocular` sections of [`configs/analysis_params.yaml`](../../../configs/analysis_params.yaml).
 
-The preprocessing GUI Saccades and Calibration tabs import `saccade_export`, `param_tune`, `eye_trace_io`, `pixel_calibration`, and `eye_movement_span`.
+Paper figure PDFs are not built from this package. Redraw them with [`figures/plot_s1_main.py`](../../../figures/plot_s1_main.py) and `S1_Data.xlsx` (see [figures/README.md](../../../figures/README.md)).
 
-Optional tools after a block is finalized:
+Review detected events with the saccade viewer. Pass a YAML registry of block folders:
 
 ```bash
 python -m eye_tracking_system_tools.analysis.saccade_viewer --registry PATH.yaml
-python -m eye_tracking_system_tools.analysis.jitter_gui
-python -m eye_tracking_system_tools.analysis.span_gui
-python -m eye_tracking_system_tools.analysis.data_yield_gui
-python -m eye_tracking_system_tools.analysis.param_tune_gui \
-    --registry PATH.yaml --params configs/analysis_params.yaml
 ```
 
-Saccade detection defaults live in [`configs/analysis_params.yaml`](../../../../configs/analysis_params.yaml).
+```yaml
+animals:
+  animal_id:
+    - /path/to/animal_id/YYYY_MM_DD/block_001
+```
+
+Each entry is a block path, or a mapping `{path, left_eye_csv, right_eye_csv}` when a specific trace file should be used.

@@ -176,7 +176,7 @@ def draw_saccade_circle(
     margin: int = 28,
     thickness: int = 2,
 ) -> np.ndarray:
-    """Filled green corner circle (verification-notebook style) for active saccades."""
+    """Filled green corner circle for active saccades."""
     if frame is None or frame.size == 0:
         return frame
     out = frame.copy()

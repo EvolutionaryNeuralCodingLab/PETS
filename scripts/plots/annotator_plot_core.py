@@ -614,7 +614,7 @@ def catalog_from_folder(
 
 
 def events_to_dataframe(catalog: list[EventRecord]) -> pd.DataFrame:
-    """Flat event table for notebook filtering and inspection."""
+    """Flat event table for filtering and inspection."""
     rows = []
     for rec in catalog:
         rows.append(

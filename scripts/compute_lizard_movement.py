@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Compute ``lizMov.mat`` from Open Ephys accelerometer data (Python pipeline).
+"""Compute ``lizMov.mat`` (legacy file previously used in the MATLAB pipeline) from Open Ephys accelerometer data (Python pipeline).
 
 Usage::
 

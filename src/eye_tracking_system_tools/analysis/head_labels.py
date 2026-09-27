@@ -119,7 +119,7 @@ def label_saccades_head_movement(
     """
     Attach ``head_movement`` column.
 
-    Prefer ``lizMov.mat`` under ``oe_files/`` (paper notebook path). Fall back to
+    Prefer ``lizMov.mat`` under ``oe_files/``. Fall back to
     precomputed movement CSVs; otherwise NaN.
     """
     out = events.copy()

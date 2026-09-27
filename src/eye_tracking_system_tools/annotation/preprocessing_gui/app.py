@@ -1,15 +1,4 @@
-"""Preprocessing GUI main window and application entry.
-
-Phase 0 ships:
-
-* MainWindow with a tabbed dashboard
-  (Sync / Verify / Kerr / Calibration / Data Exploration / Saccades / Behavior / Sync-free).
-* StartupDialog asking for experiment path, animal, block(s), output folder.
-* argparse + env-var support so the dialog can be skipped.
-* Per-tab status-icon plumbing via :class:`StatusBus`.
-
-Later phases (1-8) fill in the tab contents.
-"""
+"""Preprocessing GUI: tabbed app for sync, verification, Kerr angles, calibration, saccades, behavior, and exploration."""
 
 from __future__ import annotations
 
@@ -441,14 +430,15 @@ class PreprocessingGuiWindow(QtWidgets.QMainWindow):
             self,
             "About",
             "PETS Preprocessing GUI\n\n"
-            "Wraps the preprocessing notebooks in a single PyQt6 dashboard.\n"
+            "Sync, verify, Kerr angles, calibration, saccades, behavior, and exploration\n"
+            "in one PyQt6 window.\n"
             "Open Ephys / LFP averaging tools are not part of this preprocessing GUI.",
         )
 
     def _show_help_guide(self) -> None:
         text = (
             "<h3>Preprocessing GUI user guide</h3>"
-            "<p>This app wraps notebook workflow stages into tabs. Work left-to-right: "
+            "<p>Work left-to-right: "
             "<b>Sync -> Verify -> Kerr -> Behavior -> Sync-free</b>. "
             "Tab status dots show stage state (grey=not started, yellow=partial, "
             "green=complete, red=stale).</p>"

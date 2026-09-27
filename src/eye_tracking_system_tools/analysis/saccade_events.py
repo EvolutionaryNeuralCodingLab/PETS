@@ -1,4 +1,4 @@
-"""Angular saccade detection (paper notebook robust direction-segmentation)."""
+"""Angular saccade detection with direction segmentation."""
 
 from __future__ import annotations
 
@@ -144,9 +144,8 @@ def create_saccade_events_with_direction_segmentation_robust(
         saccade_events_df["delta_phi"] = (
             saccade_events_df["phi_end_pos"] - saccade_events_df["phi_init_pos"]
         )
-        # peak_velocity: deg/frame (= max of speed_profile_angular), matching the
-        # paper notebook / Fig_2_j reproduction pickle convention. Downstream
-        # exporters convert to deg/ms or deg/sec as needed (see figures_2c_2e).
+        # peak_velocity: deg/frame (= max of speed_profile_angular).
+        # Downstream exporters convert to deg/ms or deg/sec as needed.
         peak_v = []
         ttp = []
         for _, row in saccade_events_df.iterrows():

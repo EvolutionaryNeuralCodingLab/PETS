@@ -11,7 +11,6 @@ import pandas as pd
 import pyqtgraph as pg
 from PyQt6 import QtCore, QtGui, QtWidgets
 
-from eye_tracking_system_tools.analysis.eye_movement_span import percentile_axis_span
 from eye_tracking_system_tools.annotation.block_annotator.video_widget import (
     numpy_rgb_to_qpixmap,
 )
@@ -58,6 +57,45 @@ def _finite_pair(preview: KerrAnglePreview) -> tuple[np.ndarray, np.ndarray]:
     theta = np.asarray(preview.theta, dtype=float)
     mask = np.isfinite(phi) & np.isfinite(theta)
     return phi[mask], theta[mask]
+
+
+@dataclass(frozen=True)
+class AxisSpan:
+    """1-D range after percentile clipping (or full min/max when lo=0, hi=100)."""
+
+    lo_pct: float
+    hi_pct: float
+    span: float
+    p_lo: float
+    p_hi: float
+    n: int
+
+
+def percentile_axis_span(
+    values: np.ndarray,
+    *,
+    lo: float = 5.0,
+    hi: float = 95.0,
+) -> AxisSpan | None:
+    """``hi−lo`` percentile width of finite samples; ``None`` if empty."""
+    arr = np.asarray(values, dtype=float)
+    arr = arr[np.isfinite(arr)]
+    if arr.size == 0:
+        return None
+    if lo <= 0 and hi >= 100:
+        p_lo = float(np.nanmin(arr))
+        p_hi = float(np.nanmax(arr))
+    else:
+        p_lo = float(np.nanpercentile(arr, lo))
+        p_hi = float(np.nanpercentile(arr, hi))
+    return AxisSpan(
+        lo_pct=float(lo),
+        hi_pct=float(hi),
+        span=float(p_hi - p_lo),
+        p_lo=p_lo,
+        p_hi=p_hi,
+        n=int(arr.size),
+    )
 
 
 def axis_mad(values: np.ndarray) -> float | None:

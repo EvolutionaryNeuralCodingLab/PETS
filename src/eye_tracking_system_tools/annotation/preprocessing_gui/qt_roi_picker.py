@@ -50,7 +50,7 @@ class RoiGraphicsView(QtWidgets.QGraphicsView):
         return self._roi
 
     def set_roi_rect(self, x: int, y: int, w: int, h: int) -> None:
-        """Programmatic ROI (used by pytest and re-open flows)."""
+        """Set the ROI rectangle, including when a saved ROI is reopened."""
         x = max(0, int(x))
         y = max(0, int(y))
         w = max(1, int(w))
@@ -161,7 +161,7 @@ class QtRoiPickerDialog(QtWidgets.QDialog):
         self._btn_ok.setEnabled(True)
 
     def set_selection_rect(self, x: int, y: int, w: int, h: int) -> None:
-        """Programmatically set ROI geometry (pytest helper)."""
+        """Set the ROI rectangle from pixel coordinates."""
         self._view.set_roi_rect(x, y, w, h)
 
     def selected_roi(self) -> tuple[int, int, int, int] | None:

@@ -1,6 +1,6 @@
 {
   "title": "An open-source, adaptable eye-tracking system enables studies of visual acquisition across diverse terrestrial vertebrates",
-  "description": "Source code, hardware files, and analysis tools for a personalized head-mounted eye-tracking system demonstrated in lizards, mice, and turtles. Numerical values underlying the requested figure panels are provided as S1_Data.xlsx.",
+  "description": "Software for a personalized head-mounted eye-tracking system demonstrated in lizards, mice, and turtles. Software is released under the MIT License. Printable hardware files (STL and Fusion 360) in this record are released under CC BY 4.0. The numerical source-data workbook is a separate dataset; its DOI is added at deposit.",
   "upload_type": "software",
   "license": "mit",
   "access_right": "open",

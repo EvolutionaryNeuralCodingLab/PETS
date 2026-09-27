@@ -59,7 +59,7 @@
                         "locked": false
                     }
                 ],
-                "sensorDatabase": "D:\\MarkS3\\Downloads\\Meshroom-2021.1.0-win64\\Meshroom-2021.1.0\\aliceVision\\share\\aliceVision\\cameraSensors.db",
+                "sensorDatabase": "",
                 "defaultFieldOfView": 45.0,
                 "groupCameraFallback": "folder",
                 "allowedCameraModels": [
@@ -134,7 +134,7 @@
                     "{FeatureExtraction_1.output}"
                 ],
                 "method": "VocabularyTree",
-                "tree": "D:\\MarkS3\\Downloads\\Meshroom-2021.1.0-win64\\Meshroom-2021.1.0\\aliceVision\\share\\aliceVision\\vlfeat_K80L3.SIFT.tree",
+                "tree": "",
                 "weights": "",
                 "minNbImages": 200,
                 "maxDescriptors": 500,

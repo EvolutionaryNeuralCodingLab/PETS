@@ -226,7 +226,7 @@ Columns: <code>verification_status</code> (good/bad/unset),
         bind(QtCore.Qt.Key.Key_BracketRight, lambda: self._video.step_frame(1))
 
     def set_events(self, batch: EventBatch) -> None:
-        """Phase 2 hook: replace the event batch without rebuilding the window."""
+        """Replace the event batch without rebuilding the window."""
         self._batch = batch
         self._block_combo.blockSignals(True)
         self._block_combo.clear()

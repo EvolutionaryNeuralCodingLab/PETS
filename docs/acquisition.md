@@ -15,4 +15,6 @@ Optional: `--auto-exposure` / `-ae`, `--exposure-time` / `-et`, `--iso`. Output 
 
 Printable headmount files and the Meshroom template live in [`src/eye_tracking_system_tools/utils/`](../src/eye_tracking_system_tools/utils/). See [`3D_printing_files/README.md`](../src/eye_tracking_system_tools/utils/3D_printing_files/README.md).
 
+Before running [`meshroom_pipeline_template.mg`](../src/eye_tracking_system_tools/utils/meshroom_pipeline_template.mg), set the graph’s `sensorDatabase` and `tree` inputs to that Meshroom install’s AliceVision share folder (`cameraSensors.db` and the vlfeat vocabulary tree). Those two fields are left empty in the template.
+
 After recording, arrange each session as a `block_xxx/` folder and open it in the [Preprocessing GUI](preprocessing.md).

@@ -9,8 +9,9 @@ This script performs the Kerr angle calculation pipeline:
 5. Exports the updated dataframes with a specified tag
 
 Expected workflow:
-    After running data_verification.ipynb (where Kerr references are chosen and saved),
-    call this script to calculate and append Kerr angles.
+    Choose Kerr references on the Preprocessing GUI Kerr tab (saved to
+    ``analysis/self_kerr_refs.csv``), then call this module to append
+    ``k_phi`` and ``k_theta`` to the eye data.
 
 Usage:
     # For a single block:
@@ -23,7 +24,7 @@ Usage:
     
     calculate_kerr_angles_for_collection(block_collection, name_tag='raw_verified')
     
-    # If eye data is already loaded (e.g., from data_verification.ipynb):
+    # If eye data is already loaded on the block:
     calculate_kerr_angles_for_block(block, name_tag='raw_verified', load_eye_data_flag=False)
 """
 
@@ -539,7 +540,7 @@ if __name__ == "__main__":
     import sys
     from pathlib import Path
     
-    # This would typically be called from a notebook or another script
+    # Called by the Preprocessing GUI Kerr tab, or imported from another script.
     # Example:
     # from eye_tracking_system_tools.preprocessing import utility_functions as uf
     # from eye_tracking_system_tools.preprocessing.calculate_kerr_angles import calculate_kerr_angles_for_collection
@@ -547,5 +548,5 @@ if __name__ == "__main__":
     # block_collection = uf.block_generator(...)
     # calculate_kerr_angles_for_collection(block_collection, name_tag='raw_verified')
     
-    print("This script is designed to be imported and called from other scripts/notebooks.")
+    print("This script is designed to be imported and called from the Preprocessing GUI or another script.")
     print("See the module docstring for usage examples.")

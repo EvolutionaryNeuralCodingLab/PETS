@@ -1,5 +1,5 @@
 """
-Utilities for the data verification pipeline (scripted or notebook).
+Utilities for the data verification pipeline.
 Used by run_batch_dlc_and_verification.py for interactive verification of eye data.
 """
 from __future__ import annotations

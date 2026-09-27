@@ -21,7 +21,7 @@ DEFAULT_CONFIG_NAME = "preproc_gui_config.yaml"
 class PreprocConfig:
     """All settings persisted between Preprocessing GUI sessions.
 
-    Defaults reflect the values currently used in the source notebooks.
+    Defaults are the values the Preprocessing GUI starts with.
     """
 
     # ---- Block-selection defaults (last-used) ----

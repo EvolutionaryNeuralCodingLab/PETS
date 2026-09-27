@@ -93,10 +93,17 @@ def load_eye_dataframe(path: Path) -> pd.DataFrame:
     return _normalize_eye_df(df)
 
 
+def _eye_choice(spec: BlockSpec, side: str) -> EyeCsvChoice:
+    pinned = spec.left_eye_csv if side == "left" else spec.right_eye_csv
+    if pinned is None:
+        return resolve_eye_csv(spec.analysis_path, side)
+    return EyeCsvChoice(side=side, path=Path(pinned).resolve(), rule="registry_override")
+
+
 def load_block_eyes(spec: BlockSpec, *, log: bool = True) -> LoadedBlockEyes:
     """Load left/right traces for one block; always report chosen CSV paths."""
-    left_choice = resolve_eye_csv(spec.analysis_path, "left")
-    right_choice = resolve_eye_csv(spec.analysis_path, "right")
+    left_choice = _eye_choice(spec, "left")
+    right_choice = _eye_choice(spec, "right")
 
     msg = (
         f"[{spec.block_key}] eye CSVs: "

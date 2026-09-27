@@ -27,6 +27,10 @@ Thumbs.db
 # Editable-install metadata
 *.egg-info/
 
+# Local figure reproduction outputs (do not commit)
+/figures/*.pdf
+/figures/S1_Data.xlsx
+
 # Phase-1 local figure validation outputs / matplotlib cache
 /outputs/
 /.mplconfig/

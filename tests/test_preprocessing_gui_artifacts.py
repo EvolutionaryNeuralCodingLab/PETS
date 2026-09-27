@@ -29,8 +29,8 @@ def _handle(block_path: Path) -> BlockHandle:
     )
 
 
-def test_sync_manifest_has_twelve_artifacts():
-    assert len(SYNC_ARTIFACT_PROFILE.artifacts) == 12
+def test_sync_manifest_has_fourteen_artifacts():
+    assert len(SYNC_ARTIFACT_PROFILE.artifacts) == 14
 
 
 def test_scan_tab_artifacts_partial_and_full(tmp_path):
@@ -44,7 +44,7 @@ def test_scan_tab_artifacts_partial_and_full(tmp_path):
     result = scan_tab_artifacts(SYNC_ARTIFACT_PROFILE, handle, config)
     assert result.state is ArtifactLoadState.PARTIAL
     assert result.found_count == 2
-    assert result.total == 12
+    assert result.total == 14
 
     for spec in SYNC_ARTIFACT_PROFILE.artifacts:
         for p in spec.paths_fn(handle, config):
@@ -60,7 +60,7 @@ def test_scan_tab_artifacts_partial_and_full(tmp_path):
 
     full = scan_tab_artifacts(SYNC_ARTIFACT_PROFILE, handle, config)
     assert full.state is ArtifactLoadState.READY
-    assert full.found_count == 12
+    assert full.found_count == 14
 
 
 def test_discover_eye_video_paths(tmp_path):

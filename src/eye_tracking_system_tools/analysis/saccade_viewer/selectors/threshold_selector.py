@@ -4,22 +4,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Mapping
 
 import ipywidgets as widgets
 import pandas as pd
 from IPython.display import display
 
-from eye_tracking_system_tools.analysis.pipeline import (
-    EventTables,
-    SaccadeFilter,
-    apply_saccade_filter,
-    filter_event_tables,
-)
 from eye_tracking_system_tools.analysis.saccade_viewer.launch import launch_saccade_viewer
 from eye_tracking_system_tools.analysis.saccade_viewer.selectors.common import (
     enrich_events_for_viewer,
     numeric_event_columns,
+    row_block_key,
 )
 
 
@@ -55,28 +50,80 @@ def apply_threshold_rules(df: pd.DataFrame, rules: list[ThresholdRule]) -> pd.Da
     return out.reset_index(drop=True)
 
 
+def _filter_event_kind(df: pd.DataFrame, kind: str) -> pd.DataFrame:
+    if kind == "all" or df.empty:
+        return df
+    if "concurrency" not in df.columns:
+        return df
+    conc = df["concurrency"].astype(str).str.lower()
+    if kind == "monocular":
+        return df.loc[~conc.str.contains("sync|concurrent|binoc", regex=True)].reset_index(
+            drop=True
+        )
+    if kind == "concurrent":
+        return df.loc[conc.str.contains("sync|concurrent|binoc", regex=True)].reset_index(
+            drop=True
+        )
+    return df
+
+
+def _filter_head_movement(df: pd.DataFrame, mode: str) -> pd.DataFrame:
+    if mode == "any" or df.empty or "head_movement" not in df.columns:
+        return df
+    flag = df["head_movement"].astype(bool)
+    if mode == "without":
+        return df.loc[~flag].reset_index(drop=True)
+    if mode == "with":
+        return df.loc[flag].reset_index(drop=True)
+    return df
+
+
 class ThresholdSelectorPanel:
     """
-    Notebook widget: filter ``ctx.tables`` by block, event kind, and numeric thresholds.
+    Notebook widget: filter an events table by block, event kind, and numeric thresholds.
 
     ``panel.selected_events`` holds the latest filtered table (viewer-ready).
     """
 
     def __init__(
         self,
-        tables: EventTables,
+        events: pd.DataFrame,
         *,
+        path_by_key: Mapping[str, str] | None = None,
         registry_path: Path | str | None = None,
         default_block_keys: list[str] | None = None,
         on_change: Callable[[pd.DataFrame], None] | None = None,
     ) -> None:
-        self.tables = tables
+        self.events = events.copy() if events is not None else pd.DataFrame()
+        self.path_by_key = dict(path_by_key or {})
         self.registry_path = Path(registry_path) if registry_path else None
         self.on_change = on_change
         self.selected_events = pd.DataFrame()
         self._rules: list[ThresholdRule] = []
 
-        all_keys = sorted(tables.block_dict.keys())
+        if not self.path_by_key and "block_path" in self.events.columns:
+            for animal, block, path in zip(
+                self.events.get("animal", []),
+                self.events.get("block", []),
+                self.events["block_path"],
+            ):
+                key = row_block_key(animal, block)
+                if key and path and key not in self.path_by_key:
+                    self.path_by_key[key] = str(path)
+
+        all_keys = (
+            sorted(
+                {
+                    row_block_key(a, b)
+                    for a, b in zip(
+                        self.events.get("animal", []),
+                        self.events.get("block", []),
+                    )
+                }
+            )
+            if not self.events.empty
+            else []
+        )
         default_block_keys = default_block_keys or all_keys
         self._block_checks = {
             k: widgets.Checkbox(value=k in default_block_keys, description=k, indent=False)
@@ -100,7 +147,7 @@ class ThresholdSelectorPanel:
             value="any",
             description="Head:",
         )
-        numeric = numeric_event_columns(tables.all_saccades)
+        numeric = numeric_event_columns(self.events)
         self.column_pick = widgets.Dropdown(
             options=numeric or ["net_angular_disp"],
             description="Column:",
@@ -178,18 +225,20 @@ class ThresholdSelectorPanel:
         self.rules_html.value = f"<ul>{items}</ul>"
 
     def _build_subset(self) -> pd.DataFrame:
-        keys = self._selected_block_keys()
+        keys = set(self._selected_block_keys())
         if not keys:
             raise ValueError("Select at least one block.")
-
-        work = filter_event_tables(self.tables, block_keys=keys)
-        filt = SaccadeFilter(
-            event_kind=str(self.event_kind.value),
-            head_movement=None if self.head_movement.value == "any" else str(self.head_movement.value),
-        )
-        work = apply_saccade_filter(work, filt)
-        subset = apply_threshold_rules(work.all_saccades, self._rules)
-        return enrich_events_for_viewer(work, subset)
+        work = self.events
+        if "animal" in work.columns and "block" in work.columns:
+            mask = [
+                row_block_key(a, b) in keys
+                for a, b in zip(work["animal"], work["block"])
+            ]
+            work = work.loc[mask].reset_index(drop=True)
+        work = _filter_event_kind(work, str(self.event_kind.value))
+        work = _filter_head_movement(work, str(self.head_movement.value))
+        subset = apply_threshold_rules(work, self._rules)
+        return enrich_events_for_viewer(subset, self.path_by_key)
 
     def _preview(self) -> None:
         with self.out:

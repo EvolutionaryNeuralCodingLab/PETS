@@ -19,10 +19,14 @@ dependencies:
   - wheel
   - jupyter
   - ipykernel
+  # conda-forge binaries. The PyPI wheels of these versions ship an
+  # _spropack extension whose Mach-O __thread_bss section dyld rejects
+  # on current macOS, so scipy.sparse.linalg never imports.
+  - numpy=2.2.6
+  - scipy=1.15.2
   - pip:
-      - numpy==2.2.6
-      - scipy==1.15.3
       - pandas==2.3.3
+      - openpyxl==3.1.5
       - matplotlib==3.10.9
       - h5py==3.16.0
       - lxml==6.1.1

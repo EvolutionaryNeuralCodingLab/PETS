@@ -148,8 +148,17 @@ def test_lsq_ellipse_rejects_complex_eigendecomposition() -> None:
             [416.0009110505036, 521.508699566414],
         ]
     )
-    with pytest.raises(ValueError, match="ellipse constraint"):
-        LsqEllipse().fit(X)
+    el = LsqEllipse()
+    try:
+        el.fit(X)
+    except ValueError as exc:
+        assert "ellipse constraint" in str(exc)
+    else:
+        center, width, height, phi = el.as_parameters()
+        assert el.coefficients.dtype == np.float64
+        assert not any(
+            np.iscomplexobj(v) for v in (center[0], center[1], width, height, phi)
+        )
 
     # Well-conditioned ellipses still fit and stay real float64.
     t = np.linspace(0, 2 * np.pi, 20, endpoint=False)

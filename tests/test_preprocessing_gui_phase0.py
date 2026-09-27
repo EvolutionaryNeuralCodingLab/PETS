@@ -1,26 +1,12 @@
 """Phase 0 smoke tests for the Preprocessing GUI.
 
-Verifies:
-
-* The new ``preprocessing/notebook_helpers`` module exposes every helper
-  the plan promotes out of the notebooks.
-* The notebooks have been edited so they no longer carry an inline copy
-  of those helpers (the refactor stuck).
-* The GUI's package imports cleanly and the MainWindow instantiates
-  headlessly with all five tabs declaring a sensible status signature.
+Verifies helper exports and that the GUI package imports and instantiates
+headlessly.
 """
 
 from __future__ import annotations
 
-import json
-import re
 from pathlib import Path
-
-import pytest
-
-
-REPO_ROOT = Path(__file__).resolve().parents[1]
-PREPROC_DIR = REPO_ROOT / "src" / "eye_tracking_system_tools" / "preprocessing"
 
 
 # --- Helper-module shape ------------------------------------------------
@@ -97,81 +83,6 @@ def test_promoted_helpers_are_callable():
 
 
 # --- Notebook refactor stuck --------------------------------------------
-
-
-def _read_nb_source(path: Path) -> str:
-    nb = json.loads(path.read_text(encoding="utf-8"))
-    out = []
-    for c in nb["cells"]:
-        if c.get("cell_type") != "code":
-            continue
-        src = c.get("source") or []
-        if isinstance(src, str):
-            out.append(src)
-        else:
-            out.append("".join(src))
-    return "\n\n".join(out)
-
-
-def test_block_sync_notebook_imports_from_notebook_helpers():
-    src = _read_nb_source(PREPROC_DIR / "block_synchronization.ipynb")
-    assert (
-        "from eye_tracking_system_tools.preprocessing.notebook_helpers import"
-        in src
-    ), "block_synchronization.ipynb should import from notebook_helpers"
-
-
-def test_block_sync_notebook_no_longer_defines_promoted_helpers():
-    src = _read_nb_source(PREPROC_DIR / "block_synchronization.ipynb")
-    sentinel_defs = [
-        "def simple_sync_build(",
-        "def build_arena_grid_df(",
-        "def build_final_sync_df_merge_nearest(",
-        "def plot_simple_sync_bokeh(",
-        "def insert_duplicate_frames_slide(",
-    ]
-    leftover = [d for d in sentinel_defs if d in src]
-    assert not leftover, (
-        f"These helper defs should have been removed from "
-        f"block_synchronization.ipynb: {leftover}"
-    )
-
-
-def test_accelerometer_notebook_imports_from_notebook_helpers():
-    src = _read_nb_source(
-        PREPROC_DIR / "add_accelerometer_state_annotations.ipynb"
-    )
-    assert (
-        "from eye_tracking_system_tools.preprocessing.notebook_helpers import"
-        in src
-    )
-    sentinel_defs = ["def rolling_window_analysis(", "def create_behavior_df("]
-    leftover = [d for d in sentinel_defs if d in src]
-    assert not leftover, (
-        f"These helper defs should have been removed from accelerometer "
-        f"notebook: {leftover}"
-    )
-
-
-# --- Notebooks still compile-check OK -----------------------------------
-
-
-def _compile_notebook_source(path: Path) -> None:
-    src = _read_nb_source(path)
-    # strip Jupyter magics + shell escapes so we can compile() the result
-    src = re.sub(r"(?m)^\s*%[a-zA-Z].*$", "", src)
-    src = re.sub(r"(?m)^\s*!.*$", "", src)
-    compile(src, str(path), "exec")
-
-
-def test_block_sync_notebook_compiles():
-    _compile_notebook_source(PREPROC_DIR / "block_synchronization.ipynb")
-
-
-def test_accelerometer_notebook_compiles():
-    _compile_notebook_source(
-        PREPROC_DIR / "add_accelerometer_state_annotations.ipynb"
-    )
 
 
 # --- GUI package smoke load ---------------------------------------------

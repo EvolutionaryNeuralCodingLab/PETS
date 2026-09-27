@@ -2,7 +2,7 @@
 Eye size on the sensor for methods-text / review replies.
 
 Measure a rectangular ROI around each eye on one representative block per
-species (same defaults as :mod:`species_traces`), average left and right, and
+species (lizard / mouse / turtle), average left and right, and
 report:
 
 * **pixels** — mean ROI area (px²)
@@ -21,7 +21,24 @@ from typing import Any, Iterable, Mapping, Sequence
 import numpy as np
 import pandas as pd
 
-from eye_tracking_system_tools.analysis.species_traces import DEFAULTS as SPECIES_TRACE_DEFAULTS
+# Representative blocks per species (paths are machine-local; override as needed).
+DEFAULT_SPECIES_BLOCKS: dict[str, dict[str, Any]] = {
+    "lizard": {
+        "block_path": "/Volumes/Data-1/Nimrod/experiments/PV_126/2024_07_18/block_007",
+        "animal": "PV_126",
+        "block_num": "007",
+    },
+    "mouse": {
+        "block_path": "/Volumes/Data/Nimrod/experiments/M_002/2026_07_28/block_012",
+        "animal": "M_002",
+        "block_num": "012",
+    },
+    "turtle": {
+        "block_path": "/Volumes/Data/Nimrod/experiments/T_18/block_001",
+        "animal": "T_18",
+        "block_num": "001",
+    },
+}
 
 # Nominal recording format used throughout the paper pipeline.
 NOMINAL_FRAME_W = 640
@@ -151,8 +168,8 @@ class SpeciesEyeSize:
 def default_species_blocks(
     overrides: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> list[SpeciesBlock]:
-    """Lizard / mouse / turtle blocks from :data:`species_traces.DEFAULTS`."""
-    cfg = {k: dict(v) for k, v in SPECIES_TRACE_DEFAULTS.items()}
+    """Lizard / mouse / turtle blocks from :data:`DEFAULT_SPECIES_BLOCKS`."""
+    cfg = {k: dict(v) for k, v in DEFAULT_SPECIES_BLOCKS.items()}
     if overrides:
         for species, body in overrides.items():
             cfg.setdefault(species, {}).update(body)

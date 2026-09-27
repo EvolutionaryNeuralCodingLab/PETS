@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import pandas as pd
+from typing import Any, Mapping
 
-from eye_tracking_system_tools.analysis.pipeline import EventTables, _row_block_key
+import pandas as pd
 
 _PROFILE_LIKE = frozenset(
     {
@@ -14,6 +14,15 @@ _PROFILE_LIKE = frozenset(
         "diameter_profile",
     }
 )
+
+
+def row_block_key(animal: Any, block: Any) -> str:
+    """Rebuild ``BlockSpec.block_key`` from event-table ``animal`` / ``block`` columns."""
+    animal_s = str(animal)
+    block_s = str(block)
+    digits = "".join(c for c in block_s if c.isdigit())
+    block_num = digits.zfill(3) if digits else block_s
+    return f"{animal_s}_block_{block_num}"
 
 
 def numeric_event_columns(df: pd.DataFrame | None) -> list[str]:
@@ -42,23 +51,24 @@ def numeric_event_columns(df: pd.DataFrame | None) -> list[str]:
 
 
 def enrich_events_for_viewer(
-    tables: EventTables,
     events: pd.DataFrame,
+    path_by_key: Mapping[str, str] | None = None,
     *,
     drop_internal_cols: bool = True,
 ) -> pd.DataFrame:
-    """Attach ``block_path`` and drop internal selector columns."""
+    """Attach ``block_path`` when missing and drop internal selector columns."""
     if events is None or events.empty:
         return pd.DataFrame()
 
     out = events.copy()
-    path_by_key = {b.spec.block_key: str(b.spec.block_path) for b in tables.blocks}
-    if "block_path" not in out.columns or out["block_path"].isna().any():
-        paths = []
-        for animal, block in zip(out["animal"], out["block"]):
-            key = _row_block_key(animal, block)
-            paths.append(path_by_key.get(key, ""))
-        out["block_path"] = paths
+    mapping = dict(path_by_key or {})
+    if mapping and ("block_path" not in out.columns or out["block_path"].isna().any()):
+        if "animal" in out.columns and "block" in out.columns:
+            paths = [
+                mapping.get(row_block_key(animal, block), "")
+                for animal, block in zip(out["animal"], out["block"])
+            ]
+            out["block_path"] = paths
 
     if drop_internal_cols:
         for col in ("right_peak_v", "left_peak_v", "weight", "block_key"):

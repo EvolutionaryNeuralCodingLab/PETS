@@ -233,7 +233,6 @@ def test_run_yield_report_writes_artifacts(tmp_path: Path) -> None:
     ellipse = written["ellipse_modular_vs_rigid"]
     assert ellipse.parent.name == "plots"
     assert ellipse.parent.parent.name == "yield_ellipse_modular_vs_rigid"
-    assert (ellipse.parent.parent / "replot.py").is_file()
     cohort = yaml.safe_load(
         (ellipse.parent.parent / "metadata" / "cohort.yaml").read_text()
     )

@@ -8,7 +8,7 @@ Writes under ``block/analysis/saccades/``:
 * ``saccade_events.pkl`` — full event tables (incl. speed profiles) for figures
 * ``detection_params.yaml`` / ``detection_summary.yaml`` (+ ``.meta.yaml``)
 
-The preprocessing Saccades tab and paper compile path share this module.
+The preprocessing Saccades tab writes these files.
 """
 
 from __future__ import annotations
@@ -779,57 +779,3 @@ def finalized_fingerprint(specs: list[BlockSpec]) -> dict[str, Any]:
         }
     return out
 
-
-def block_bundle_from_finalized(
-    spec: BlockSpec,
-    finalized: FinalizedSaccades,
-    *,
-    keep_traces: bool = True,
-):
-    """Build a :class:`~pipeline.BlockBundle` from finalized on-disk events."""
-    from eye_tracking_system_tools.analysis.pipeline import BlockBundle
-
-    empty = pd.DataFrame()
-    left = empty
-    right = empty
-    left_meta: dict[str, Any] = {}
-    right_meta: dict[str, Any] = {}
-    if keep_traces:
-        try:
-            loaded = load_block_eyes(spec, log=False)
-            left = prepare_traces(loaded.left)
-            right = prepare_traces(loaded.right)
-            meta = csv_choices_meta(loaded)
-            left_meta = {"path": meta["left_csv"], "rule": meta["left_rule"]}
-            right_meta = {"path": meta["right_csv"], "rule": meta["right_rule"]}
-        except Exception:
-            pass
-
-    all_ev = finalized.all_saccades.copy()
-    if not all_ev.empty:
-        if "animal" not in all_ev.columns:
-            all_ev["animal"] = spec.animal
-        if "block" not in all_ev.columns:
-            all_ev["block"] = spec.block_num
-
-    l_ev = (
-        all_ev[all_ev["eye"] == "L"].reset_index(drop=True)
-        if not all_ev.empty and "eye" in all_ev.columns
-        else empty
-    )
-    r_ev = (
-        all_ev[all_ev["eye"] == "R"].reset_index(drop=True)
-        if not all_ev.empty and "eye" in all_ev.columns
-        else empty
-    )
-
-    return BlockBundle(
-        spec=spec,
-        left=left,
-        right=right,
-        left_csv_meta=left_meta,
-        right_csv_meta=right_meta,
-        l_saccades=l_ev,
-        r_saccades=r_ev,
-        all_saccades=all_ev,
-    )

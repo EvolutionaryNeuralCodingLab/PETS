@@ -97,7 +97,25 @@ figure_3f:
   x_range: [-3.0, 3.0]
   outlier_percentiles: [0.1, 99.9]
   exclude_animals: [PV_57]
+  # PV_126 block 007 has no behavior_state.csv under analysis/; read_behavior_state
+  # falls back to older_analyses/, which the published pupil pool did not do.
+  # Including it moves PV_126 from 0.016 to 0.125 against the frozen curve.
+  exclude_block_keys: [PV_126_block_007]
   figsize: [2.2, 1.7]
+
+figure_s2:
+  # Span is the 2.5-97.5 percentile range of gaze pooled across blocks, per eye.
+  outlier_percentiles: [2.5, 97.5]
+  num_angle_bins: 72
+  min_samples: 200
+
+figure_s4:
+  roll_window_s: 10.0
+  corr_thr_pos: 0.2
+  corr_thr_neg: -0.2
+  min_valid_in_window: 0.33
+  # The published run used two PV_62 blocks; block 038 was not in its collection.
+  exclude_block_keys: [PV_62_block_038]
 
 figure_3a_3c:
   # Single-block vignettes (paper default block: PV_126_block_007).
@@ -141,6 +159,9 @@ figure_3d:
   color_template: okabeito
   combined_label: "All (combined)"
   frame_ms_fallback: 16.67  # used only when tables.blocks has no ms_axis traces
+  # Published event filter, applied before the L/R pairing below.
+  min_event_length: 2
+  min_event_disp_deg: 0.23
   log:
     figure_size: [2.5, 2.2]
     num_bins: 20

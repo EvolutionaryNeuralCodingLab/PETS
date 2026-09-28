@@ -20,6 +20,19 @@ try:
 except ImportError:
     sns = None
 
+def list_raw_eye_mp4s(block_path, side: str) -> List[str]:
+    """Eye videos under eye_videos/LE or RE, skipping DeepLabCut exports."""
+    folder = "LE" if str(side).lower() in {"l", "left", "le"} else "RE"
+    root = Path(block_path) / "eye_videos" / folder
+    if not root.is_dir():
+        return []
+    return [
+        str(path)
+        for path in sorted(root.rglob("*.mp4"))
+        if "DLC" not in path.name
+    ]
+
+
 _PANDAS_INDEX_ARTIFACTS = frozenset({"level_0", "index", "Unnamed: 0"})
 _TRACKING_TABLE_MARKERS = frozenset(
     {
@@ -301,6 +314,13 @@ def build_eye_df_simple(block, eye: str, cov_warn: float = 0.05) -> pd.DataFrame
     Make a per-eye DataFrame indexed by OE samples using the simple anchor-at-first-TTL approach.
     Columns: ['frame_idx', 'oe_time_s', 'brightness'].
     """
+    b_list = getattr(block, 'le_frame_val_list' if eye == 'left' else 're_frame_val_list', None)
+    b = None if b_list is None else np.asarray(b_list, dtype='float64')
+    if b is None or b.ndim == 0 or b.size == 0:
+        raise RuntimeError(
+            f"No {eye} eye brightness vector. Extract or load eye brightness before building simple sync."
+        )
+
     fs = _get_fs(block)
     t_sec = _read_eye_internal_seconds(block, eye)
     
@@ -311,9 +331,6 @@ def build_eye_df_simple(block, eye: str, cov_warn: float = 0.05) -> pd.DataFrame
     t_rel = t_sec - t_sec[0]                         # seconds relative to first frame
     oe_samples = t0_oe + np.round(fs * t_rel).astype(np.int64)
 
-    # brightness from BlockSync
-    b_list = getattr(block, 'le_frame_val_list' if eye == 'left' else 're_frame_val_list')
-    b = np.asarray(b_list, dtype='float64')
     n = min(len(b), len(oe_samples))
     if len(b) != len(oe_samples):
         print(f"[INFO] {eye.upper()}: brightness length ({len(b)}) != frames ({len(oe_samples)}); clipping to {n}.")

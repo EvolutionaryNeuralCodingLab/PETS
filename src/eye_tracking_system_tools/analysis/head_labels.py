@@ -20,11 +20,9 @@ def has_imu(spec: BlockSpec) -> bool:
 
 def find_lizmov_mat(spec: BlockSpec) -> Path | None:
     """
-    Locate Mark's ``lizMov.mat`` under the block's Open Ephys tree.
+    Locate ``lizMov.mat`` under the block's Open Ephys tree.
 
-    Notebook path pattern::
-        block.oe_path / 'analysis' / <subdir containing animal id> / lizMov.mat
-    On disk this is typically::
+    Typical path::
         <block>/oe_files/<recording>/Record Node */analysis/*/lizMov.mat
     """
     oe = spec.block_path / "oe_files"

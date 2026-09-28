@@ -1,12 +1,13 @@
 # Placeholders only.
 # block_001, block_002, and block_003 are not files in this repository, and
 # they are not loaded by the scripts. The BlockSync objects used for the
-# manuscript are not distributed.
+# manuscript are not distributed. S1_Data.xlsx and the example block are not
+# inputs to these scripts.
 #
-# Pass a pickle of already-processed BlockSync objects to each script:
+# Pass a pickle of at least two already-processed BlockSync objects:
 #   python statistics/saccade_amplitude_head_movement.py /path/to/blocks.pkl
 # The pickle must contain a list of those objects. This file only holds the
-# permutation settings taken from the notebook calls.
+# permutation settings.
 
 blocks:
   - block_001

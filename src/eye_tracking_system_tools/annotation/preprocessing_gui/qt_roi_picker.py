@@ -249,21 +249,14 @@ def extract_brightness_with_roi_fallback(
     parent: QtWidgets.QWidget | None = None,
 ) -> None:
     """Try auto ROI; open Qt picker per eye when auto fails."""
-    import glob
     import pickle
 
+    from eye_tracking_system_tools.preprocessing.block_sync_core import list_raw_eye_mp4s
+
     if blocksync.le_videos is None:
-        blocksync.le_videos = [
-            vid
-            for vid in glob.glob(str(blocksync.block_path) + r"\eye_videos\LE\**\*.mp4")
-            if "DLC" not in vid
-        ]
+        blocksync.le_videos = list_raw_eye_mp4s(blocksync.block_path, "left")
     if blocksync.re_videos is None:
-        blocksync.re_videos = [
-            vid
-            for vid in glob.glob(str(blocksync.block_path) + r"\eye_videos\RE\**\*.mp4")
-            if "DLC" not in vid
-        ]
+        blocksync.re_videos = list_raw_eye_mp4s(blocksync.block_path, "right")
 
     p = blocksync.analysis_path / "eye_brightness_values_dict.pkl"
     if p.is_file() and not force:

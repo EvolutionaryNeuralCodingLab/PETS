@@ -194,7 +194,10 @@ def mc_saccade_rate_by_behavior_state(
         )
 
     if len(animals) < 2:
-        raise ValueError("Not enough animals pass min_total_time_s in both states.")
+        raise ValueError(
+            f"{len(animals)} animal(s) have at least {min_total_time_s:g} s in both Active and Quiet. "
+            "This comparison needs at least 2 animals."
+        )
 
     diff_obs = np.array(diff_obs, dtype=float)
     effect_obs = float(np.mean(diff_obs))

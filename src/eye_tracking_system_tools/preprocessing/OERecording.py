@@ -6,6 +6,87 @@ from pathlib import Path
 from typing import Union, Optional, Dict, List
 
 
+def _continuous_payload(raw, n_records, read_size, skip_size):
+    """Split a continuous read into one row of samples per record.
+
+    Returns ``(samples, note)``. ``samples`` has shape ``(n_kept, read_size)``.
+    ``note`` is ``None`` when the file contained every expected sample, and a
+    dict describing a short tail otherwise. A short tail whose sample payload
+    is complete is kept; a tail that ends inside the payload is dropped.
+    """
+    read_size = int(read_size)
+    skip_size = int(skip_size)
+    n_records = int(n_records)
+    stride = read_size + skip_size
+    if n_records <= 0 or stride <= 0:
+        return np.zeros((0, max(read_size, 0)), dtype=raw.dtype), None
+
+    expected = stride * n_records
+    got = int(np.asarray(raw).size)
+    if got == expected:
+        return np.asarray(raw).reshape(n_records, stride)[:, :read_size], None
+
+    raw = np.asarray(raw)
+    n_full = got // stride
+    remainder = got - n_full * stride
+    pieces = []
+    if n_full:
+        pieces.append(raw[: n_full * stride].reshape(n_full, stride)[:, :read_size])
+    kept_partial = remainder >= read_size
+    if kept_partial:
+        start = n_full * stride
+        pieces.append(raw[start:start + read_size].reshape(1, read_size))
+    samples = (
+        np.vstack(pieces)
+        if pieces
+        else np.zeros((0, read_size), dtype=raw.dtype)
+    )
+    note = {
+        "got": got,
+        "expected": expected,
+        "n_records": n_records,
+        "n_kept": int(samples.shape[0]),
+        "read_size": read_size,
+        "stride": stride,
+        "remainder": int(remainder),
+        "padding_only": bool(kept_partial and samples.shape[0] == n_records),
+    }
+    return samples, note
+
+
+def _print_short_continuous_read(path, note, sample_ms):
+    """Tell the user a continuous file ended early, and what that does to sync."""
+    name = Path(path).name
+    short_by = note["expected"] - note["got"]
+    if note["padding_only"]:
+        print(
+            f"Open Ephys file {name} ended {short_by} sample(s) before the record boundary "
+            f"({note['got']} read, {note['expected']} expected = "
+            f"{note['n_records']} records x {note['stride']} samples).\n"
+            f"  Those missing samples are inter-record padding. "
+            f"The {note['read_size']} data samples in the last record were kept.\n"
+            f"  Synchronization: accelerometer and continuous sample times in this window are unchanged, "
+            f"so head-movement and behavior timing from this window can still be used.\n"
+            f"  Eye and arena TTL synchronization (final_sync_df and parsed events) is not built from "
+            f"this read and is unchanged."
+        )
+        return
+
+    dropped = note["n_records"] - note["n_kept"]
+    dropped_ms = dropped * note["read_size"] * float(sample_ms)
+    print(
+        f"Open Ephys file {name} ended during a data record "
+        f"({note['got']} read, {note['expected']} expected = "
+        f"{note['n_records']} records x {note['stride']} samples).\n"
+        f"  Dropped {dropped} incomplete record(s): {dropped * note['read_size']} samples, "
+        f"about {dropped_ms:.1f} ms. Those samples are left as zeros.\n"
+        f"  Synchronization: head-movement and behavior labels in the last {dropped_ms:.1f} ms "
+        f"of this accelerometer window are not trustworthy.\n"
+        f"  Eye and arena TTL synchronization (final_sync_df and parsed events) is not built from "
+        f"this read and is unchanged."
+    )
+
+
 class OERecording:
     """
     Class for accessing Open Ephys format recordings.
@@ -883,6 +964,16 @@ class OERecording:
         self.accel_files = sorted([i.name for i in mat_file_path.parent.iterdir() if ('AUX' in str(i))],
                                   key=lambda x: self.extract_number_from_file(x, suffix='continuous'))
 
+    def _store_continuous_records(self, data, curr_rec, raw, n_records, read_size, skip_size, path):
+        """Write one window of continuous samples into ``data`` and report a short tail."""
+        samples, note = _continuous_payload(raw, n_records, read_size, skip_size)
+        if note is not None:
+            _print_short_continuous_read(path, note, self.sample_ms)
+        n_keep = samples.shape[0]
+        if n_keep:
+            data[:, curr_rec:curr_rec + n_keep] = samples.T
+        return curr_rec + int(n_records)
+
     def get_data(self, channels,
                  start_time_ms,
                  window_ms,
@@ -997,22 +1088,10 @@ class OERecording:
                     # read data from file in a single vector, including skip_data:
                     # (Notice datatype is non-flexible in this version of the function!!!)
                     data_plus_breaks = np.fromfile(fid, dtype=np.dtype('>i2'), count=total_bytes, sep='')
-                    # reshape into an array with a column-per-record shape:
-                    try:
-                        data_plus_breaks = data_plus_breaks.reshape(int(records_per_trial_list[j]),
-                                                                    read_size + skip_size)
-                    except ValueError:
-                        print('There was a problem reshaping ...', data_plus_breaks)
-                        if return_timestamps:
-                            return None, None
-                        else:
-                            return None
-
-                    # slice the array to get rid of the skip_data at the end of each column (record):
-                    clean_data = data_plus_breaks[:, : read_size]
-                    # transpose and store the current_rec data:
-                    data[:, curr_rec: curr_rec + records_per_trial_list[j]] = clean_data.T
-                    curr_rec = curr_rec + records_per_trial_list[j]  # move forward to the next reading window
+                    curr_rec = self._store_continuous_records(
+                        data, curr_rec, data_plus_breaks,
+                        int(records_per_trial_list[j]), read_size, skip_size, c_file,
+                    )
             # this loop exit closes the current channel file
             # vectorize the data from the channel and perform a boolean snipping of non-window samples:
             data_vec = data.T[p_rec_idx.T]
@@ -1150,13 +1229,10 @@ class OERecording:
                     # read data from file in a single vector, including skip_data:
                     # (Notice datatype is non-flexible in this version of the function!!!)
                     data_plus_breaks = np.fromfile(fid, dtype=np.dtype('>i2'), count=total_bytes, sep='')
-                    # reshape into an array with a column-per-record shape:
-                    data_plus_breaks = data_plus_breaks.reshape(int(records_per_trial_list[j]), read_size + skip_size)
-                    # slice the array to get rid of the skip_data at the end of each column (record):
-                    clean_data = data_plus_breaks[:, : read_size]
-                    # transpose and store the current_rec data:
-                    data[:, curr_rec: curr_rec + records_per_trial_list[j]] = clean_data.T
-                    curr_rec = curr_rec + records_per_trial_list[j]  # move forward to the next reading window
+                    curr_rec = self._store_continuous_records(
+                        data, curr_rec, data_plus_breaks,
+                        int(records_per_trial_list[j]), read_size, skip_size, c_file,
+                    )
             # this loop exit closes the current channel file
             # vectorize the data from the channel and perform a boolean snipping of non-window samples:
             data_vec = data.T[p_rec_idx.T]
@@ -1304,13 +1380,10 @@ class OERecording:
                     # read data from file in a single vector, including skip_data:
                     # (Notice datatype is non-flexible in this version of the function!!!)
                     data_plus_breaks = np.fromfile(fid, dtype=np.dtype('>i2'), count=total_bytes, sep='')
-                    # reshape into an array with a column-per-record shape:
-                    data_plus_breaks = data_plus_breaks.reshape(int(records_per_trial_list[j]), read_size + skip_size)
-                    # slice the array to get rid of the skip_data at the end of each column (record):
-                    clean_data = data_plus_breaks[:, : read_size]
-                    # transpose and store the current_rec data:
-                    data[:, curr_rec: curr_rec + records_per_trial_list[j]] = clean_data.T
-                    curr_rec = curr_rec + records_per_trial_list[j]  # move forward to the next reading window
+                    curr_rec = self._store_continuous_records(
+                        data, curr_rec, data_plus_breaks,
+                        int(records_per_trial_list[j]), read_size, skip_size, c_file,
+                    )
             # this loop exit closes the current channel file
             # vectorize the data from the channel and perform a boolean snipping of non-window samples:
             data_vec = data.T[p_rec_idx.T]

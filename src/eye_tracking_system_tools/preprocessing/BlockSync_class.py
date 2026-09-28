@@ -1,4 +1,3 @@
-import glob
 import h5py
 import math
 import os
@@ -19,6 +18,7 @@ from bokeh.io import output as b_output
 from bokeh.models import HoverTool, ColumnDataSource
 from bokeh.plotting import figure, show
 from bokeh.palettes import Category10
+from eye_tracking_system_tools.preprocessing.block_sync_core import list_raw_eye_mp4s
 from eye_tracking_system_tools.preprocessing.ellipse_fit import LsqEllipse
 from eye_tracking_system_tools.preprocessing.dlc_csv_io import resolve_dlc_csv
 from lxml import etree
@@ -69,7 +69,7 @@ class BlockSync:
                 the name of the animal folder
 
             experiment_date :  str
-                the date of the experiment in DD_MM_YYYY format, if None - will assume no date paradigm
+                the date of the experiment in yyyy_mm_dd format, if None - will assume no date paradigm
 
             block_num, :  str
                 block number to analyze
@@ -685,11 +685,9 @@ class BlockSync:
         print(f'Getting eye brightness values for block {self.block_num}...')
 
         if self.le_videos is None:
-            self.le_videos = [vid for vid in glob.glob(str(self.block_path) + r'\eye_videos\LE\**\*.mp4') if
-                              "DLC" not in vid]
+            self.le_videos = list_raw_eye_mp4s(self.block_path, "left")
         if self.re_videos is None:
-            self.re_videos = [vid for vid in glob.glob(str(self.block_path) + r'\eye_videos\RE\**\*.mp4') if
-                              "DLC" not in vid]
+            self.re_videos = list_raw_eye_mp4s(self.block_path, "right")
 
         p = self.analysis_path / 'eye_brightness_values_dict.pkl'
         if p.is_file():
@@ -774,11 +772,9 @@ class BlockSync:
             eye_brightness_dict = pickle.load(file)
 
         if self.le_videos is None:
-            self.le_videos = [vid for vid in glob.glob(str(self.block_path) + r'\eye_videos\LE\**\*.mp4') if
-                              "DLC" not in vid]
+            self.le_videos = list_raw_eye_mp4s(self.block_path, "left")
         if self.re_videos is None:
-            self.re_videos = [vid for vid in glob.glob(str(self.block_path) + r'\eye_videos\RE\**\*.mp4') if
-                              "DLC" not in vid]
+            self.re_videos = list_raw_eye_mp4s(self.block_path, "right")
         if self.le_frame_val_list is None:
             self.le_frame_val_list = eye_brightness_dict['left_eye']
         if self.re_frame_val_list is None:
@@ -1448,10 +1444,10 @@ class BlockSync:
                                 )
                                 # Concatenate with existing oe_events
                                 self.oe_events = pd.concat([self.oe_events, led_falling], axis=1)
-                                print(f"Added {len(led_falling_samples)} falling edges for LED_driver from events.csv")
-                                # Save updated parsed_events.csv
-                                self.oe_events.to_csv(parsed_path)
-                                print(f"Updated {parsed_path} with falling edges")
+                                print(
+                                    f"Added {len(led_falling_samples)} LED_driver falling edges in memory. "
+                                    f"parsed_events.csv was not rewritten (overwrite=False)."
+                                )
                         except Exception as e:
                             print(f"Warning: Could not add falling edges from events.csv: {e}")
 

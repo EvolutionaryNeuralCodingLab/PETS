@@ -5,7 +5,7 @@ RPi Camera Recorder with per-frame TTL strobe, live status, optional fixed expos
 and HDMI preview window.
 
 Usage:
-  python3 capture_with_prev.py \
+  python3 RPI4_vid_cap_stable.py \
       --framerate 30.0 --name session_name --quality 23 -t 10 --preview \
       [--auto-exposure|-ae] [--exposure-time|-et 10000] [--iso 200]
 """

@@ -7,16 +7,19 @@ conda activate eye_repo_mac   # or eye_repo_win / eye_repo_linux
 python -m eye_tracking_system_tools.annotation.preprocessing_gui
 ```
 
-Add `--dialog` to pick experiment, animal, and blocks interactively. You can also skip the dialog:
+Add `--dialog` to pick experiment, animal, and blocks interactively. To open one block without that dialog, pass the folder that contains the animal folder, the animal, the block, and an output folder:
 
 ```bash
 python -m eye_tracking_system_tools.annotation.preprocessing_gui \
-  --experiment-path /path/to/animal_folder --animal PV_106 --block 015
+  --experiment-path /path/to/folder_that_contains_PV_106 \
+  --animal PV_106 \
+  --block 015 \
+  --output /path/to/gui_output
 ```
 
-Config is saved as `preproc_gui_config.yaml` in the output folder you choose.
+`--experiment-path` is the parent of `PV_106`. `--output` is required to skip the dialog. Config is saved as `preproc_gui_config.yaml` in that output folder.
 
-Worked example (shortest analyzed block): **`PV_106 / 2025_09_04 / block_015`**. Point `--experiment-path` at the animal folder that contains `2025_09_04/block_015`. Videos and Open Ephys files are not in this repository.
+Worked example (shortest analyzed block): **`PV_106 / 2025_09_04 / block_015`**. Videos and Open Ephys files are not in this repository. The example already includes `lizMov.mat`, so the Behavior tab can load it. It does not include an accelerometer calibration file, so **Compute lizMov (Python)** uses built-in defaults and says so in the terminal. If the last Open Ephys record is a few samples short, that command prints whether only record padding was missing or whether the end of the accelerometer window was left as zeros, and what that means for eye/arena synchronization versus head-movement timing.
 
 ## Recommended tab order
 

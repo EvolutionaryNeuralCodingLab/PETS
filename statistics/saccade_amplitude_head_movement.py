@@ -110,7 +110,10 @@ def mc_headmove_vs_amplitude(
         diffs_obs[animal] = float(np.mean(amps[labels]) - np.mean(amps[~labels]))
 
     if len(animals) < 2:
-        raise ValueError("Not enough animals with >= min_per_group in both conditions.")
+        raise ValueError(
+            f"{len(animals)} animal(s) have at least {min_per_group} saccades in both head-movement conditions. "
+            "This comparison needs at least 2 animals."
+        )
 
     diffs_obs_vec = np.array([diffs_obs[animal] for animal in animals], dtype=float)
     effect_obs = float(np.mean(diffs_obs_vec))

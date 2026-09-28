@@ -9,5 +9,6 @@ Open-source eye tracking for small freely moving animals as described in *An ope
 3. **Preprocess acquired data** — [docs/preprocessing.md](docs/preprocessing.md). The Preprocessing GUI is the go-to tool (`python -m eye_tracking_system_tools.annotation.preprocessing_gui`). Worked example: `PV_106 / 2025_09_04 / block_015`.
 4. **Review a preprocessed block** — [docs/annotation.md](docs/annotation.md) (Block Annotator and Event Explorer).
 5. **Acquire video on a Raspberry Pi** — [docs/acquisition.md](docs/acquisition.md).
+6. **Manuscript statistics** — `statistics/` runs the paper's permutation tests. They need a pickle of at least two already-processed blocks. `S1_Data.xlsx` and `block_015` are not inputs. Settings: [statistics/params.yaml](statistics/params.yaml).
 
 Software is [MIT](LICENSE). Data and printable hardware files are [CC BY 4.0](LICENSE-DATA.md). Cite this archive with [CITATION.cff](CITATION.cff).

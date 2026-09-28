@@ -15,10 +15,17 @@ from eye_tracking_system_tools.annotation.preprocessing_gui.ellipse_verifier imp
 )
 from eye_tracking_system_tools.annotation.preprocessing_gui.models import BlockHandle
 from eye_tracking_system_tools.annotation.preprocessing_gui.tabs.base import BaseTab
+from eye_tracking_system_tools.preprocessing.block_sync_core import (
+    export_eye_data_2d,
+    load_eye_tracking_df_csv,
+)
 from eye_tracking_system_tools.preprocessing.data_verification_utils import (
+    corrected_centers_usable,
     export_corrected_eye_data,
     export_current_kerr_refs,
     load_eye_data,
+    promote_raw_centers_to_corrected,
+    raw_centers_usable,
 )
 from eye_tracking_system_tools.preprocessing.calculate_kerr_angles import (
     load_self_kerr_refs,
@@ -68,6 +75,14 @@ class VerifyTab(BaseTab):
         self._stale_banner.hide()
         layout.addWidget(self._stale_banner)
 
+        self._corrected_banner = QtWidgets.QLabel()
+        self._corrected_banner.setWordWrap(True)
+        self._corrected_banner.setStyleSheet(
+            "background-color: #fff3cd; color: #664d03; padding: 8px; border-radius: 4px;"
+        )
+        self._corrected_banner.hide()
+        layout.addWidget(self._corrected_banner)
+
         self._info = QtWidgets.QLabel(
             "Review ellipses, pick Kerr refs, and optionally draw a pupil perimeter "
             "(physiological bound). Use Compute angles span on each eye to preview "
@@ -107,6 +122,7 @@ class VerifyTab(BaseTab):
         if block is None:
             self._info.setText("No block loaded.")
             self._stale_banner.hide()
+            self._corrected_banner.hide()
             self._status.setText("")
         else:
             self._info.setText(
@@ -115,6 +131,7 @@ class VerifyTab(BaseTab):
                 f"pupil_perimeter epochs. Save exports eye CSVs, self_kerr_refs.csv, "
                 f"and {PERIMETERS_FILENAME}."
             )
+            self._corrected_banner.hide()
             self._update_stale_banner(block)
             self._status.setText(
                 "Use 'Load prev analysis' when eye data exists on disk, "
@@ -158,14 +175,15 @@ class VerifyTab(BaseTab):
     def _load_verifiers(self, block: BlockHandle) -> None:
         left_path = block.analysis_path / "left_eye_data.csv"
         right_path = block.analysis_path / "right_eye_data.csv"
+        blocksync = self._require_blocksync()
+        self._session.ensure_eye_videos(blocksync)
+        self._ensure_ellipse_frames(blocksync)
+        self._maybe_promote_raw_centers(blocksync)
         if not left_path.is_file() or not right_path.is_file():
             raise FileNotFoundError(
                 "left_eye_data.csv / right_eye_data.csv are missing. "
-                "Complete Sync tab step 5 first."
+                "Complete Sync tab step 5 first, or accept raw centers as corrected."
             )
-
-        blocksync = self._require_blocksync()
-        self._session.ensure_eye_videos(blocksync)
         load_eye_data(blocksync)
         load_self_kerr_refs(blocksync)
         perimeters = read_pupil_perimeters(block.block_path)
@@ -207,6 +225,116 @@ class VerifyTab(BaseTab):
         self._verifier_layout.addWidget(self._right_verifier)
         self._left_verifier.set_peer_verifier(self._right_verifier)
         self._right_verifier.set_peer_verifier(self._left_verifier)
+
+    def _ensure_ellipse_frames(self, blocksync) -> None:
+        """Load le_df / re_df from disk when this session does not already hold them."""
+        analysis = Path(blocksync.analysis_path)
+        for attr, name in (("le_df", "le_df.csv"), ("re_df", "re_df.csv")):
+            if getattr(blocksync, attr, None) is not None:
+                continue
+            path = analysis / name
+            if path.is_file():
+                setattr(blocksync, attr, load_eye_tracking_df_csv(path))
+
+    def _maybe_promote_raw_centers(self, blocksync) -> None:
+        """Offer to treat raw ellipse centers as the corrected centers.
+
+        Verify and Kerr read ``center_x_corrected`` / ``center_y_corrected``.
+        Those columns are created by jitter correction. Raw ``center_x`` /
+        ``center_y`` are enough when jitter correction is skipped.
+        """
+        eyes = (
+            ("left", "le_df", "le_df.csv"),
+            ("right", "re_df", "re_df.csv"),
+        )
+        promotable: list[str] = []
+        missing_both: list[str] = []
+        for eye, attr, _name in eyes:
+            frame = getattr(blocksync, attr, None)
+            if corrected_centers_usable(frame):
+                continue
+            if raw_centers_usable(frame):
+                promotable.append(eye)
+            else:
+                missing_both.append(eye)
+
+        if not promotable:
+            if missing_both and not any(
+                corrected_centers_usable(getattr(blocksync, attr, None))
+                for _eye, attr, _name in eyes
+            ):
+                self._corrected_banner.setText(
+                    "No pupil centers to verify. Run Sync → Read DLC + fit ellipses, "
+                    "then either Correct jitter or use the raw centers when prompted."
+                )
+                self._corrected_banner.show()
+            else:
+                self._corrected_banner.hide()
+            return
+
+        if missing_both:
+            self._corrected_banner.setText(
+                "Jitter-corrected centers are missing for the "
+                + " and ".join(promotable)
+                + " eye, and the "
+                + " and ".join(missing_both)
+                + " eye has no raw center_x / center_y samples either. "
+                "Refit ellipses for that eye before continuing."
+            )
+            self._corrected_banner.show()
+            return
+
+        eye_list = " and ".join(promotable)
+        box = QtWidgets.QMessageBox(self)
+        box.setIcon(QtWidgets.QMessageBox.Icon.Warning)
+        box.setWindowTitle("No jitter-corrected centers")
+        box.setText(
+            f"The {eye_list} ellipse table has center_x / center_y, but no "
+            "center_x_corrected / center_y_corrected samples.\n\n"
+            "The ellipse overlay and Kerr angles use the corrected columns. "
+            "Those are normally written by Sync → Correct jitter.\n\n"
+            "Use the current center_x / center_y values as the corrected traces? "
+            "This keeps the raw pupil centers (no jitter correction) and rebuilds "
+            "left_eye_data.csv and right_eye_data.csv from them."
+        )
+        use_raw = box.addButton(
+            "Use raw centers as corrected",
+            QtWidgets.QMessageBox.ButtonRole.AcceptRole,
+        )
+        keep = box.addButton(
+            "Continue without them",
+            QtWidgets.QMessageBox.ButtonRole.RejectRole,
+        )
+        box.setDefaultButton(keep)
+        box.exec()
+        if box.clickedButton() is not use_raw:
+            self._corrected_banner.setText(
+                "Corrected pupil centers are missing, so ellipses and Kerr angles "
+                "cannot be computed. Run Sync → Correct jitter, or load this tab "
+                "again and choose raw centers."
+            )
+            self._corrected_banner.show()
+            return
+
+        analysis = Path(blocksync.analysis_path)
+        for _eye, attr, name in eyes:
+            frame = getattr(blocksync, attr, None)
+            if frame is None or corrected_centers_usable(frame):
+                continue
+            updated = promote_raw_centers_to_corrected(frame)
+            setattr(blocksync, attr, updated)
+            updated.to_csv(analysis / name)
+        blocksync.create_eye_data()
+        export_eye_data_2d(blocksync)
+        print(
+            "Using raw center_x/center_y as center_x_corrected/center_y_corrected "
+            "(jitter correction was not applied)."
+        )
+        self._corrected_banner.setText(
+            "Raw center_x / center_y were saved as the corrected centers. "
+            "Jitter correction was not applied."
+        )
+        self._corrected_banner.show()
 
     def _save_all(self) -> None:
         if self._left_verifier is None or self._right_verifier is None:

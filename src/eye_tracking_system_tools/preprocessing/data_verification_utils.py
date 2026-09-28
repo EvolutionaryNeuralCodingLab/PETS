@@ -254,6 +254,42 @@ def interactive_eye_data_corrector_synced(block, eye, ref_point_xy=None):
     interactive_ellipse_corrector(df_orig, video, eye_lc, ref_point_xy=ref_point_xy, block=block)
 
 
+def _center_pair_has_samples(df: pd.DataFrame | None, x_col: str, y_col: str) -> bool:
+    """True when both columns exist and at least one row has a finite pair."""
+    if df is None or x_col not in getattr(df, "columns", []) or y_col not in df.columns:
+        return False
+    x = pd.to_numeric(df[x_col], errors="coerce")
+    y = pd.to_numeric(df[y_col], errors="coerce")
+    return bool((x.notna() & y.notna()).any())
+
+
+def corrected_centers_usable(df: pd.DataFrame | None) -> bool:
+    """True when jitter-corrected pupil centers have at least one finite sample."""
+    return _center_pair_has_samples(df, "center_x_corrected", "center_y_corrected")
+
+
+def raw_centers_usable(df: pd.DataFrame | None) -> bool:
+    """True when uncorrected ellipse centers have at least one finite sample."""
+    return _center_pair_has_samples(df, "center_x", "center_y")
+
+
+def promote_raw_centers_to_corrected(df: pd.DataFrame) -> pd.DataFrame:
+    """Copy ``center_x`` / ``center_y`` into the corrected-center columns.
+
+    Downstream eye export and Kerr angles read ``center_x_corrected`` and
+    ``center_y_corrected``. This keeps the raw ellipse centers for a block that
+    skips jitter correction.
+    """
+    if not raw_centers_usable(df):
+        raise ValueError(
+            "center_x / center_y have no finite samples to use as corrected centers."
+        )
+    out = df.copy()
+    out["center_x_corrected"] = pd.to_numeric(out["center_x"], errors="coerce")
+    out["center_y_corrected"] = pd.to_numeric(out["center_y"], errors="coerce")
+    return out
+
+
 def export_corrected_eye_data(block, include_rotation_pickle=False):
     """
     Overwrite the eye-data CSVs in block.analysis_path.

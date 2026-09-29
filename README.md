@@ -15,7 +15,8 @@ Source repository: <https://github.com/EvolutionaryNeuralCodingLab/PETS>
 3. **Preprocess acquired data** — [docs/preprocessing.md](docs/preprocessing.md). The Preprocessing GUI is the go-to tool (`python -m eye_tracking_system_tools.annotation.preprocessing_gui`). The worked example is `PV_106 / 2025_09_04 / block_015` inside `PV_106.zip` in the associated dataset.
 4. **Review a preprocessed block** — [docs/annotation.md](docs/annotation.md) (Block Annotator and Event Explorer).
 5. **Acquire video on a Raspberry Pi** — [docs/acquisition.md](docs/acquisition.md).
-6. **Manuscript statistics** — `statistics/` runs the paper's permutation tests. They need a pickle of at least two already-processed blocks. They do not read `S1_Data.xlsx` or the example block. Settings: [statistics/params.yaml](statistics/params.yaml).
+6. **Fit and print the headmount** — [`src/eye_tracking_system_tools/utils/3D_printing_files/`](src/eye_tracking_system_tools/utils/3D_printing_files/) holds the 3D fitting-pipeline guide ([README.md](src/eye_tracking_system_tools/utils/3D_printing_files/README.md)), the Autodesk Fusion file `Virtual_Fitting_Main.f3d`, and the STL files for the modular components in `modular/`.
+7. **Manuscript statistics** — `statistics/` runs the paper's permutation tests. They need a pickle of at least two already-processed blocks. They do not read `S1_Data.xlsx` or the example block. Settings: [statistics/params.yaml](statistics/params.yaml).
 
 ## Associated dataset
 

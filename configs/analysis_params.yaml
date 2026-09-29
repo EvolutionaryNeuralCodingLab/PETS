@@ -1,0 +1,13 @@
+# Default saccade-detection parameters for the Preprocessing GUI Saccades tab.
+
+saccade:
+  # Angular speed threshold in degrees per video frame (about 50 deg/s at 60 Hz).
+  speed_threshold_deg_per_frame: 0.8
+  directional_delta_threshold_deg: 90.0
+  min_subsaccade_samples: 2
+  min_net_disp_deg: 0.5
+  speed_profile: true
+
+binocular:
+  # Pair left/right onsets when their time difference is within this window.
+  sync_diff_ms: 34.0

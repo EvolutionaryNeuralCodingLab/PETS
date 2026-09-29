@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Jupyter
+.ipynb_checkpoints/
+
+# VS Code
+.vscode/
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Local sample-block copies (do not commit).
+/_phase0_sample_copy/
+
+# Local GUI / annotator scratch outputs (do not commit).
+/_annotator_out/
+/_out/
+
+# Machine-local conda export snapshots (use environment_win.yml / environment_linux.yml).
+/eye_annotator.yml
+
+# Editable-install metadata and setuptools build output
+*.egg-info/
+/build/
+/dist/
+
+# Local figure reproduction outputs (do not commit)
+/figures/*.pdf
+/figures/S1_Data.xlsx
+
+# Local outputs and caches (do not commit)
+/outputs/
+/.mplconfig/
+/.matplotlib/
+/.pytest_cache/
+/.cursor/
+/.venv_pkgs/

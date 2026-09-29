@@ -1,0 +1,40 @@
+# PETS conda environment — Windows.
+#
+# GUI/video uses pip PyQt6 + opencv-python-headless (not conda opencv) to avoid
+# DLL conflicts on Windows.
+#
+# Setup:
+#   conda env create -f environment_win.yml
+#   conda activate eye_repo_win
+#   pip install -e .
+#
+# Or: powershell -ExecutionPolicy Bypass -File scripts\setup_eye_repo_windows.ps1
+
+name: eye_repo_win
+channels:
+  - conda-forge
+dependencies:
+  - python>=3.10,<3.11
+  - pip
+  - setuptools
+  - wheel
+  - jupyter
+  - ipykernel
+  - pip:
+      - numpy==2.2.6
+      - scipy==1.15.3
+      - pandas==2.3.3
+      - openpyxl==3.1.5
+      - matplotlib==3.10.9
+      - h5py==3.16.0
+      - lxml==6.1.1
+      - tqdm==4.67.3
+      - bokeh==3.9.0
+      - ellipse==0.6.0
+      - open-ephys-python-tools==1.0.1
+      - PyQt6==6.6.0
+      - PyQt6-Qt6==6.6.0
+      - PyQt6_sip==13.11.1
+      - pyqtgraph==0.14.0
+      - opencv-python-headless==4.13.0.92
+      - PyYAML==6.0.3

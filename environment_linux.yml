@@ -1,0 +1,42 @@
+# PETS conda environment — Linux only (use environment_mac.yml on macOS).
+#
+# Uses conda-forge PyQt, OpenCV, and X11/Qt runtime libraries.
+#
+# Setup:
+#   conda env create -f environment_linux.yml
+#   conda activate eye_repo_linux
+#
+# Or: bash scripts/setup_eye_repo_linux.sh
+
+name: eye_repo_linux
+channels:
+  - conda-forge
+dependencies:
+  - python>=3.10,<3.11
+  - pip
+  - setuptools
+  - wheel
+  - jupyter
+  - ipykernel
+  - pyqt>=6.6,<6.8
+  - pyqtgraph>=0.13
+  - opencv>=4.10
+  - numpy>=2.0,<2.3
+  - scipy>=1.10,<1.16
+  - pandas>=2.3
+  - matplotlib>=3.10
+  - h5py>=3.15
+  - lxml>=6.0
+  - tqdm>=4.67
+  - bokeh>=3.8
+  - pyyaml>=6.0
+  - xcb-util-cursor
+  - libgl
+  - libegl
+  - fontconfig
+  - dbus
+  - pip:
+      - openpyxl>=3.1
+      - ellipse>=0.6.0
+      - open-ephys-python-tools
+      - -e .

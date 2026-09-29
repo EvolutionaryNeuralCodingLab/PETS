@@ -1,0 +1,44 @@
+# Placeholders only.
+# block_001, block_002, and block_003 are not files in this repository, and
+# they are not loaded by the scripts. The BlockSync pickles used for the
+# manuscript statistics are not in this repository. These scripts do not read
+# S1_Data.xlsx or the example recording. That recording is
+# PV_106/2025_09_04/block_015 inside PV_106.zip in the associated dataset
+# (https://zenodo.org/records/23016364, DOI 10.5281/zenodo.23016364).
+#
+# Pass a pickle of at least two already-processed BlockSync objects:
+#   python statistics/saccade_amplitude_head_movement.py /path/to/blocks.pkl
+# The pickle must contain a list of those objects. This file only holds the
+# permutation settings.
+
+blocks:
+  - block_001
+  - block_002
+  - block_003
+
+# multiple_figures_pipeline_migration.ipynb, mc_headmove_vs_amplitude call.
+# Manuscript Results: Monte-Carlo shuffle, n = 10,000.
+saccade_amplitude_head_movement:
+  n_perm: 10000
+  n_boot: 5000
+  random_seed: 42
+  min_per_group: 5
+  amp_col: net_angular_disp
+  head_col: head_movement
+
+# Same notebook, mc_saccade_rate_by_behavior_state call.
+# Manuscript Results: Monte-Carlo shuffle, n = 10,000.
+saccade_rate_by_state:
+  n_perm: 10000
+  n_boot: 5000
+  random_seed: 42
+  bin_size_ms: 1000
+  min_total_time_s: 10.0
+  onset_col: saccade_on_ms
+
+# pupil_diameter_state_clean.ipynb, per_animal_permutation_tests call.
+# Manuscript Results: Monte Carlo shuffle, n = 20,000.
+pupil_diameter_by_state:
+  n_permutations: 20000
+  random_seed: 123
+  min_epoch_ms: 1000.0

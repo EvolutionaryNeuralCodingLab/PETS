@@ -3,7 +3,7 @@
 Redraw every deposited panel from `S1_Data.xlsx`. This folder is the only place you need for paper figures.
 
 1. Install the environment for your platform as in [docs/install.md](../docs/install.md).
-2. Download `S1_Data.xlsx` from the dataset archive (Zenodo DOI to be added at release) and place it next to this script.
+2. Download `S1_Data.xlsx` from the associated dataset ([record](https://zenodo.org/records/23016364), DOI [10.5281/zenodo.23016364](https://doi.org/10.5281/zenodo.23016364)) and place it next to this script. That DOI identifies the dataset, not this software. The same record also contains `Table_S1.xlsx` and `PV_106.zip`; this script uses only `S1_Data.xlsx`.
 3. Run:
 
 ```bash

@@ -23,8 +23,10 @@ Thumbs.db
 # Machine-local conda export snapshots (use environment_win.yml / environment_linux.yml).
 /eye_annotator.yml
 
-# Editable-install metadata
+# Editable-install metadata and setuptools build output
 *.egg-info/
+/build/
+/dist/
 
 # Local figure reproduction outputs (do not commit)
 /figures/*.pdf

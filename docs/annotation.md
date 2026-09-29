@@ -2,7 +2,7 @@
 
 These apps run on a block that already has `analysis/final_sync_df.csv` (see [preprocessing.md](preprocessing.md)). Use the same conda env as the rest of the repository.
 
-Worked example: **`PV_106 / 2025_09_04 / block_015`**.
+Worked example: **`PV_106 / 2025_09_04 / block_015`**, inside `PV_106.zip` in the associated dataset ([record](https://zenodo.org/records/23016364), DOI [10.5281/zenodo.23016364](https://doi.org/10.5281/zenodo.23016364)). That DOI identifies the dataset, not this software.
 
 ## Block Annotator
 

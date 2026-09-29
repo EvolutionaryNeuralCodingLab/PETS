@@ -1,9 +1,10 @@
 {
-  "title": "An open-source, adaptable eye-tracking system enables studies of visual acquisition across diverse terrestrial vertebrates",
-  "description": "Software for a personalized head-mounted eye-tracking system demonstrated in lizards, mice, and turtles. Software is released under the MIT License. Printable hardware files (STL and Fusion 360) in this record are released under CC BY 4.0. The numerical source-data workbook is a separate dataset; its DOI is added at deposit.",
+  "title": "PETS: Personalized Eye Tracking System",
+  "description": "Software release V1.0.0 of PETS (Personalized Eye Tracking System), a head-mounted eye-tracking system demonstrated in lizards, mice, and turtles. This record is the software. The associated manuscript is \"An open-source eye-tracking system adaptable to diverse terrestrial vertebrates reveals state-dependent visual acquisition in lizards\". Software is released under the MIT License. Printable hardware files (STL and Fusion 360) in this record are released under CC BY 4.0. The associated dataset is https://zenodo.org/records/23016364 (DOI https://doi.org/10.5281/zenodo.23016364). That DOI identifies the dataset, not this software. The dataset contains S1_Data.xlsx, Table_S1.xlsx, a dataset README, and PV_106.zip (the example recording PV_106/2025_09_04/block_015).",
   "upload_type": "software",
   "license": "mit",
   "access_right": "open",
+  "version": "1.0.0",
   "keywords": [
     "eye tracking",
     "Pogona vitticeps",
@@ -16,5 +17,12 @@
     {"name": "Remenick, Tali", "affiliation": "Tel Aviv University"},
     {"name": "Becker, Milan", "affiliation": "Tel Aviv University"},
     {"name": "Shein-Idelson, Mark", "affiliation": "Tel Aviv University"}
+  ],
+  "related_identifiers": [
+    {
+      "identifier": "https://doi.org/10.5281/zenodo.23016364",
+      "relation": "isSupplementedBy",
+      "resource_type": "dataset"
+    }
   ]
 }

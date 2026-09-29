@@ -19,7 +19,7 @@ python -m eye_tracking_system_tools.annotation.preprocessing_gui \
 
 `--experiment-path` is the parent of `PV_106`. `--output` is required to skip the dialog. Config is saved as `preproc_gui_config.yaml` in that output folder.
 
-Worked example (shortest analyzed block): **`PV_106 / 2025_09_04 / block_015`**. Videos and Open Ephys files are not in this repository. The example already includes `lizMov.mat`, so the Behavior tab can load it. It does not include an accelerometer calibration file, so **Compute lizMov (Python)** uses built-in defaults and says so in the terminal. If the last Open Ephys record is a few samples short, that command prints whether only record padding was missing or whether the end of the accelerometer window was left as zeros, and what that means for eye/arena synchronization versus head-movement timing.
+Worked example (shortest analyzed block): **`PV_106 / 2025_09_04 / block_015`**. It is not stored in this software repository. Download `PV_106.zip` from the associated dataset ([record](https://zenodo.org/records/23016364), DOI [10.5281/zenodo.23016364](https://doi.org/10.5281/zenodo.23016364)) and unzip it. That zip contains the example block, including the videos and Open Ephys files. The example already includes `lizMov.mat`, so the Behavior tab can load it. It does not include an accelerometer calibration file, so **Compute lizMov (Python)** uses built-in defaults and says so in the terminal. If the last Open Ephys record is a few samples short, that command prints whether only record padding was missing or whether the end of the accelerometer window was left as zeros, and what that means for eye/arena synchronization versus head-movement timing.
 
 ## Recommended tab order
 

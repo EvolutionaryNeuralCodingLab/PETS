@@ -1,6 +1,6 @@
 # S1 Data
 
-Download `S1_Data.xlsx` from the dataset archive (Zenodo DOI to be added at release) and place it next to [`figures/plot_s1_main.py`](../figures/plot_s1_main.py). See [figures/README.md](../figures/README.md).
+Download `S1_Data.xlsx` from the associated dataset ([record](https://zenodo.org/records/23016364), DOI [10.5281/zenodo.23016364](https://doi.org/10.5281/zenodo.23016364)) and place it next to [`figures/plot_s1_main.py`](../figures/plot_s1_main.py). That DOI identifies the dataset, not this software. The same record also contains `Table_S1.xlsx` and `PV_106.zip` (the example block `PV_106 / 2025_09_04 / block_015`). This page indexes `S1_Data.xlsx` only. See [figures/README.md](../figures/README.md).
 
 Column A is a 0-based row index. Titles start in column B. The plotter drops column A and redraws each panel from these sheets.
 

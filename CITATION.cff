@@ -1,6 +1,6 @@
 cff-version: 1.2.0
-title: "An open-source, adaptable eye-tracking system enables studies of visual acquisition across diverse terrestrial vertebrates"
-message: "If you use this software or data, please cite the paper and this archive."
+title: "PETS: Personalized Eye Tracking System"
+message: "If you use this software, please cite this archive. A software DOI is assigned by Zenodo when the release is archived and is not yet available. The associated dataset is https://doi.org/10.5281/zenodo.23016364; that DOI identifies the dataset, not this software. If you refer to the manuscript, cite the paper under preferred-citation."
 type: software
 authors:
   - family-names: Leberstein
@@ -19,6 +19,7 @@ authors:
 repository-code: "https://github.com/EvolutionaryNeuralCodingLab/PETS"
 url: "https://github.com/EvolutionaryNeuralCodingLab/PETS"
 license: MIT
+version: "1.0.0"
 keywords:
   - eye tracking
   - Pogona vitticeps
@@ -27,7 +28,7 @@ keywords:
   - open source
 preferred-citation:
   type: article
-  title: "An open-source, adaptable eye-tracking system enables studies of visual acquisition across diverse terrestrial vertebrates"
+  title: "An open-source eye-tracking system adaptable to diverse terrestrial vertebrates reveals state-dependent visual acquisition in lizards"
   authors:
     - family-names: Leberstein
       given-names: Nimrod

@@ -20,6 +20,9 @@ Thumbs.db
 /_annotator_out/
 /_out/
 
+# Machine-local Preprocessing GUI session prefs (defaults live under configs/).
+/configs/preproc_gui_config.yaml
+
 # Machine-local conda export snapshots (use environment_win.yml / environment_linux.yml).
 /eye_annotator.yml
 

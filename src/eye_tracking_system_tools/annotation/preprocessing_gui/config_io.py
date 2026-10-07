@@ -1,9 +1,10 @@
 """YAML config load/save for the Preprocessing GUI.
 
-Config lives **per-output-folder** as ``preproc_gui_config.yaml`` (mirroring
-the Block Annotator's ``annotator_config.yaml`` convention). The user picks
-an output folder once; the GUI seeds a default template there and persists
-the last-used paths, default parameters, and tab-state on save.
+By default the GUI writes ``preproc_gui_config.yaml`` under the repository
+``configs/`` folder (see :func:`default_output_folder`). Pass ``--output``
+(or set ``PETS_PREPROC_OUTPUT``) to use a different folder. The GUI seeds a
+template there if missing and persists last-used paths / stage defaults on
+close.
 """
 
 from __future__ import annotations
@@ -15,6 +16,17 @@ from typing import Any
 import yaml
 
 DEFAULT_CONFIG_NAME = "preproc_gui_config.yaml"
+
+
+def repo_root() -> Path:
+    """Return the PETS repository root (parent of ``src/`` and ``configs/``)."""
+    # config_io.py → preprocessing_gui → annotation → eye_tracking… → src → repo
+    return Path(__file__).resolve().parents[4]
+
+
+def default_output_folder() -> Path:
+    """Default GUI output folder: ``<repo>/configs``."""
+    return repo_root() / "configs"
 
 
 @dataclass

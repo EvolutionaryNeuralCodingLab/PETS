@@ -32,6 +32,7 @@ dependencies = [
 dev = [
     "black",
     "flake8",
+    "pytest>=7.0",
 ]
 
 [tool.setuptools.packages.find]

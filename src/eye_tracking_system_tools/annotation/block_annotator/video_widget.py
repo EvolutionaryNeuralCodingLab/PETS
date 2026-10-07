@@ -149,24 +149,28 @@ def draw_ellipse_overlay(
     df: pd.DataFrame | None,
     frame_col: str,
     frame_idx: int,
+    *,
+    color: tuple[int, int, int] = (0, 255, 0),
+    thickness: int = 2,
+    ellipse_geometry_version: int = 2,
 ) -> np.ndarray:
-    if df is None or frame_col not in df.columns:
-        return frame
-    mask = df[frame_col] == frame_idx
-    if not mask.any():
-        return frame
-    row = df.loc[mask].iloc[0]
-    cx, cy = row.get("center_x"), row.get("center_y")
-    if pd.isna(cx) or pd.isna(cy):
-        return frame
-    out = frame.copy()
-    x = int(round(float(cx)))
-    y = int(round(float(cy)))
-    w = max(int(row.get("width", 1) or 1), 1)
-    h = max(int(row.get("height", 1) or 1), 1)
-    phi = float(row.get("phi", 0.0))
-    cv2.ellipse(out, (x, y), (w, h), phi, 0, 360, (0, 255, 0), 2)
-    return out
+    """Draw one ellipse from an eye table onto ``frame``.
+
+    Delegates to :func:`ellipse_overlay.draw_ellipse_overlay` (Qt-free).
+    """
+    from eye_tracking_system_tools.preprocessing.ellipse_overlay import (
+        draw_ellipse_overlay as _draw,
+    )
+
+    return _draw(
+        frame,
+        df,
+        frame_col,
+        frame_idx,
+        color=color,
+        thickness=thickness,
+        ellipse_geometry_version=ellipse_geometry_version,
+    )
 
 
 def draw_saccade_circle(

@@ -67,13 +67,15 @@ def align_ellipse_df_to_video_frames(
     n_data_rows: int,
 ) -> pd.DataFrame:
     """
-    ``eye_tracking_analysis`` fits rows ``data`` indices ``1 .. len(data)-2`` (inclusive).
+    Map ellipse fits onto video frame indices.
 
-    So the first ellipse row corresponds to **video / DLC frame index 1**, and the last to
-    ``len(data) - 2``. Frame ``0`` and frame ``len(data)-1`` have **no** ellipse from that
-    routine (NaN placeholders).
+    After ``header=1`` + ``iloc[1:]``, ``eye_tracking_analysis`` fits pandas
+    labels ``1 .. len(data)-2``, which correspond to **video frames**
+    ``0 .. N-3``. The resulting ``ellipse_df`` therefore has row ``k`` =
+    video frame ``k``. Frames ``N-2`` and ``N-1`` have no ellipse (NaN).
 
-    We require ``n_video_frames == n_data_rows`` (one DLC body row per video frame after trim).
+    We require ``n_video_frames == n_data_rows`` (one DLC body row per video
+    frame after trim).
     """
     n_ell = len(ellipse_df)
     expected_ell = max(0, n_data_rows - 2)
@@ -89,17 +91,25 @@ def align_ellipse_df_to_video_frames(
             f"inspect trimming or re-export DLC for this video."
         )
 
+    # Prefer an explicit eye_frame column when present; else positional index.
+    src = ellipse_df.reset_index(drop=True)
+    geom_cols = [c for c in src.columns if c not in ("eye_frame", "dlc_frame")]
+
     rows: list[dict[str, Any]] = []
     for ef in range(n_video_frames):
-        if ef == 0 or ef == n_data_rows - 1:
-            row = {"eye_frame": ef}
-            for c in ellipse_df.columns:
-                row[c] = np.nan
+        row: dict[str, Any] = {"eye_frame": ef}
+        if ef < n_ell:
+            src_row = src.iloc[ef]
+            for c in geom_cols:
+                row[c] = src_row[c]
+            if "dlc_frame" in src.columns:
+                row["dlc_frame"] = src_row["dlc_frame"]
+            else:
+                row["dlc_frame"] = ef
         else:
-            row = {"eye_frame": ef}
-            src = ellipse_df.iloc[ef - 1]
-            for c in ellipse_df.columns:
-                row[c] = src[c]
+            for c in geom_cols:
+                row[c] = np.nan
+            row["dlc_frame"] = np.nan
         rows.append(row)
     return pd.DataFrame(rows)
 
@@ -143,6 +153,8 @@ def run_syncfree_ellipses_for_eye(
         "n_video_frames": int(n_vid),
         "n_ellipse_rows_raw": int(len(ellipse_raw)),
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        "ellipse_geometry_version": 2,
+        "phi_unit": "radians",
     }
     return full, meta
 
@@ -439,6 +451,10 @@ def finalize_syncfree_eye(
             "kerr_f_z": float(fz),
             "artifact_paths": {k: str(v) for k, v in paths.items()},
             "eye_data_columns": list(unified.columns),
+            "ellipse_geometry_version": int(
+                meta.get("ellipse_geometry_version", 2)
+            ),
+            "phi_unit": meta.get("phi_unit", "radians"),
         }
     )
     write_meta_json(meta, paths["meta"])

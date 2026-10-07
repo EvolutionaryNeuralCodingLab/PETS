@@ -19,6 +19,8 @@ from eye_tracking_system_tools.annotation.preprocessing_gui.add_blocks_dialog im
 )
 from eye_tracking_system_tools.annotation.preprocessing_gui.config_io import (
     PreprocConfig,
+    default_config_path,
+    default_output_folder,
     ensure_config_template,
     load_config,
     save_config,
@@ -76,15 +78,22 @@ def _make_status_icon(status: StageStatus) -> QtGui.QIcon:
 
 
 class StartupDialog(QtWidgets.QDialog):
-    """Pick experiment path, animal, block(s), output folder."""
+    """Pick experiment path, animal, block(s), and GUI output folder."""
 
-    def __init__(self, defaults: PreprocConfig | None = None, parent=None):
+    def __init__(
+        self,
+        defaults: PreprocConfig | None = None,
+        *,
+        output_folder: Path | None = None,
+        parent=None,
+    ):
         super().__init__(parent)
         self.setWindowTitle("Preprocessing GUI - Setup")
         self.experiment_path: Path | None = None
         self.animal: str | None = None
         self.blocks: list[str] = []
         self.output_folder: Path | None = None
+        self._default_output = default_output_folder()
 
         defaults = defaults or PreprocConfig()
         layout = QtWidgets.QFormLayout(self)
@@ -107,12 +116,24 @@ class StartupDialog(QtWidgets.QDialog):
         self._blocks_edit.setPlaceholderText("Comma-separated, e.g. 015, 016, 017")
         layout.addRow("Block(s):", self._blocks_edit)
 
-        self._out_edit = QtWidgets.QLineEdit()
+        initial_out = output_folder or self._default_output
+        self._out_edit = QtWidgets.QLineEdit(str(initial_out))
+        self._out_edit.setPlaceholderText(str(self._default_output))
         out_btn = QtWidgets.QPushButton("Browse...")
+        out_default_btn = QtWidgets.QPushButton("Use PETS/configs")
         out_row = QtWidgets.QHBoxLayout()
         out_row.addWidget(self._out_edit)
         out_row.addWidget(out_btn)
-        layout.addRow("Output folder:", out_row)
+        out_row.addWidget(out_default_btn)
+        layout.addRow("GUI config folder:", out_row)
+        out_hint = QtWidgets.QLabel(
+            "Holds <code>preproc_gui_config.yaml</code> (session prefs). "
+            "Defaults to the repository <code>configs/</code> folder; "
+            "override with <code>--output</code> if needed."
+        )
+        out_hint.setWordWrap(True)
+        out_hint.setTextFormat(QtCore.Qt.TextFormat.RichText)
+        layout.addRow("", out_hint)
 
         buttons = QtWidgets.QDialogButtonBox(
             QtWidgets.QDialogButtonBox.StandardButton.Ok
@@ -125,6 +146,7 @@ class StartupDialog(QtWidgets.QDialog):
         exp_btn.clicked.connect(self._pick_experiment)
         block_btn.clicked.connect(self._pick_block_folder)
         out_btn.clicked.connect(self._pick_output)
+        out_default_btn.clicked.connect(self._use_default_output)
 
     def _pick_experiment(self) -> None:
         path = QtWidgets.QFileDialog.getExistingDirectory(self, "Experiment path")
@@ -150,9 +172,14 @@ class StartupDialog(QtWidgets.QDialog):
         self._blocks_edit.setText(block)
 
     def _pick_output(self) -> None:
-        path = QtWidgets.QFileDialog.getExistingDirectory(self, "Output folder")
+        path = QtWidgets.QFileDialog.getExistingDirectory(
+            self, "GUI config / output folder"
+        )
         if path:
             self._out_edit.setText(path)
+
+    def _use_default_output(self) -> None:
+        self._out_edit.setText(str(self._default_output))
 
     def _accept(self) -> None:
         exp = self._exp_edit.text().strip()
@@ -172,12 +199,7 @@ class StartupDialog(QtWidgets.QDialog):
                 self, "Setup", "At least one block number is required."
             )
             return
-        out = self._out_edit.text().strip()
-        if not out:
-            QtWidgets.QMessageBox.warning(
-                self, "Setup", "An output folder is required."
-            )
-            return
+        out = self._out_edit.text().strip() or str(self._default_output)
 
         self.experiment_path = Path(exp)
         self.animal = animal
@@ -233,13 +255,24 @@ class PreprocessingGuiWindow(QtWidgets.QMainWindow):
         file_menu.addAction("Add block from folder…", self._open_block_folder)
         file_menu.addAction("Reload current block", self._reload_block)
         file_menu.addSeparator()
+        file_menu.addAction(
+            "Open GUI config folder…", self._open_gui_config_folder
+        )
+        file_menu.addAction(
+            "Change GUI config folder…", self._change_gui_config_folder
+        )
+        file_menu.addAction(
+            "Reset GUI config folder to PETS/configs",
+            self._reset_gui_config_folder,
+        )
+        file_menu.addSeparator()
         file_menu.addAction("Exit", self.close)
 
         help_menu = self.menuBar().addMenu("Help")
         help_menu.addAction("User guide...", self._show_help_guide)
         help_menu.addAction("About...", self._show_about)
 
-        self.statusBar().showMessage("Ready")
+        self._show_output_status("Ready")
 
     def _wire_signals(self) -> None:
         self._block_picker.block_changed.connect(self._on_block_changed)
@@ -425,14 +458,50 @@ class PreprocessingGuiWindow(QtWidgets.QMainWindow):
             f"{tab.tab_label}: {_STATUS_DOTS[status][2]}",
         )
 
+    def _output_folder(self) -> Path:
+        return Path(self._state.output_folder or default_output_folder())
+
+    def _show_output_status(self, prefix: str = "Ready") -> None:
+        out = self._output_folder()
+        self.statusBar().showMessage(f"{prefix}  |  GUI config: {out}")
+
+    def _set_output_folder(self, folder: Path) -> None:
+        """Retarget where session prefs are saved; keep the in-memory config."""
+        folder = Path(folder)
+        ensure_config_template(folder)
+        self._state.output_folder = folder
+        self._config_path = default_config_path(folder)
+        self._show_output_status(f"GUI config folder → {folder}")
+
+    def _open_gui_config_folder(self) -> None:
+        folder = self._output_folder()
+        folder.mkdir(parents=True, exist_ok=True)
+        QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(str(folder)))
+
+    def _change_gui_config_folder(self) -> None:
+        path = QtWidgets.QFileDialog.getExistingDirectory(
+            self,
+            "GUI config / output folder",
+            str(self._output_folder()),
+        )
+        if not path:
+            return
+        self._set_output_folder(Path(path))
+
+    def _reset_gui_config_folder(self) -> None:
+        self._set_output_folder(default_output_folder())
+
     def _show_about(self) -> None:
+        out = self._output_folder()
         QtWidgets.QMessageBox.about(
             self,
             "About",
             "PETS Preprocessing GUI\n\n"
             "Sync, verify, Kerr angles, calibration, saccades, behavior, and exploration\n"
             "in one PyQt6 window.\n"
-            "Open Ephys / LFP averaging tools are not part of this preprocessing GUI.",
+            "Open Ephys / LFP averaging tools are not part of this preprocessing GUI.\n\n"
+            f"GUI config folder:\n{out}\n"
+            f"({default_config_path(out).name} is updated on close).",
         )
 
     def _show_help_guide(self) -> None:
@@ -494,6 +563,11 @@ class PreprocessingGuiWindow(QtWidgets.QMainWindow):
             "<li><b>Sync-free</b>: optional alternative ellipse-to-Kerr mapping pipeline.</li>"
             "</ul>"
             "<p><b>Tip:</b> if a downstream tab is red (stale), re-run its upstream stage first.</p>"
+            "<h4>GUI config folder</h4>"
+            "<p>Session prefs (<code>preproc_gui_config.yaml</code>) default to the "
+            "repository <code>configs/</code> folder. Override with <code>--output</code>, "
+            "the setup dialog, or <b>File → Change GUI config folder…</b>. "
+            "Last-used experiment/animal/block and stage defaults are saved there on close.</p>"
         )
         msg = QtWidgets.QMessageBox(self)
         msg.setWindowTitle("Preprocessing GUI - Help")
@@ -543,7 +617,8 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     default_exp = os.environ.get("PETS_PREPROC_EXPERIMENT_PATH")
     default_animal = os.environ.get("PETS_PREPROC_ANIMAL")
     default_blocks = os.environ.get("PETS_PREPROC_BLOCKS")
-    default_output = os.environ.get("PETS_PREPROC_OUTPUT")
+    env_output = os.environ.get("PETS_PREPROC_OUTPUT")
+    default_output = Path(env_output) if env_output else default_output_folder()
 
     parser = argparse.ArgumentParser(description="PETS Preprocessing GUI")
     parser.add_argument(
@@ -570,8 +645,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path(default_output) if default_output else None,
-        help="Output folder (holds preproc_gui_config.yaml + per-run logs)",
+        default=default_output,
+        help=(
+            "GUI config / logs folder (holds preproc_gui_config.yaml). "
+            "Defaults to <repo>/configs; override with this flag or "
+            "PETS_PREPROC_OUTPUT."
+        ),
     )
     parser.add_argument(
         "--config",
@@ -601,7 +680,7 @@ def main(argv: list[str] | None = None) -> int:
 
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
 
-    output_folder: Path | None = args.output
+    output_folder: Path = Path(args.output) if args.output else default_output_folder()
     experiment_path: Path | None = args.experiment_path
     animal: str | None = args.animal
     blocks: list[str] | None = args.block
@@ -611,15 +690,13 @@ def main(argv: list[str] | None = None) -> int:
         or experiment_path is None
         or animal is None
         or not blocks
-        or output_folder is None
     )
     if need_dialog:
         defaults = PreprocConfig()
-        if output_folder is not None:
-            try:
-                defaults = load_config(args.config, output_folder)
-            except Exception:
-                pass
+        try:
+            defaults = load_config(args.config, output_folder)
+        except Exception:
+            pass
         if experiment_path is not None:
             defaults.last_experiment_path = str(experiment_path)
         if animal is not None:
@@ -627,24 +704,21 @@ def main(argv: list[str] | None = None) -> int:
         if blocks:
             defaults.last_blocks = list(blocks)
 
-        dlg = StartupDialog(defaults)
-        if output_folder is not None:
-            dlg._out_edit.setText(str(output_folder))
+        dlg = StartupDialog(defaults, output_folder=output_folder)
         if dlg.exec() != QtWidgets.QDialog.DialogCode.Accepted:
             return 0
         experiment_path = dlg.experiment_path
         animal = dlg.animal
         blocks = dlg.blocks
-        output_folder = dlg.output_folder
+        output_folder = dlg.output_folder or output_folder
 
     assert experiment_path is not None
     assert animal is not None
     assert blocks
-    assert output_folder is not None
 
     ensure_config_template(output_folder)
     config = load_config(args.config, output_folder)
-    config_path = args.config or (output_folder / "preproc_gui_config.yaml")
+    config_path = args.config or default_config_path(output_folder)
 
     discovered = discover_blocks(experiment_path, animal, blocks)
 

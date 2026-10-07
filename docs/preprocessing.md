@@ -7,17 +7,16 @@ conda activate eye_repo_mac   # or eye_repo_win / eye_repo_linux
 python -m eye_tracking_system_tools.annotation.preprocessing_gui
 ```
 
-Add `--dialog` to pick experiment, animal, and blocks interactively. To open one block without that dialog, pass the folder that contains the animal folder, the animal, the block, and an output folder:
+Add `--dialog` to pick experiment, animal, and blocks interactively. To open one block without that dialog, pass the folder that contains the animal folder, the animal, and the block:
 
 ```bash
 python -m eye_tracking_system_tools.annotation.preprocessing_gui \
   --experiment-path /path/to/folder_that_contains_PV_106 \
   --animal PV_106 \
-  --block 015 \
-  --output /path/to/gui_output
+  --block 015
 ```
 
-`--experiment-path` is the parent of `PV_106`. `--output` is required to skip the dialog. Config is saved as `preproc_gui_config.yaml` in that output folder.
+`--experiment-path` is the parent of `PV_106`. Session prefs (`preproc_gui_config.yaml`) default to the repository `configs/` folder and are updated on close. Override with `--output /path/to/gui_output` or `PETS_PREPROC_OUTPUT` if you need a different location.
 
 Worked example (shortest analyzed block): **`PV_106 / 2025_09_04 / block_015`**. It is not stored in this software repository. Download `PV_106.zip` from the associated dataset ([record](https://zenodo.org/records/23016364), DOI [10.5281/zenodo.23016364](https://doi.org/10.5281/zenodo.23016364)) and unzip it. That zip contains the example block, including the videos and Open Ephys files. The example already includes `lizMov.mat`, so the Behavior tab can load it. It does not include an accelerometer calibration file, so **Compute lizMov (Python)** uses built-in defaults and says so in the terminal. If the last Open Ephys record is a few samples short, that command prints whether only record padding was missing or whether the end of the accelerometer window was left as zeros, and what that means for eye/arena synchronization versus head-movement timing.
 

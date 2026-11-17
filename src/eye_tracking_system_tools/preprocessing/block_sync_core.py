@@ -1755,6 +1755,18 @@ def export_eye_data_2d(block):
     :param block: The current blocksync class with verified re/le dfs
     :return: None
     """
+    from eye_tracking_system_tools.preprocessing.ellipse_geometry_meta import (
+        write_ellipse_geometry_meta,
+    )
+
     block.right_eye_data.to_csv(block.analysis_path / 'right_eye_data.csv')
     block.left_eye_data.to_csv(block.analysis_path / 'left_eye_data.csv')
+    write_ellipse_geometry_meta(
+        block.analysis_path,
+        extra={
+            "source": "export_eye_data_2d",
+            "block_num": getattr(block, "block_num", None),
+            "animal_call": getattr(block, "animal_call", None),
+        },
+    )
     print(f'eye dataframes saved to: {block.analysis_path}')

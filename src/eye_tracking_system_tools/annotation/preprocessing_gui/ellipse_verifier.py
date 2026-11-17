@@ -370,6 +370,7 @@ class EllipseVerifierWidget(QtWidgets.QWidget):
         self._saturation = 1.0
         self._gamma = 1.0
         self._peer_verifier: EllipseVerifierWidget | None = None
+        self._ellipse_geometry_version = 2
         self._probe_video_geometry(video_path)
 
         self._timer = QtCore.QTimer(self)
@@ -601,6 +602,26 @@ class EllipseVerifierWidget(QtWidgets.QWidget):
 
     def df(self) -> pd.DataFrame:
         return self._df_current
+
+    def set_dataframe(
+        self,
+        df: pd.DataFrame,
+        *,
+        ellipse_geometry_version: int | None = None,
+    ) -> None:
+        """Replace overlay table and redraw the current frame."""
+        self._df_current = df.copy()
+        if ellipse_geometry_version is not None:
+            self._ellipse_geometry_version = int(ellipse_geometry_version)
+        self._update_kerr_span_status()
+        self._show_frame(self._frame_idx)
+
+    def set_ellipse_geometry_version(self, version: int) -> None:
+        self._ellipse_geometry_version = int(version)
+        self._show_frame(self._frame_idx)
+
+    def ellipse_geometry_version(self) -> int:
+        return int(getattr(self, "_ellipse_geometry_version", 2))
 
     @property
     def eye(self) -> str:
@@ -884,7 +905,7 @@ class EllipseVerifierWidget(QtWidgets.QWidget):
             self._df_current,
             self._frame_col(),
             int(frame_idx),
-            phi_unit="radians",
+            ellipse_geometry_version=getattr(self, "_ellipse_geometry_version", 2),
         )
         if self._current_ref is not None:
             cv2.circle(

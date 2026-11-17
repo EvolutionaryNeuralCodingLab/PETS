@@ -164,6 +164,7 @@ def draw_ellipse_overlay(
     column_suffix: str = "",
     phi_unit: str = "radians",
     thickness: int = 2,
+    ellipse_geometry_version: int | None = None,
 ) -> np.ndarray:
     """Draw one ellipse from an eye table onto ``frame``.
 
@@ -171,6 +172,8 @@ def draw_ellipse_overlay(
     ``project_circle``). OpenCV wants degrees, so the default converts.
     ``column_suffix="refined"`` reads ``center_x_refined`` etc. and draws
     nothing if those columns are missing or NaN (no fallback to original).
+    When ``ellipse_geometry_version`` is given it overrides ``phi_unit``
+    (version 2 stores radians; legacy version 1 passes ``phi`` through).
     """
     if df is None or frame_col not in df.columns:
         return frame
@@ -196,8 +199,13 @@ def draw_ellipse_overlay(
     w = max(int(w_raw), 1)
     h = max(int(h_raw), 1)
     phi = float(phi_raw)
-    unit = str(phi_unit).strip().lower()
-    if unit == "radians":
+    if ellipse_geometry_version is not None:
+        from eye_tracking_system_tools.preprocessing.ellipse_overlay import (
+            phi_to_opencv_degrees,
+        )
+
+        phi = phi_to_opencv_degrees(phi, ellipse_geometry_version=ellipse_geometry_version)
+    elif str(phi_unit).strip().lower() == "radians":
         phi = float(np.degrees(phi))
     cv2.ellipse(out, (x, y), (w, h), phi, 0, 360, tuple(int(c) for c in color), int(thickness))
     return out

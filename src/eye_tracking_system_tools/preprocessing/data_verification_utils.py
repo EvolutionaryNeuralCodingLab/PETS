@@ -29,17 +29,24 @@ def load_eye_data(block):
 
 
 def horizontal_flip_eye_data(df: pd.DataFrame, frame_width: int) -> pd.DataFrame:
+    """Reflect centers about the vertical midline and reflect major-axis ``phi``.
+
+    Stored ``phi`` is radians (ellipse geometry v2). Reflection about a
+    vertical axis maps ``phi -> (π - phi) mod π``.
+    """
     df2 = df.copy()
     df2["center_x"] = frame_width - df2["center_x"]
-    # Stored phi is radians (LsqEllipse); reflect about the vertical axis.
-    df2["phi"] = np.pi - df2["phi"]
+    df2["phi"] = (np.pi - df2["phi"]) % np.pi
     return df2
 
 
 def rotate_phi_only(df: pd.DataFrame) -> pd.DataFrame:
+    """Physically rotate ellipse orientation by +π/2 (Verify ``Phi+90``).
+
+    Axes are already canonical (``width`` major); this does **not** swap axes.
+    """
     df2 = df.copy()
-    # "+90" in the Verify UI means a quarter-turn of the overlay, in radians.
-    df2["phi"] = df2["phi"] + 0.5 * np.pi
+    df2["phi"] = (df2["phi"] + 0.5 * np.pi) % np.pi
     return df2
 
 
@@ -220,19 +227,15 @@ def interactive_ellipse_corrector(
                 y = int(round(cy))
                 w = int(row.get("width", 0))
                 h = int(row.get("height", 0))
-                phi = float(row.get("phi", 0.0))
+                phi_raw = row.get("phi", 0.0)
                 w = max(w, 1)
                 h = max(h, 1)
-                cv2.ellipse(
-                    annotated,
-                    (x, y),
-                    (w, h),
-                    float(np.degrees(phi)),
-                    0,
-                    360,
-                    (0, 255, 0),
-                    2,
-                )
+                # Eye tables store phi in radians; OpenCV expects degrees.
+                if pd.isna(phi_raw):
+                    phi_deg = 0.0
+                else:
+                    phi_deg = float(np.degrees(float(phi_raw)))
+                cv2.ellipse(annotated, (x, y), (w, h), phi_deg, 0, 360, (0, 255, 0), 2)
 
         disp = cv2.flip(annotated, 0)
         cv2.imshow("Frame", disp)
@@ -271,10 +274,22 @@ def export_corrected_eye_data(block, include_rotation_pickle=False):
     If include_rotation_pickle is True and block has rotation attributes, also write
     rotate_eye_data_params.pkl (e.g. when using rotation in verification).
     """
+    from eye_tracking_system_tools.preprocessing.ellipse_geometry_meta import (
+        write_ellipse_geometry_meta,
+    )
+
     analysis_path = Path(block.analysis_path)
     analysis_path.mkdir(parents=True, exist_ok=True)
     block.left_eye_data.to_csv(analysis_path / "left_eye_data.csv", index=True)
     block.right_eye_data.to_csv(analysis_path / "right_eye_data.csv", index=True)
+    write_ellipse_geometry_meta(
+        analysis_path,
+        extra={
+            "source": "export_corrected_eye_data",
+            "block_num": getattr(block, "block_num", None),
+            "animal_call": getattr(block, "animal_call", None),
+        },
+    )
     if include_rotation_pickle and hasattr(block, "left_rotation_matrix"):
         rot_dict = {
             "left_rotation_matrix": block.left_rotation_matrix,

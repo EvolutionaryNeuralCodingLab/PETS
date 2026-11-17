@@ -77,12 +77,13 @@ def fit_eye_and_gaze(
     ny = np.full(n, np.nan)
     nz = np.full(n, np.nan)
 
+    # Geometry v2 stores NaN phi for near-circular pupils; orientation is
+    # undefined there, so those rows stay valid and unproject with phi = 0.
     valid = (
         np.isfinite(work["center_x"].to_numpy(dtype=float))
         & np.isfinite(work["center_y"].to_numpy(dtype=float))
         & np.isfinite(work["major_ax"].to_numpy(dtype=float))
         & np.isfinite(work["minor_ax"].to_numpy(dtype=float))
-        & np.isfinite(work["phi"].to_numpy(dtype=float))
         & (work["major_ax"].to_numpy(dtype=float) > 0)
         & (work["minor_ax"].to_numpy(dtype=float) > 0)
     )
@@ -95,13 +96,14 @@ def fit_eye_and_gaze(
         row = work.iloc[int(i)]
         width = float(row["width"]) if "width" in work.columns else None
         height = float(row["height"]) if "height" in work.columns else None
+        phi = float(row["phi"])
         ellipses.append(
             ellipse_from_pets(
                 float(row["center_x"]),
                 float(row["center_y"]),
                 float(row["major_ax"]),
                 float(row["minor_ax"]),
-                float(row["phi"]),
+                phi if np.isfinite(phi) else 0.0,
                 cx=camera.cx,
                 cy=camera.cy,
                 width=width,

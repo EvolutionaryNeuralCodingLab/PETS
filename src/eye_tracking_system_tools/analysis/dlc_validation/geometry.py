@@ -52,8 +52,12 @@ def fit_ellipse(
         cy = float(np.real(center[1]))
         major = float(np.real(max(width, height)))
         minor = float(np.real(min(width, height)))
+        # Geometry v2: near-circular fits keep axes but report phi as NaN;
+        # orientation is immaterial there, and QC distances need a number.
         phi_f = float(np.real(phi))
-        if not all(np.isfinite(v) for v in (cx, cy, major, minor, phi_f)):
+        if not np.isfinite(phi_f):
+            phi_f = 0.0
+        if not all(np.isfinite(v) for v in (cx, cy, major, minor)):
             return None
         if major <= 0 or minor <= 0:
             return None

@@ -387,7 +387,7 @@ def fit_sphere_from_ellipses(
     eye_z: float = 13.0,
     use_ransac: bool = True,
     rng: np.random.Generator | None = None,
-    sphere_method: str = "dierkes_3d",
+    sphere_method: str = "swirski_2d",
 ) -> EyeModelFit:
     """Unproject + initialise. ``sphere_method`` is ``swirski_2d`` or ``dierkes_3d``."""
     method = str(sphere_method).strip().lower()

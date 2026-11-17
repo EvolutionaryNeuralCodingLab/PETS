@@ -62,11 +62,14 @@ def fit_eye_and_gaze(
     eye_z: float = 13.0,
     use_ransac: bool = True,
     rng: np.random.Generator | None = None,
-    sphere_method: str = "dierkes_3d",
+    sphere_method: str = "swirski_2d",
     refraction_maps=None,
     n_ref: float | None = None,
 ) -> tuple[pd.DataFrame, EyeModelFit]:
     """Fit a Swirski/Dierkes sphere to a PETS ellipse table and emit gaze columns.
+
+    ``sphere_method="swirski_2d"`` is the validated route; ``"dierkes_3d"`` is
+    provisional and has not been checked against ground truth.
 
     Returns ``(out_df, fit)``. ``out_df`` is indexed like ``ellipse_df`` and
     contains ``c_phi``, ``c_theta``, ``c_nx/y/z``, and repeated sphere

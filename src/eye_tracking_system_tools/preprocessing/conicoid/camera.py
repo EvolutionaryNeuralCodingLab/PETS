@@ -15,7 +15,7 @@ Focal length in pixels is resolved, in order:
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import numpy as np
@@ -35,6 +35,7 @@ DEFAULT_FOCAL_PX = LENS_FOCAL_MM / OV5647_PIXEL_PITCH_MM * (
 
 FOCAL_LENGTH_CSV = "LR_focal_length.csv"
 PIX_SIZE_CSV = "LR_pix_size.csv"
+KERR_REFS_CSV = "self_kerr_refs.csv"
 
 _SIDE_TO_FOCAL_COL = {"left": "L_focal_length", "right": "R_focal_length", "l": "L_focal_length", "r": "R_focal_length"}
 _SIDE_TO_PIX_COL = {"left": "L_pix_size", "right": "R_pix_size", "l": "L_pix_size", "r": "R_pix_size"}
@@ -52,6 +53,7 @@ class CameraIntrinsics:
     source: str = "default_qilens_ov5647"
     side: str = ""
     lens_focal_mm: float = LENS_FOCAL_MM
+    principal_point_source: str = "image_center"
 
     def to_camera_xy(self, x: float, y: float) -> tuple[float, float]:
         return float(x) - self.cx, float(y) - self.cy
@@ -106,6 +108,42 @@ def _read_csv_value(path: Path, column: str) -> float | None:
     return value
 
 
+def _read_csv_number(path: Path, column: str) -> float | None:
+    if not path.is_file():
+        return None
+    df = pd.read_csv(path)
+    if column not in df.columns or df.empty:
+        return None
+    value = float(pd.to_numeric(df.at[0, column], errors="coerce"))
+    if not np.isfinite(value):
+        return None
+    return value
+
+
+def kerr_ref_principal_point(
+    block_path: Path | str | None,
+    side: str,
+    *,
+    filename: str = KERR_REFS_CSV,
+) -> tuple[float, float] | None:
+    """Per-eye Kerr reference ``(x, y)`` from ``analysis/self_kerr_refs.csv``.
+
+    The reference is chosen in Verify in the same eye-video pixel frame as the
+    ellipse centres (Kerr subtracts it from ``center_x`` / ``center_y``), so it
+    can serve as the conicoid principal point. Returns None when missing.
+    """
+    if block_path is None:
+        return None
+    side_n = _normalize_side(side)
+    path = _analysis_dir(block_path) / filename
+    key = "l" if side_n == "left" else "r"
+    x = _read_csv_number(path, f"kerr_ref_{key}_x")
+    y = _read_csv_number(path, f"kerr_ref_{key}_y")
+    if x is None or y is None:
+        return None
+    return x, y
+
+
 def resolve_intrinsics(
     block_path: Path | str | None,
     side: str,
@@ -113,12 +151,31 @@ def resolve_intrinsics(
     frame_width: int = NOMINAL_WIDTH,
     frame_height: int = NOMINAL_HEIGHT,
     lens_focal_mm: float = LENS_FOCAL_MM,
+    principal_point: tuple[float, float] | None = None,
+    principal_point_source: str = "",
 ) -> CameraIntrinsics:
-    """Resolve per-eye pinhole intrinsics from a block's analysis folder."""
+    """Resolve per-eye pinhole intrinsics from a block's analysis folder.
+
+    ``principal_point`` overrides the image centre (e.g. the Kerr reference
+    from :func:`kerr_ref_principal_point`); ``principal_point_source`` is
+    recorded on the result.
+    """
     side_n = _normalize_side(side)
-    cx = float(frame_width) / 2.0
-    cy = float(frame_height) / 2.0
-    fallback = default_intrinsics(side_n, frame_width=frame_width, frame_height=frame_height)
+    if principal_point is not None:
+        cx, cy = float(principal_point[0]), float(principal_point[1])
+        if not (np.isfinite(cx) and np.isfinite(cy)):
+            raise ValueError(f"principal point must be finite, got {principal_point!r}")
+        pp_source = principal_point_source or "caller"
+    else:
+        cx = float(frame_width) / 2.0
+        cy = float(frame_height) / 2.0
+        pp_source = "image_center"
+    fallback = replace(
+        default_intrinsics(side_n, frame_width=frame_width, frame_height=frame_height),
+        cx=cx,
+        cy=cy,
+        principal_point_source=pp_source,
+    )
 
     if block_path is None:
         logger.warning(
@@ -134,8 +191,13 @@ def resolve_intrinsics(
     pix_col = _SIDE_TO_PIX_COL[side_n]
 
     focal = _read_csv_value(analysis / FOCAL_LENGTH_CSV, focal_col)
+    source = str(analysis / FOCAL_LENGTH_CSV)
+    if focal is None:
+        pix = _read_csv_value(analysis / PIX_SIZE_CSV, pix_col)
+        if pix is not None:
+            focal = float(lens_focal_mm) / pix
+            source = f"{analysis / PIX_SIZE_CSV} ({lens_focal_mm} mm / {pix} mm/px)"
     if focal is not None:
-        source = str(analysis / FOCAL_LENGTH_CSV)
         logger.info("%s eye focal_px=%.3f from %s", side_n, focal, source)
         return CameraIntrinsics(
             width=int(frame_width),
@@ -146,22 +208,7 @@ def resolve_intrinsics(
             source=source,
             side=side_n,
             lens_focal_mm=lens_focal_mm,
-        )
-
-    pix = _read_csv_value(analysis / PIX_SIZE_CSV, pix_col)
-    if pix is not None:
-        focal = float(lens_focal_mm) / pix
-        source = f"{analysis / PIX_SIZE_CSV} ({lens_focal_mm} mm / {pix} mm/px)"
-        logger.info("%s eye focal_px=%.3f from %s", side_n, focal, source)
-        return CameraIntrinsics(
-            width=int(frame_width),
-            height=int(frame_height),
-            cx=cx,
-            cy=cy,
-            focal_px=focal,
-            source=source,
-            side=side_n,
-            lens_focal_mm=lens_focal_mm,
+            principal_point_source=pp_source,
         )
 
     logger.warning(

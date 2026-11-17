@@ -21,7 +21,14 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from .angles import gaze_to_kerr_angles, gazes_to_kerr_angles
+from .angles import (
+    angle_between_normals_deg,
+    chart_yaw_pitch,
+    gaze_to_kerr_angles,
+    gazes_to_kerr_angles,
+    kerr_angles_to_normals,
+    yaw_pitch_to_normals,
+)
 from .camera import CameraIntrinsics, default_intrinsics, resolve_intrinsics
 from .eye_model import EyeModelFit, fit_sphere_from_ellipses
 from .geometry import Ellipse2D, ellipse_from_pets
@@ -179,12 +186,16 @@ __all__ = [
     "CONICOID_ANGLE_COLS",
     "CameraIntrinsics",
     "EyeModelFit",
+    "angle_between_normals_deg",
     "angular_error_deg",
+    "chart_yaw_pitch",
     "default_intrinsics",
     "fit_eye_and_gaze",
     "gaze_to_kerr_angles",
     "gazes_to_kerr_angles",
+    "kerr_angles_to_normals",
     "project_circle",
     "resolve_intrinsics",
     "unproject",
+    "yaw_pitch_to_normals",
 ]

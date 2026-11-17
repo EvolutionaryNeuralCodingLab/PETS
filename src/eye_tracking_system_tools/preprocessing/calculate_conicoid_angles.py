@@ -14,8 +14,8 @@ Inputs per eye:
   ``ellipse_recovery``. Blocks with neither raise :class:`EllipseGeometryError`.
 - Principal point: the Kerr reference from ``analysis/self_kerr_refs.csv``
   (chosen in Verify), else the image centre with a warning.
-- Focal length: ``LR_focal_length.csv``, else ``LR_pix_size.csv`` with the
-  3.7 mm lens, else the documented 652.6 px fallback (``conicoid.camera``).
+- Focal length: ``LR_focal_length.csv``, else the documented 652.6 px
+  fallback (``conicoid.camera``).
 
 Each run also writes ``analysis/conicoid_fit_meta_{name_tag}.json`` with the
 camera, sources, and sphere fit per eye.

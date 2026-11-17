@@ -7,9 +7,11 @@ before Safaee-Rad unprojection so the cone vertex sits at ``(0, 0, -f)``.
 Focal length in pixels is resolved, in order:
 
 1. ``analysis/LR_focal_length.csv`` (``L_focal_length`` / ``R_focal_length``)
-2. ``f_mm / pix_size_mm`` from ``analysis/LR_pix_size.csv``
-3. A documented fallback from the QILENS 3.7 mm lens on an OV5647 sensor
+2. A documented fallback from the QILENS 3.7 mm lens on an OV5647 sensor
    scaled to 640×480 (logged, never silent).
+
+``analysis/LR_pix_size.csv`` is not used: Calibration writes millimetres per
+pixel at the eye, not the sensor pitch, so ``f_mm / pix_size`` has no meaning.
 """
 
 from __future__ import annotations
@@ -34,11 +36,9 @@ DEFAULT_FOCAL_PX = LENS_FOCAL_MM / OV5647_PIXEL_PITCH_MM * (
 )
 
 FOCAL_LENGTH_CSV = "LR_focal_length.csv"
-PIX_SIZE_CSV = "LR_pix_size.csv"
 KERR_REFS_CSV = "self_kerr_refs.csv"
 
 _SIDE_TO_FOCAL_COL = {"left": "L_focal_length", "right": "R_focal_length", "l": "L_focal_length", "r": "R_focal_length"}
-_SIDE_TO_PIX_COL = {"left": "L_pix_size", "right": "R_pix_size", "l": "L_pix_size", "r": "R_pix_size"}
 
 
 @dataclass(frozen=True)
@@ -188,15 +188,9 @@ def resolve_intrinsics(
 
     analysis = _analysis_dir(block_path)
     focal_col = _SIDE_TO_FOCAL_COL[side_n]
-    pix_col = _SIDE_TO_PIX_COL[side_n]
 
     focal = _read_csv_value(analysis / FOCAL_LENGTH_CSV, focal_col)
     source = str(analysis / FOCAL_LENGTH_CSV)
-    if focal is None:
-        pix = _read_csv_value(analysis / PIX_SIZE_CSV, pix_col)
-        if pix is not None:
-            focal = float(lens_focal_mm) / pix
-            source = f"{analysis / PIX_SIZE_CSV} ({lens_focal_mm} mm / {pix} mm/px)"
     if focal is not None:
         logger.info("%s eye focal_px=%.3f from %s", side_n, focal, source)
         return CameraIntrinsics(
@@ -212,10 +206,9 @@ def resolve_intrinsics(
         )
 
     logger.warning(
-        "%s eye: no %s or %s under %s; using fallback focal_px=%.3f (%s)",
+        "%s eye: no %s under %s; using fallback focal_px=%.3f (%s)",
         side_n,
         FOCAL_LENGTH_CSV,
-        PIX_SIZE_CSV,
         analysis,
         fallback.focal_px,
         fallback.source,

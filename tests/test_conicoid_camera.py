@@ -40,15 +40,15 @@ def test_resolve_prefers_focal_length_csv(tmp_path: Path):
     assert "LR_focal_length.csv" in left.source
 
 
-def test_resolve_falls_back_to_pixel_size(tmp_path: Path):
+def test_resolve_ignores_eye_plane_pixel_size(tmp_path: Path):
     analysis = tmp_path / "analysis"
     analysis.mkdir()
     pd.DataFrame([{"L_pix_size": 0.01, "R_pix_size": 0.02}]).to_csv(
         analysis / "LR_pix_size.csv", index=False
     )
     left = resolve_intrinsics(tmp_path, "left")
-    assert left.focal_px == 3.7 / 0.01
-    assert "LR_pix_size.csv" in left.source
+    assert left.focal_px == DEFAULT_FOCAL_PX
+    assert "LR_pix_size.csv" not in left.source
 
 
 def test_principal_point_defaults_to_image_center(tmp_path: Path):

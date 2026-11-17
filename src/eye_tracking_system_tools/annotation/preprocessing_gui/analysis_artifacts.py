@@ -544,6 +544,22 @@ def conicoid_artifact_profile(name_tag: str) -> TabArtifactProfile:
                 _angle_paths,
                 _load_conicoid_angles,
             ),
+            ArtifactSpec(
+                "conicoid_fit_meta",
+                f"conicoid_fit_meta_{tag}.json",
+                lambda b, c: [b.analysis_path / f"conicoid_fit_meta_{tag}.json"],
+                lambda s, bs, b, st, c: None,
+            ),
+            ArtifactSpec(
+                "conicoid_vs_kerr",
+                f"Conicoid vs Kerr comparison ({tag})",
+                lambda b, c: [
+                    b.analysis_path / f"conicoid_vs_kerr_{tag}.csv",
+                    b.analysis_path / f"conicoid_vs_kerr_summary_{tag}.csv",
+                    b.analysis_path / f"conicoid_vs_kerr_{tag}.png",
+                ],
+                lambda s, bs, b, st, c: None,
+            ),
         ),
     )
 

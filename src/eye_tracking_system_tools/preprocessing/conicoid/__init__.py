@@ -21,7 +21,14 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from .angles import gaze_to_kerr_angles, gazes_to_kerr_angles
+from .angles import (
+    angle_between_normals_deg,
+    chart_yaw_pitch,
+    gaze_to_kerr_angles,
+    gazes_to_kerr_angles,
+    kerr_angles_to_normals,
+    yaw_pitch_to_normals,
+)
 from .camera import CameraIntrinsics, default_intrinsics, resolve_intrinsics
 from .eye_model import EyeModelFit, fit_sphere_from_ellipses
 from .geometry import Ellipse2D, ellipse_from_pets
@@ -55,11 +62,14 @@ def fit_eye_and_gaze(
     eye_z: float = 13.0,
     use_ransac: bool = True,
     rng: np.random.Generator | None = None,
-    sphere_method: str = "dierkes_3d",
+    sphere_method: str = "swirski_2d",
     refraction_maps=None,
     n_ref: float | None = None,
 ) -> tuple[pd.DataFrame, EyeModelFit]:
     """Fit a Swirski/Dierkes sphere to a PETS ellipse table and emit gaze columns.
+
+    ``sphere_method="swirski_2d"`` is the validated route; ``"dierkes_3d"`` is
+    provisional and has not been checked against ground truth.
 
     Returns ``(out_df, fit)``. ``out_df`` is indexed like ``ellipse_df`` and
     contains ``c_phi``, ``c_theta``, ``c_nx/y/z``, and repeated sphere
@@ -77,12 +87,13 @@ def fit_eye_and_gaze(
     ny = np.full(n, np.nan)
     nz = np.full(n, np.nan)
 
+    # Geometry v2 stores NaN phi for near-circular pupils; orientation is
+    # undefined there, so those rows stay valid and unproject with phi = 0.
     valid = (
         np.isfinite(work["center_x"].to_numpy(dtype=float))
         & np.isfinite(work["center_y"].to_numpy(dtype=float))
         & np.isfinite(work["major_ax"].to_numpy(dtype=float))
         & np.isfinite(work["minor_ax"].to_numpy(dtype=float))
-        & np.isfinite(work["phi"].to_numpy(dtype=float))
         & (work["major_ax"].to_numpy(dtype=float) > 0)
         & (work["minor_ax"].to_numpy(dtype=float) > 0)
     )
@@ -95,13 +106,14 @@ def fit_eye_and_gaze(
         row = work.iloc[int(i)]
         width = float(row["width"]) if "width" in work.columns else None
         height = float(row["height"]) if "height" in work.columns else None
+        phi = float(row["phi"])
         ellipses.append(
             ellipse_from_pets(
                 float(row["center_x"]),
                 float(row["center_y"]),
                 float(row["major_ax"]),
                 float(row["minor_ax"]),
-                float(row["phi"]),
+                phi if np.isfinite(phi) else 0.0,
                 cx=camera.cx,
                 cy=camera.cy,
                 width=width,
@@ -177,12 +189,16 @@ __all__ = [
     "CONICOID_ANGLE_COLS",
     "CameraIntrinsics",
     "EyeModelFit",
+    "angle_between_normals_deg",
     "angular_error_deg",
+    "chart_yaw_pitch",
     "default_intrinsics",
     "fit_eye_and_gaze",
     "gaze_to_kerr_angles",
     "gazes_to_kerr_angles",
+    "kerr_angles_to_normals",
     "project_circle",
     "resolve_intrinsics",
     "unproject",
+    "yaw_pitch_to_normals",
 ]

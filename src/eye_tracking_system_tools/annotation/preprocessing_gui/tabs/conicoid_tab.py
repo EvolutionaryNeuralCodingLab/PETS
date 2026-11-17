@@ -21,9 +21,18 @@ from eye_tracking_system_tools.annotation.preprocessing_gui.tabs.refine_tab impo
 from eye_tracking_system_tools.annotation.preprocessing_gui.workers import CallableWorker
 from eye_tracking_system_tools.preprocessing.BlockSync_class import BlockSync
 from eye_tracking_system_tools.preprocessing.calculate_conicoid_angles import (
+    EllipseGeometryError,
     append_conicoid_angle_data,
     calculate_conicoid_angles_for_block,
+    check_block_geometry,
     export_eye_data_w_conicoid,
+)
+from eye_tracking_system_tools.preprocessing.compare_conicoid_kerr import (
+    compare_conicoid_kerr_for_block,
+    comparison_paths,
+    conicoid_outputs_available,
+    format_summary,
+    kerr_outputs_available,
 )
 from eye_tracking_system_tools.preprocessing.calculate_kerr_angles import load_eye_data
 from eye_tracking_system_tools.preprocessing.conicoid.refined_io import (
@@ -41,6 +50,11 @@ from eye_tracking_system_tools.preprocessing.noise_epochs import (
 )
 
 
+_V2_TABLE_LABEL = "Eye table, geometry v2 (main or analysis/ellipse_v2)"
+_SWIRSKI_LABEL = "Swirski 2D"
+_DIERKES_LABEL = "Dierkes 3D (provisional, not validated)"
+
+
 class ConicoidTab(BaseTab):
     tab_id = "conicoid"
     tab_label = "Conicoid"
@@ -50,6 +64,11 @@ class ConicoidTab(BaseTab):
         self._batch_worker: SequentialBatchWorker | None = None
         self._preview: RefinePreviewWidget | None = None
         super().__init__(state, config, parent)
+
+    def _on_name_tag_changed(self) -> None:
+        self._refresh_artifact_ui()
+        if hasattr(self, "_btn_compare"):
+            self._refresh_compare_ui()
 
     def artifact_profile(self):
         return conicoid_artifact_profile(self._name_tag_value_safe())
@@ -64,8 +83,9 @@ class ConicoidTab(BaseTab):
         layout.addWidget(self._build_artifact_panel())
 
         self._info = QtWidgets.QLabel(
-            "Fit a 3D pupil-on-sphere model and write c_phi / c_theta sidecars. "
-            "Does not replace Kerr k_phi / k_theta."
+            "Fit a 3D pupil-on-sphere model and write the gaze normal c_nx / c_ny / c_nz "
+            "(plus c_phi / c_theta). Kerr k_phi / k_theta are not replaced; Kerr stays "
+            "the check (run Kerr with the same name_tag, then Compare)."
         )
         self._info.setWordWrap(True)
         layout.addWidget(self._info)
@@ -73,16 +93,31 @@ class ConicoidTab(BaseTab):
         form = QtWidgets.QFormLayout()
         self._name_tag = QtWidgets.QLineEdit("raw_verified")
         self._name_tag.setPlaceholderText("e.g. raw_verified")
-        self._name_tag.textChanged.connect(lambda _: self._refresh_artifact_ui())
+        self._name_tag.textChanged.connect(lambda _: self._on_name_tag_changed())
         form.addRow("name_tag:", self._name_tag)
 
         self._ellipse_source = QtWidgets.QComboBox()
-        self._ellipse_source.addItem("Original left/right_eye_data.csv", "original")
+        self._ellipse_source.addItem(_V2_TABLE_LABEL, "original")
         form.addRow("Ellipse source:", self._ellipse_source)
 
+        self._geometry_status = QtWidgets.QLabel("")
+        self._geometry_status.setWordWrap(True)
+        form.addRow("Geometry:", self._geometry_status)
+
         self._sphere_method = QtWidgets.QComboBox()
-        self._sphere_method.addItems(["Dierkes 3D", "Swirski 2D"])
+        self._sphere_method.addItems([_SWIRSKI_LABEL, _DIERKES_LABEL])
         form.addRow("Sphere method:", self._sphere_method)
+        self._dierkes_note = QtWidgets.QLabel(
+            "Dierkes 3D is provisional: it has not been validated against the "
+            "synthetic ground truth. Use Swirski 2D for results."
+        )
+        self._dierkes_note.setWordWrap(True)
+        self._dierkes_note.setStyleSheet("color: #b36b00;")
+        self._dierkes_note.setVisible(False)
+        form.addRow("", self._dierkes_note)
+        self._sphere_method.currentTextChanged.connect(
+            lambda text: self._dierkes_note.setVisible(text == _DIERKES_LABEL)
+        )
 
         self._eye_z = QtWidgets.QDoubleSpinBox()
         self._eye_z.setRange(1.0, 40.0)
@@ -123,8 +158,32 @@ class ConicoidTab(BaseTab):
         row.addWidget(self._btn_export)
         layout.addLayout(row)
 
+        compare_box = QtWidgets.QGroupBox("Compare with Kerr (3D angle between gaze normals)")
+        compare_layout = QtWidgets.QVBoxLayout(compare_box)
+        compare_row = QtWidgets.QHBoxLayout()
+        self._btn_compare = QtWidgets.QPushButton("Compare with Kerr")
+        self._btn_compare.setEnabled(False)
+        self._btn_open_plot = QtWidgets.QPushButton("Open plot")
+        self._btn_open_plot.setEnabled(False)
+        compare_row.addWidget(self._btn_compare)
+        compare_row.addWidget(self._btn_open_plot)
+        compare_row.addStretch(1)
+        compare_layout.addLayout(compare_row)
+        self._compare_summary = QtWidgets.QLabel("")
+        self._compare_summary.setWordWrap(True)
+        self._compare_summary.setTextInteractionFlags(
+            QtCore.Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        compare_layout.addWidget(self._compare_summary)
+        layout.addWidget(compare_box)
+
         batch_box = QtWidgets.QGroupBox("Batch — all loaded blocks")
         batch_layout = QtWidgets.QVBoxLayout(batch_box)
+        self._chk_batch_compare = QtWidgets.QCheckBox(
+            "Also compare with Kerr where Kerr outputs for this name_tag exist"
+        )
+        self._chk_batch_compare.setChecked(True)
+        batch_layout.addWidget(self._chk_batch_compare)
         batch_row = QtWidgets.QHBoxLayout()
         self._btn_batch = QtWidgets.QPushButton("Run calculate + export for all blocks")
         self._btn_batch_cancel = QtWidgets.QPushButton("Cancel batch")
@@ -150,6 +209,8 @@ class ConicoidTab(BaseTab):
         self._btn_export.clicked.connect(self._run_export_merged)
         self._btn_batch.clicked.connect(self._run_batch)
         self._btn_batch_cancel.clicked.connect(self._cancel_batch)
+        self._btn_compare.clicked.connect(self._run_compare)
+        self._btn_open_plot.clicked.connect(self._open_compare_plot)
 
     def status_signature(self, block: BlockHandle) -> list[Path]:
         tag = self._name_tag_value_safe()
@@ -168,6 +229,7 @@ class ConicoidTab(BaseTab):
             self._refresh_noise_category_list(None)
             self._refresh_ellipse_sources(None)
             self._refraction.setEnabled(False)
+            self._geometry_status.setText("")
         else:
             self._info.setText(f"Active block: {block.display_label}")
             self._refresh_noise_category_list(block)
@@ -180,11 +242,60 @@ class ConicoidTab(BaseTab):
                 "Use 'Load prev analysis' to hydrate eye data, then calculate."
             )
         super().set_block(block)
+        self._refresh_geometry_status()
+        self._refresh_compare_ui()
+
+    def _refresh_geometry_status(self) -> bool:
+        """Show which v2 eye tables will be fitted; disable Calculate if none."""
+        if self._block is None:
+            self._btn_calculate.setEnabled(False)
+            return False
+        try:
+            sources = check_block_geometry(
+                self._block.analysis_path, block_label=self._block.display_label
+            )
+        except EllipseGeometryError as exc:
+            self._geometry_status.setText(f"Not geometry v2. {exc}")
+            self._geometry_status.setStyleSheet("color: #b00020;")
+            self._btn_calculate.setEnabled(False)
+            return False
+        self._geometry_status.setText(
+            f"v2 — left: {sources['left']}; right: {sources['right']}"
+        )
+        self._geometry_status.setStyleSheet("")
+        self._btn_calculate.setEnabled(True)
+        return True
+
+    def _refresh_compare_ui(self) -> None:
+        if self._block is None:
+            self._btn_compare.setEnabled(False)
+            self._btn_open_plot.setEnabled(False)
+            self._compare_summary.setText("")
+            return
+        tag = self._name_tag_value_safe()
+        ap = self._block.analysis_path
+        have_c = conicoid_outputs_available(ap, tag)
+        have_k = kerr_outputs_available(ap, tag)
+        self._btn_compare.setEnabled(have_c and have_k)
+        paths = comparison_paths(ap, tag)
+        self._btn_open_plot.setEnabled(paths.plot.is_file())
+        if paths.summary.is_file():
+            try:
+                self._compare_summary.setText(format_summary(pd.read_csv(paths.summary)))
+                return
+            except Exception as exc:
+                self._compare_summary.setText(f"Could not read {paths.summary.name}: {exc}")
+                return
+        missing = [name for name, ok in (("Conicoid", have_c), ("Kerr", have_k)) if not ok]
+        self._compare_summary.setText(
+            f"Needs {' and '.join(missing)} outputs for name_tag={tag!r}." if missing else
+            "Ready to compare."
+        )
 
     def _refresh_ellipse_sources(self, block: BlockHandle | None) -> None:
         self._ellipse_source.blockSignals(True)
         self._ellipse_source.clear()
-        self._ellipse_source.addItem("Original left/right_eye_data.csv", "original")
+        self._ellipse_source.addItem(_V2_TABLE_LABEL, "original")
         if block is not None:
             tags = list_refined_tags(block.analysis_path)
             if tags:
@@ -257,14 +368,17 @@ class ConicoidTab(BaseTab):
     def _sphere_method_value(self) -> str:
         return (
             "dierkes_3d"
-            if self._sphere_method.currentText().startswith("Dierkes")
+            if self._sphere_method.currentText() == _DIERKES_LABEL
             else "swirski_2d"
         )
 
     def _set_busy(self, busy: bool) -> None:
-        for btn in (self._btn_calculate, self._btn_export, self._btn_batch):
+        for btn in (self._btn_calculate, self._btn_export, self._btn_batch, self._btn_compare):
             btn.setEnabled(not busy)
         self._btn_batch_cancel.setEnabled(busy)
+        if not busy:
+            self._refresh_geometry_status()
+            self._refresh_compare_ui()
 
     def _run_calculate(self) -> None:
         if self._worker is not None and self._worker.isRunning():
@@ -317,6 +431,51 @@ class ConicoidTab(BaseTab):
         self._worker = worker
         worker.start()
 
+    def _run_compare(self) -> None:
+        if self._worker is not None and self._worker.isRunning():
+            return
+        if self._block is None:
+            return
+        tag = self._name_tag_value()
+        analysis_path = self._block.analysis_path
+
+        def work():
+            return compare_conicoid_kerr_for_block(analysis_path, name_tag=tag)
+
+        self._set_busy(True)
+        worker = CallableWorker(work, self)
+
+        def on_ok(summary=None):
+            self._set_busy(False)
+            self._status.setText(
+                f"Wrote {comparison_paths(analysis_path, tag).summary.name} and plot."
+            )
+            self._worker = None
+            worker.deleteLater()
+
+        def on_fail(msg: str):
+            self._set_busy(False)
+            self._status.setText(f"Error: {msg}")
+            QtWidgets.QMessageBox.warning(self, "Conicoid tab", msg)
+            self._worker = None
+            worker.deleteLater()
+
+        worker.finished_ok.connect(on_ok)
+        worker.failed.connect(on_fail)
+        self._worker = worker
+        worker.start()
+
+    def _open_compare_plot(self) -> None:
+        if self._block is None:
+            return
+        path = comparison_paths(self._block.analysis_path, self._name_tag_value_safe()).plot
+        if not path.is_file():
+            self._status.setText(f"No plot at {path}")
+            return
+        from PyQt6 import QtGui
+
+        QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(str(path)))
+
     def _run_export_merged(self) -> None:
         try:
             b = self._require_blocksync()
@@ -355,6 +514,7 @@ class ConicoidTab(BaseTab):
         sphere_method = self._sphere_method_value()
         ellipse_source = self._ellipse_source_value()
         apply_refraction = self._refraction.isChecked()
+        also_compare = self._chk_batch_compare.isChecked()
         self._batch_log.clear()
 
         def one(handle: BlockHandle):
@@ -373,6 +533,12 @@ class ConicoidTab(BaseTab):
                 ellipse_source=ellipse_source,
                 refraction_maps=maps,
             )
+            if also_compare and kerr_outputs_available(bs, tag):
+                summary = compare_conicoid_kerr_for_block(bs, name_tag=tag)
+                medians = ", ".join(
+                    f"{r.eye} {r.median_angle_deg:.2f} deg" for r in summary.itertuples()
+                )
+                return f"{handle.display_label} (vs Kerr median: {medians})"
             return handle.display_label
 
         self._set_busy(True)

@@ -2292,10 +2292,15 @@ class BlockSync:
             fit_report["n_keypoints_masked_by_perimeter"] = int(n_perim_masked)
 
         # work row by row to figure out the ellipses
+        # After header=1 + iloc[1:], pandas label ``row`` maps to video frame
+        # ``row - 1`` (label 1 == video frame 0). Fit labels 1..N-2 => frames 0..N-3.
         ellipses = []
         caudal_edge_ls = []
         rostral_edge_ls = []
+        eye_frames = []
         for row in tqdm(fit_rows):
+            eye_frame = int(row) - 1
+            eye_frames.append(eye_frame)
             # first, take all the values, and concatenate them into an X array
             x_values = pupil_xs.loc[row].values
             y_values = pupil_ys.loc[row].values
@@ -2320,11 +2325,14 @@ class BlockSync:
                     width = float(np.asarray(width).real)
                     height = float(np.asarray(height).real)
                     phi = float(np.asarray(phi).real)
+                    # Geometry must be finite; phi may be NaN for near-circles.
                     if not all(
                         np.isfinite(v)
-                        for v in (center_x, center_y, width, height, phi)
+                        for v in (center_x, center_y, width, height)
                     ):
                         raise ValueError("non-finite ellipse parameters")
+                    if not (width >= height > 0):
+                        raise ValueError("invalid ellipse axes")
                     ellipses.append([center_x, center_y, width, height, phi])
                     n_fitted += 1
                 except (IndexError, ValueError, TypeError, np.linalg.LinAlgError):
@@ -2345,7 +2353,13 @@ class BlockSync:
             caudal_edge_ls.append(caudal_edge)
             rostral_edge_ls.append(rostral_edge)
 
-        ellipse_df = pd.DataFrame(columns=['center_x', 'center_y', 'width', 'height', 'phi'], data=ellipses)
+        ellipse_df = pd.DataFrame(
+            columns=['center_x', 'center_y', 'width', 'height', 'phi'],
+            data=ellipses,
+        )
+        ellipse_df['eye_frame'] = eye_frames
+        ellipse_df['dlc_frame'] = eye_frames
+        ellipse_df = ellipse_df.set_index('eye_frame', drop=False)
 
         a = np.array(ellipse_df['height'][:])
         b = np.array(ellipse_df['width'][:])
@@ -3385,10 +3399,11 @@ class BlockSync:
             center_y = int(current_frame_data['center_y'])
             width = int(current_frame_data['width'])
             height = int(current_frame_data['height'])
-            phi = float(np.degrees(float(current_frame_data['phi'])))
+            phi = float(current_frame_data['phi'])
 
-            # Draw the ellipse on the frame. Table phi is radians; OpenCV wants degrees.
-            cv2.ellipse(frame, (center_x, center_y), (width, height), phi, 0, 360, (0, 255, 0), 2)
+            # Draw the ellipse on the frame (table phi is radians; OpenCV wants degrees)
+            phi_deg = float(np.degrees(phi)) if np.isfinite(phi) else 0.0
+            cv2.ellipse(frame, (center_x, center_y), (width, height), phi_deg, 0, 360, (0, 255, 0), 2)
         except ValueError:
             print('could not paint ellipse, missing values')
 
@@ -3496,8 +3511,8 @@ class BlockSync:
         M = transformation_matrix
         # apply the rotation to xy
         rotated_centers = np.dot(original_centers, M[:, :2].T) + M[:, 2]
-        # apply rotation to phi
-        rotated_phi = np.rad2deg(original_phi) + rotation_angle
+        # Image rotation by ``rotation_angle`` degrees: keep stored phi in radians.
+        rotated_phi = (original_phi + np.deg2rad(float(rotation_angle))) % np.pi
 
         eye_df['center_x_rotated'] = rotated_centers[:, 0]
         eye_df['center_y_rotated'] = rotated_centers[:, 1]
@@ -3848,15 +3863,19 @@ class BlockSync:
 
     @staticmethod
     def get_maj_min_axes(df):
-        # Calculate major and minor axes using vectorized operations
-        df['major_ax'] = np.nanmax(df[['width', 'height']], axis=1)
-        df['minor_ax'] = np.nanmin(df[['width', 'height']], axis=1)
+        """Set major/minor from canonical width/height (width = major).
 
-        # Handle cases where both width and height are NaN
+        Falls back to max/min when a legacy row has height > width.
+        """
+        w = pd.to_numeric(df['width'], errors='coerce')
+        h = pd.to_numeric(df['height'], errors='coerce')
+        swap = h.notna() & w.notna() & (h > w)
+        df['major_ax'] = np.where(swap, h, w)
+        df['minor_ax'] = np.where(swap, w, h)
+
         nan_mask = df[['width', 'height']].isna().all(axis=1)
         df.loc[nan_mask, ['major_ax', 'minor_ax', 'ratio']] = np.nan
 
-        # Define the axes ratio of the ellipse as major/minor
         df['ratio'] = df['major_ax'] / df['minor_ax']
 
         return df
@@ -3923,6 +3942,18 @@ class BlockSync:
         for df in [self.right_eye_data, self.left_eye_data]:
             df.rename(columns=translation_dict, inplace=True)
 
+        from eye_tracking_system_tools.preprocessing.ellipse_geometry_meta import (
+            write_ellipse_geometry_meta,
+        )
+
+        write_ellipse_geometry_meta(
+            self.analysis_path,
+            extra={
+                "source": "create_eye_data",
+                "block_num": getattr(self, "block_num", None),
+                "animal_call": getattr(self, "animal_call", None),
+            },
+        )
         print("successfully created left/right_eye_data")
 
     def get_rotated_frame(self, frame_number, eye, xflip=True):

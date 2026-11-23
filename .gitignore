@@ -32,6 +32,9 @@ Thumbs.db
 
 # Phase-1 local figure validation outputs / matplotlib cache
 /outputs/
+/development/Lizard_MRI/
+/development/eye_simulation/annotations/*.blend
+/development/eye_simulation/annotations/*.blend1
 /.mplconfig/
 /.matplotlib/
 /.pytest_cache/

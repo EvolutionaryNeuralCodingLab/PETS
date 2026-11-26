@@ -1,0 +1,26 @@
+# Default knobs for the physical-eye Kerr vs Swirski simulation.
+# Override any field on the CLI or by copying this file.
+
+mode: analytic   # analytic | blender
+
+camera:
+  lens_mm: 3.7
+  sensor_width_mm: 3.6288   # OV5647: 2592 * 1.4 µm
+  width: 640
+  height: 480
+  # cx / cy default to image centre when omitted
+
+geometry_dir: physical_eye_simulation/geometry
+sides: [right, left]
+pivots: [sclera_sphere_centre]
+distances_mm: [16]
+step_deg: 1
+span_deg: 60
+
+out: outputs/physical_eye_simulation_runs/default
+
+# Blender-only (ignored when mode=analytic)
+blender:
+  binary: /Applications/Blender.app/Contents/MacOS/Blender
+  show_mesh: false          # lightweight analytic eye has no MRI mesh
+  dark_threshold: 40

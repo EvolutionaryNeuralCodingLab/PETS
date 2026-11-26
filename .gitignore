@@ -35,6 +35,15 @@ Thumbs.db
 /development/Lizard_MRI/
 /development/eye_simulation/annotations/*.blend
 /development/eye_simulation/annotations/*.blend1
+/development/eye_simulation/cache/
+/development/eye_simulation/**/__pycache__/
+# Heavy local simulation exports (videos, frames, scenario dumps) — Zenodo later.
+/eye_simulation_concise/
+/.venv_pkgs/
+**/frames_mesh/
+**/frames_pupil_only/
+**/frames/
+*.blend1
 /.mplconfig/
 /.matplotlib/
 /.pytest_cache/
